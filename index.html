@@ -338,13 +338,18 @@ When you are unsure or don't have reliable information, say so clearly. Never fa
         // If we are already waiting for the command following a wake word, treat this
         // utterance as the command.
         if (VOICE.activeSlot !== null && VOICE.awaitingCommand) {
+          const slot = STATE.slots[VOICE.activeSlot];
+          // Bail if the slot was disabled between wake word and command.
+          if (!slot || !slot.voiceEnabled) {
+            if (VOICE.wakeTimeoutId) { clearTimeout(VOICE.wakeTimeoutId); VOICE.wakeTimeoutId = null; }
+            VOICE.activeSlot = null;
+            VOICE.awaitingCommand = false;
+            return;
+          }
           // Strip a leading wake phrase if the user repeated it
           let cleaned = text;
-          const slot = STATE.slots[VOICE.activeSlot];
-          if (slot) {
-            const p = buildWakePattern(slot.voiceName || slot.label);
-            cleaned = text.replace(p, '').trim();
-          }
+          const p = buildWakePattern(slot.voiceName || slot.label);
+          cleaned = text.replace(p, '').trim();
           const lower = cleaned.toLowerCase();
           if (lower === 'stop' || lower === 'cancel' || lower === 'never mind') {
             stopSpeaking();
@@ -475,8 +480,16 @@ When you are unsure or don't have reliable information, say so clearly. Never fa
         saveSettings();
         if (slot.voiceEnabled) {
           startRecognition();
-        } else if (!anyVoiceEnabled()) {
-          stopRecognition();
+        } else {
+          // If this slot was mid-interaction, clear its live state too.
+          if (VOICE.activeSlot === idx) {
+            if (VOICE.wakeTimeoutId) { clearTimeout(VOICE.wakeTimeoutId); VOICE.wakeTimeoutId = null; }
+            VOICE.activeSlot = null;
+            VOICE.awaitingCommand = false;
+          }
+          slot.isListening = false;
+          if (slot.isSpeaking) stopSpeaking();
+          if (!anyVoiceEnabled()) stopRecognition();
         }
         render();
       }
