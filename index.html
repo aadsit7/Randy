@@ -318,19 +318,20 @@
           <div class="section-card overflow-hidden cursor-pointer transition hover:shadow-lg hover:scale-[1.01]"
                style="aspect-ratio: 1 / 1; position: relative;"
                data-action="expand-slot" data-idx="${idx}">
-            ${hasUrl ? `
-              <iframe src="${slot.url}" width="100%" height="100%" frameborder="0" allow="clipboard-write"
-                style="display:block; border:none; pointer-events:none;"></iframe>
-              <div style="position:absolute;inset:0;z-index:2;cursor:pointer;" data-action="expand-slot" data-idx="${idx}"></div>
-            ` : `
-              <div class="w-full h-full flex items-center justify-center">
-                <div class="text-center">
-                  <i data-lucide="layout-grid" class="w-10 h-10 mx-auto mb-3 text-slate-300"></i>
-                  <div class="text-sm font-semibold text-[#0A1C60]">${slot.label}</div>
-                  <div class="text-xs text-slate-400 mt-1">No embed configured</div>
-                </div>
+            <div class="w-full h-full flex items-center justify-center">
+              <div class="text-center">
+                ${hasUrl
+                  ? `<div class="w-14 h-14 mx-auto mb-3 rounded-xl grid place-items-center" style="background:linear-gradient(135deg,#0070F3,#0A1C60)">
+                       <i data-lucide="globe" class="w-7 h-7 text-white"></i>
+                     </div>
+                     <div class="text-sm font-semibold text-[#0A1C60]">${slot.label}</div>
+                     <div class="text-xs text-emerald-600 mt-1 font-medium">Click to open</div>`
+                  : `<i data-lucide="layout-grid" class="w-10 h-10 mx-auto mb-3 text-slate-300"></i>
+                     <div class="text-sm font-semibold text-[#0A1C60]">${slot.label}</div>
+                     <div class="text-xs text-slate-400 mt-1">No embed configured</div>`
+                }
               </div>
-            `}
+            </div>
             <div style="position:absolute;bottom:0;left:0;right:0;z-index:3;background:linear-gradient(0deg,rgba(255,255,255,0.95),transparent);padding:8px 12px;display:flex;align-items:center;justify-content:space-between;">
               <span class="text-xs font-semibold text-[#0A1C60]">${slot.label}</span>
               <i data-lucide="maximize-2" class="w-3.5 h-3.5 text-slate-400"></i>
@@ -361,7 +362,9 @@
             </div>
             <div class="flex-1" style="background:white;" onclick="event.stopPropagation()">
               ${hasUrl ? `
-                <iframe src="${slot.url}" width="100%" height="100%" frameborder="0" allow="clipboard-write"
+                <iframe src="${slot.url}" width="100%" height="100%" frameborder="0"
+                  allow="clipboard-write; clipboard-read"
+                  sandbox="allow-scripts allow-same-origin allow-popups allow-forms allow-top-navigation"
                   style="display:block; border:none;"></iframe>
               ` : `
                 <div class="w-full h-full flex items-center justify-center">
