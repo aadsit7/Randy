@@ -244,6 +244,17 @@
       STATE.editChartBuffer = null;
       STATE.highlightDriverId = null;
 
+      /* Shared slot system — drives both Home and Settings */
+      STATE.slots = [
+        { label: 'Service 1', url: 'https://app.nimbusweb.me/ai-agent-public/6jq9zfv9i9e5sr0c?orgId=b3sj8e3db1iv2urj' },
+        { label: 'Service 2', url: '' },
+        { label: 'Service 3', url: '' },
+        { label: 'Service 4', url: '' }
+      ];
+      STATE.expandedSlot = null;   /* index of full-screen slot, null = closed */
+      STATE.editingSlot = 0;       /* which slot the Settings input targets */
+      STATE.settingsInput = '';    /* live text in the Settings URL field */
+
       /* ===== TABS — Business Impact removed ===== */
       const TABS = [
         { id: 'problems', label: 'Home', icon: 'home' },
@@ -283,6 +294,7 @@
             <section class="mt-5">${renderActivePanel()}</section>
           </main>
 
+          ${renderExpandedSlot()}
           ${renderModal()}
         `;
 
@@ -297,81 +309,140 @@
       }
 
       /* ==========================================================
-         HOME TAB — Centered text box
+         SHARED: Slot card (used by both Home and Settings)
+         ========================================================== */
+
+      function renderSlotCard(slot, idx){
+        const hasUrl = slot.url && slot.url.trim();
+        return `
+          <div class="section-card overflow-hidden cursor-pointer transition hover:shadow-lg hover:scale-[1.01]"
+               style="aspect-ratio: 1 / 1; position: relative;"
+               data-action="expand-slot" data-idx="${idx}">
+            ${hasUrl ? `
+              <iframe src="${slot.url}" width="100%" height="100%" frameborder="0" allow="clipboard-write"
+                style="display:block; border:none; pointer-events:none;"></iframe>
+              <div style="position:absolute;inset:0;z-index:2;cursor:pointer;" data-action="expand-slot" data-idx="${idx}"></div>
+            ` : `
+              <div class="w-full h-full flex items-center justify-center">
+                <div class="text-center">
+                  <i data-lucide="layout-grid" class="w-10 h-10 mx-auto mb-3 text-slate-300"></i>
+                  <div class="text-sm font-semibold text-[#0A1C60]">${slot.label}</div>
+                  <div class="text-xs text-slate-400 mt-1">No embed configured</div>
+                </div>
+              </div>
+            `}
+            <div style="position:absolute;bottom:0;left:0;right:0;z-index:3;background:linear-gradient(0deg,rgba(255,255,255,0.95),transparent);padding:8px 12px;display:flex;align-items:center;justify-content:space-between;">
+              <span class="text-xs font-semibold text-[#0A1C60]">${slot.label}</span>
+              <i data-lucide="maximize-2" class="w-3.5 h-3.5 text-slate-400"></i>
+            </div>
+          </div>
+        `;
+      }
+
+      /* ==========================================================
+         FULL-SCREEN OVERLAY (click a box → expands here)
+         ========================================================== */
+
+      function renderExpandedSlot(){
+        if (STATE.expandedSlot === null) return '';
+        const slot = STATE.slots[STATE.expandedSlot];
+        if (!slot) return '';
+        const hasUrl = slot.url && slot.url.trim();
+        return `
+          <div class="fixed inset-0 z-50 flex flex-col" style="background:rgba(2,6,23,0.7);backdrop-filter:blur(4px);" data-action="close-expanded">
+            <div class="flex items-center justify-between px-4 py-3" style="background:rgba(255,255,255,0.95);border-bottom:1px solid #e2e8f0;">
+              <div class="flex items-center gap-2">
+                <i data-lucide="layout-grid" class="w-4 h-4 text-[#0070F3]"></i>
+                <span class="text-sm font-semibold text-[#0A1C60]">${slot.label}</span>
+              </div>
+              <button type="button" data-action="close-expanded" class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-transparent text-slate-500 hover:text-[#0A1C60] hover:bg-slate-100 transition">
+                <i data-lucide="minimize-2" class="w-4 h-4"></i> Close
+              </button>
+            </div>
+            <div class="flex-1" style="background:white;" onclick="event.stopPropagation()">
+              ${hasUrl ? `
+                <iframe src="${slot.url}" width="100%" height="100%" frameborder="0" allow="clipboard-write"
+                  style="display:block; border:none;"></iframe>
+              ` : `
+                <div class="w-full h-full flex items-center justify-center">
+                  <div class="text-center">
+                    <i data-lucide="code" class="w-16 h-16 mx-auto mb-4 text-slate-200"></i>
+                    <div class="text-lg font-semibold text-[#0A1C60]">${slot.label}</div>
+                    <div class="text-sm text-slate-400 mt-1">No embed URL configured — add one in Settings</div>
+                  </div>
+                </div>
+              `}
+            </div>
+          </div>
+        `;
+      }
+
+      /* ==========================================================
+         HOME TAB — 2x2 grid of live slot cards
          ========================================================== */
 
       function renderProblems(){
         return `
           <section id="panel-problems" class="pt-6">
             <div class="grid grid-cols-2 gap-4 w-full" style="min-height: calc(100vh - 200px)">
-
-              <!-- Box 1 -->
-              <div class="section-card flex flex-col items-center justify-center" style="aspect-ratio: 1 / 1;">
-                <div class="w-full h-full flex items-center justify-center text-[#94a3b8]">
-                  <div class="text-center">
-                    <i data-lucide="layout-grid" class="w-10 h-10 mx-auto mb-3 text-slate-300"></i>
-                    <div class="text-sm font-semibold text-[#0A1C60]">Service 1</div>
-                    <div class="text-xs text-slate-400 mt-1">Content coming soon</div>
-                  </div>
-                </div>
-              </div>
-
-              <!-- Box 2 -->
-              <div class="section-card flex flex-col items-center justify-center" style="aspect-ratio: 1 / 1;">
-                <div class="w-full h-full flex items-center justify-center text-[#94a3b8]">
-                  <div class="text-center">
-                    <i data-lucide="layout-grid" class="w-10 h-10 mx-auto mb-3 text-slate-300"></i>
-                    <div class="text-sm font-semibold text-[#0A1C60]">Service 2</div>
-                    <div class="text-xs text-slate-400 mt-1">Content coming soon</div>
-                  </div>
-                </div>
-              </div>
-
-              <!-- Box 3 -->
-              <div class="section-card flex flex-col items-center justify-center" style="aspect-ratio: 1 / 1;">
-                <div class="w-full h-full flex items-center justify-center text-[#94a3b8]">
-                  <div class="text-center">
-                    <i data-lucide="layout-grid" class="w-10 h-10 mx-auto mb-3 text-slate-300"></i>
-                    <div class="text-sm font-semibold text-[#0A1C60]">Service 3</div>
-                    <div class="text-xs text-slate-400 mt-1">Content coming soon</div>
-                  </div>
-                </div>
-              </div>
-
-              <!-- Box 4 -->
-              <div class="section-card flex flex-col items-center justify-center" style="aspect-ratio: 1 / 1;">
-                <div class="w-full h-full flex items-center justify-center text-[#94a3b8]">
-                  <div class="text-center">
-                    <i data-lucide="layout-grid" class="w-10 h-10 mx-auto mb-3 text-slate-300"></i>
-                    <div class="text-sm font-semibold text-[#0A1C60]">Service 4</div>
-                    <div class="text-xs text-slate-400 mt-1">Content coming soon</div>
-                  </div>
-                </div>
-              </div>
-
+              ${STATE.slots.map((s, i) => renderSlotCard(s, i)).join('')}
             </div>
           </section>
         `;
       }
 
       /* ==========================================================
-         SETTINGS TAB — Centered text box
+         SETTINGS TAB — Same grid + URL editor
          ========================================================== */
 
       function renderSolution(){
+        const es = STATE.editingSlot;
+        const currentUrl = STATE.slots[es]?.url || '';
         return `
-          <section id="panel-solution" class="flex justify-center items-start pt-6">
-            <div class="section-card p-8 w-full max-w-4xl">
+          <section id="panel-solution" class="pt-6 space-y-4">
 
-              <!-- Centered text box -->
-              <div class="text-center max-w-2xl mx-auto">
-                <h2 class="text-2xl font-semibold text-[#0A1C60] mb-4">Recast Application Workspace + Nerdio</h2>
-                <p class="text-base leading-relaxed text-[#4A5568]">
-                  Recast Application Workspace paired with Nerdio and Azure Virtual Desktop eliminates the clinical app delivery problem at its root. Instead of managing apps separately for every platform and environment, you define each app once and Recast delivers it consistently everywhere — shared carts, workstations, virtual desktops, home offices. Nerdio handles the Citrix-to-AVD migration and optimizes Azure compute costs through intelligent autoscaling. Physicians get the same frictionless experience regardless of where or how they access their apps. Security patches get validated automatically through a release pipeline before reaching production. IT teams shift from reactive firefighting to proactive management, freeing up real capacity for the initiatives that actually move the health system forward.
-                </p>
-              </div>
-
+            <!-- Slot selector tabs -->
+            <div class="flex gap-2">
+              ${STATE.slots.map((s, i) => `
+                <button type="button" data-action="select-editing-slot" data-idx="${i}"
+                  class="flex-1 px-3 py-2.5 text-sm font-semibold rounded-lg border-2 transition
+                  ${es === i
+                    ? 'bg-[#0070F3] text-white border-[#0070F3]'
+                    : s.url ? 'bg-white text-[#0A1C60] border-[#0A1C60] hover:border-[#0070F3] hover:text-[#0070F3]' : 'bg-white text-[#94a3b8] border-[#e2e8f0] hover:border-[#0070F3] hover:text-[#0070F3]'}">
+                  <span>${s.label}</span>
+                  ${s.url ? '<i data-lucide="check-circle" class="w-3 h-3 inline ml-1"></i>' : ''}
+                </button>
+              `).join('')}
             </div>
+
+            <!-- URL editor for selected slot -->
+            <div class="section-card p-5 w-full">
+              <div class="text-xs font-semibold text-[#64748b] uppercase tracking-wide mb-2">
+                Embed URL for ${STATE.slots[es]?.label || 'Slot'}
+              </div>
+              <div class="flex items-center gap-3">
+                <input type="text" id="settings-input"
+                  value="${(STATE.settingsInput !== null ? STATE.settingsInput : currentUrl).replace(/"/g, '&quot;')}"
+                  placeholder="Paste iframe src URL here..."
+                  class="flex-1 px-4 py-2.5 border-2 border-[#e2e8f0] rounded-lg text-sm font-medium text-[#0A1C60] bg-white outline-none transition focus:border-[#0070F3] focus:shadow-[0_0_0_3px_rgba(0,112,243,0.1)]" />
+                <button type="button" data-action="settings-save" class="inline-flex items-center gap-1.5 px-4 py-2.5 text-sm font-semibold rounded-lg bg-[#0070F3] text-white hover:bg-[#005AD0] transition">
+                  <i data-lucide="save" class="w-4 h-4"></i> Save
+                </button>
+                <button type="button" data-action="settings-reset" class="inline-flex items-center gap-1.5 px-4 py-2.5 text-sm font-semibold rounded-lg bg-transparent text-[#0A1C60] border-2 border-[#0A1C60] hover:text-[#0070F3] hover:border-[#0070F3] transition">
+                  <i data-lucide="rotate-ccw" class="w-4 h-4"></i> Reset
+                </button>
+                <button type="button" data-action="settings-clear" class="inline-flex items-center gap-1.5 px-4 py-2.5 text-sm font-semibold rounded-lg bg-transparent text-[#ef4444] border-2 border-[#ef4444] hover:bg-[#ef4444] hover:text-white transition">
+                  <i data-lucide="trash-2" class="w-4 h-4"></i> Clear
+                </button>
+              </div>
+              ${currentUrl ? '<div class="mt-2 text-xs text-emerald-600 font-medium"><i data-lucide="check-circle" class="w-3 h-3 inline mr-1"></i>Active embed configured</div>' : '<div class="mt-2 text-xs text-slate-400">No URL saved for this slot yet</div>'}
+            </div>
+
+            <!-- Same 2x2 grid as Home — click to expand -->
+            <div class="grid grid-cols-2 gap-4 w-full" style="min-height: calc(100vh - 420px)">
+              ${STATE.slots.map((s, i) => renderSlotCard(s, i)).join('')}
+            </div>
+
           </section>
         `;
       }
@@ -911,6 +982,39 @@
           if (!action) return;
 
           if (action === 'switch-tab') { STATE.activeTab = act.getAttribute('data-tab'); STATE.activePopover = null; STATE.openWhyModal = null; STATE.insightContent = null; STATE.highlightDriverId = null; render(); return; }
+
+          /* Slot & settings actions */
+          if (action === 'expand-slot') {
+            STATE.expandedSlot = parseInt(act.getAttribute('data-idx'), 10);
+            render(); return;
+          }
+          if (action === 'close-expanded') {
+            STATE.expandedSlot = null;
+            render(); return;
+          }
+          if (action === 'select-editing-slot') {
+            const idx = parseInt(act.getAttribute('data-idx'), 10);
+            STATE.editingSlot = idx;
+            STATE.settingsInput = STATE.slots[idx]?.url || '';
+            render(); return;
+          }
+          if (action === 'settings-save') {
+            const inp = document.getElementById('settings-input');
+            if (inp) {
+              STATE.slots[STATE.editingSlot].url = inp.value.trim();
+              STATE.settingsInput = inp.value.trim();
+            }
+            render(); return;
+          }
+          if (action === 'settings-reset') {
+            STATE.settingsInput = STATE.slots[STATE.editingSlot]?.url || '';
+            render(); return;
+          }
+          if (action === 'settings-clear') {
+            STATE.slots[STATE.editingSlot].url = '';
+            STATE.settingsInput = '';
+            render(); return;
+          }
           if (action === 'close-modal') { STATE.modalOpen = false; render(); return; }
           if (action === 'close-why-modal') { STATE.openWhyModal = null; render(); return; }
           if (action === 'close-insight-modal') { STATE.insightContent = null; STATE.highlightDriverId = null; render(); return; }
@@ -975,6 +1079,7 @@
         });
 
         root.addEventListener('input', (e) => {
+          if (e.target?.id === 'settings-input') { STATE.settingsInput = e.target.value; return; }
           const buf = e.target.closest('[data-action="edit-buffer"]');
           if (buf) { const key = buf.getAttribute('data-key'); const sub = buf.getAttribute('data-subkey'); if (STATE.editBuffers?.[key]) STATE.editBuffers[key][sub] = e.target.value; }
           if (STATE.modalOpen && STATE.editTab === 'chart') { STATE.editChartBuffer = readChartFieldsRaw(); }
@@ -992,8 +1097,8 @@
       document.addEventListener('DOMContentLoaded', render);
 
       document.addEventListener('keydown',(e)=>{
-        if(e.key==='Escape' && (STATE.modalOpen || STATE.openWhyModal || STATE.insightContent)){
-          STATE.modalOpen=false; STATE.openWhyModal=null; STATE.insightContent=null; STATE.highlightDriverId=null; render();
+        if(e.key==='Escape' && (STATE.expandedSlot !== null || STATE.modalOpen || STATE.openWhyModal || STATE.insightContent)){
+          STATE.expandedSlot=null; STATE.modalOpen=false; STATE.openWhyModal=null; STATE.insightContent=null; STATE.highlightDriverId=null; render();
         }
       });
     </script>
