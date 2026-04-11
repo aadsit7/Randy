@@ -246,8 +246,8 @@
 
       /* ===== TABS — Business Impact removed ===== */
       const TABS = [
-        { id: 'problems', label: 'Home', icon: 'alert-triangle' },
-        { id: 'solution', label: 'Settings', icon: 'workflow' }
+        { id: 'problems', label: 'Home', icon: 'home' },
+        { id: 'solution', label: 'Settings', icon: 'settings' }
       ];
 
       function cx(...a){ return a.filter(Boolean).join(' '); }
@@ -260,11 +260,6 @@
           <header class="relative">
             <div class="relative mx-auto max-w-6xl px-4 pt-8 pb-6">
               <h1 class="text-[40px] md:text-[56px] font-semibold leading-tight"><span style="color:#000000">Re</span><span style="color:#CC0000">cast Software</span></h1>
-              <p class="mt-2 max-w-2xl text-[16px] leading-[1.5] text-[#4A5568]">
-                ${STATE.activeTab==='problems'
-                  ? 'Healthcare IT is at a breaking point: Citrix renewal shock, physician productivity loss, and mounting clinical app complexity are converging.'
-                  : 'What Recast Application Workspace and Nerdio deliver together.'}
-              </p>
             </div>
 
             <div class="relative mx-auto max-w-6xl px-4">
@@ -288,20 +283,11 @@
             <section class="mt-5">${renderActivePanel()}</section>
           </main>
 
-          ${renderInsightModal()}
-          ${renderWhyModal()}
           ${renderModal()}
         `;
 
         if (window.lucide?.createIcons) { try { window.lucide.createIcons(); } catch {} }
         attachEvents();
-
-        if (STATE.activeTab === 'problems') {
-          renderCapacityGapChart();
-          if (Math.abs(STATE.currentDemandExponent - STATE.targetDemandExponent) > 0.001 || Math.abs(STATE.currentCapacitySlope - STATE.targetCapacitySlope) > 0.001) {
-            requestAnimationFrame(animateCurves);
-          }
-        }
       }
 
       function renderActivePanel(){
@@ -311,7 +297,7 @@
       }
 
       /* ==========================================================
-         CURRENT STATE TAB — Centered text box + X-Y chart
+         HOME TAB — Centered text box
          ========================================================== */
 
       function renderProblems(){
@@ -320,30 +306,11 @@
             <div class="section-card p-8 w-full max-w-4xl">
 
               <!-- Centered text box -->
-              <div class="mb-8 text-center max-w-2xl mx-auto">
+              <div class="text-center max-w-2xl mx-auto">
                 <h2 class="text-2xl font-semibold text-[#0A1C60] mb-4">The Clinical IT Breaking Point</h2>
                 <p class="text-base leading-relaxed text-[#4A5568]">
                   Healthcare IT teams are being crushed by three forces hitting at the same time. Citrix renewals are coming in at two to three times the previous contract price — and most hospitals were not budgeted for it. Physicians are losing five to ten minutes every day to app login friction, session timeouts, and inconsistent experiences across shared carts, workstations, and remote access. Meanwhile, IT teams spend all their time firefighting VDI issues and manually patching across fragmented environments instead of working on strategic initiatives like telehealth, AI readiness, or Epic upgrades. HIPAA compliance adds another layer — every unpatched week is audit exposure. The gap between what clinical IT needs to deliver and what IT teams can actually handle is widening every quarter.
                 </p>
-              </div>
-
-              <!-- X-Y Chart -->
-              <div class="chart-container relative">
-                <svg id="capacity-gap-chart" viewBox="0 0 800 420"></svg>
-              </div>
-              <p class="text-xs text-center text-slate-400 mt-4">Click any data point on the chart to explore the underlying pressure.</p>
-
-              <!-- Why Change / Why Now / Why Recast navigation -->
-              <div class="flex justify-center gap-3 mt-6">
-                <button type="button" class="re-secondary inline-flex items-center gap-2 text-sm" data-action="open-why-modal" data-why="change">
-                  <i data-lucide="alert-triangle" class="w-4 h-4"></i> Why Change
-                </button>
-                <button type="button" class="re-secondary inline-flex items-center gap-2 text-sm" data-action="open-why-modal" data-why="now">
-                  <i data-lucide="clock-4" class="w-4 h-4"></i> Why Now
-                </button>
-                <button type="button" class="re-primary inline-flex items-center gap-2 text-sm" data-action="open-why-modal" data-why="recast">
-                  <i data-lucide="sparkles" class="w-4 h-4"></i> Why Recast
-                </button>
               </div>
 
             </div>
@@ -352,7 +319,7 @@
       }
 
       /* ==========================================================
-         RECAST + NERDIO TAB — Centered text box
+         SETTINGS TAB — Centered text box
          ========================================================== */
 
       function renderSolution(){
