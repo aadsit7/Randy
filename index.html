@@ -91,16 +91,22 @@ Do not narrate your research process, show intermediate steps, cite sources inli
 
 When you are unsure or don't have reliable information, say so clearly. Never fabricate sources, citations, statistics, quotes, or URLs. If a question is outside your reliable knowledge, state that explicitly rather than guessing. Distinguish clearly between what you know confidently, what you think is likely, and what you're speculating about. If asked for specific data, either provide it with a confidence note or say you can't verify it. Prefer being honest and incomplete over sounding confident and wrong.`;
 
+      // Paste your Anthropic API key between the quotes to pre-fill every assistant's
+      // Settings → API Key field. The key is never sent anywhere except api.anthropic.com
+      // and is cached to the browser's localStorage the first time the user clicks
+      // "Save Configuration". Leave as '' to force manual entry.
+      const DEFAULT_API_KEY = '';
+
       /* ========== STATE ========== */
       const STATE = {
         activeTab: 'home',
         expandedSlot: null,
         editingSlot: 0,
         slots: [
-          { label: 'Assistant 1', apiKey: '', prompt: 'You are a helpful AI assistant. Be concise and friendly.', messages: [], inputText: '', loading: false },
-          { label: 'Assistant 2', apiKey: '', prompt: ASSISTANT_2_PROMPT, messages: [], inputText: '', loading: false },
-          { label: 'Assistant 3', apiKey: '', prompt: 'You are a helpful AI assistant. Be concise and friendly.', messages: [], inputText: '', loading: false },
-          { label: 'Assistant 4', apiKey: '', prompt: 'You are a helpful AI assistant. Be concise and friendly.', messages: [], inputText: '', loading: false }
+          { label: 'Assistant 1', apiKey: DEFAULT_API_KEY, prompt: 'You are a helpful AI assistant. Be concise and friendly.', messages: [], inputText: '', loading: false },
+          { label: 'Assistant 2', apiKey: DEFAULT_API_KEY, prompt: ASSISTANT_2_PROMPT, messages: [], inputText: '', loading: false },
+          { label: 'Assistant 3', apiKey: DEFAULT_API_KEY, prompt: 'You are a helpful AI assistant. Be concise and friendly.', messages: [], inputText: '', loading: false },
+          { label: 'Assistant 4', apiKey: DEFAULT_API_KEY, prompt: 'You are a helpful AI assistant. Be concise and friendly.', messages: [], inputText: '', loading: false }
         ]
       };
 
@@ -122,7 +128,7 @@ When you are unsure or don't have reliable information, say so clearly. Never fa
           data.forEach((d, i) => {
             if (STATE.slots[i]) {
               STATE.slots[i].label = d.label || STATE.slots[i].label;
-              STATE.slots[i].apiKey = d.apiKey || '';
+              STATE.slots[i].apiKey = d.apiKey || DEFAULT_API_KEY;
               STATE.slots[i].prompt = d.prompt || STATE.slots[i].prompt;
             }
           });
@@ -398,7 +404,7 @@ When you are unsure or don't have reliable information, say so clearly. Never fa
             case 'reset-slot': {
               const s = STATE.slots[idx];
               const DEFAULT_PROMPTS = ['You are a helpful AI assistant. Be concise and friendly.', ASSISTANT_2_PROMPT, 'You are a helpful AI assistant. Be concise and friendly.', 'You are a helpful AI assistant. Be concise and friendly.'];
-              s.apiKey = ''; s.prompt = DEFAULT_PROMPTS[idx];
+              s.apiKey = DEFAULT_API_KEY; s.prompt = DEFAULT_PROMPTS[idx];
               s.label = 'Assistant ' + (idx + 1);
               saveSettings(); render(); break;
             }
