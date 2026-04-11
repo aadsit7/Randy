@@ -51,6 +51,48 @@
       .tab-btn.active { background: var(--primary); color: #fff; }
       .tab-btn:not(.active) { background: transparent; color: var(--navy); }
       .tab-btn:not(.active):hover { background: #f1f5f9; }
+
+      /* ===== Voice widget ===== */
+      .voice-fab { position: fixed; bottom: 24px; right: 24px; z-index: 60; width: 56px; height: 56px; border-radius: 50%; border: none; cursor: pointer; display: grid; place-items: center; color: #fff; box-shadow: 0 8px 24px rgba(15,23,42,0.18); transition: transform 0.15s ease; }
+      .voice-fab:hover { transform: scale(1.06); }
+      .voice-fab:disabled { cursor: not-allowed; opacity: 0.7; }
+      .voice-fab-wrap { position: fixed; bottom: 24px; right: 24px; z-index: 60; width: 56px; height: 56px; }
+      .voice-fab-wrap .voice-fab { position: absolute; inset: 0; }
+      .voice-pulse-ring { position: absolute; inset: 0; border-radius: 50%; pointer-events: none; border: 3px solid currentColor; animation: voicePulse 1.8s ease-out infinite; }
+      .voice-pulse-ring.delay { animation-delay: 0.9s; }
+      @keyframes voicePulse {
+        0% { transform: scale(1); opacity: 0.55; }
+        100% { transform: scale(1.9); opacity: 0; }
+      }
+      .record-pulse { animation: recordPulse 1.2s ease-in-out infinite; }
+      @keyframes recordPulse {
+        0%, 100% { box-shadow: 0 0 0 0 rgba(239,68,68,0.55); }
+        50%      { box-shadow: 0 0 0 14px rgba(239,68,68,0); }
+      }
+      .sound-wave { display: inline-flex; align-items: center; gap: 3px; height: 20px; }
+      .sound-wave-bar { display: block; width: 4px; height: 100%; background: currentColor; border-radius: 2px; transform-origin: center; animation: soundWave 0.9s ease-in-out infinite; }
+      .sound-wave-bar:nth-child(1) { animation-delay: -0.2s; }
+      .sound-wave-bar:nth-child(2) { animation-delay: -0.1s; }
+      .sound-wave-bar:nth-child(3) { animation-delay: 0s; }
+      @keyframes soundWave {
+        0%, 100% { transform: scaleY(0.3); }
+        50%      { transform: scaleY(1); }
+      }
+      .voice-toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); z-index: 100; background: #0f172a; color: #fff; padding: 10px 16px; border-radius: 10px; font-size: 13px; font-weight: 500; box-shadow: 0 12px 30px rgba(15,23,42,0.25); pointer-events: none; animation: toastIn 0.25s ease-out; }
+      @keyframes toastIn { from { opacity: 0; transform: translate(-50%, 12px); } to { opacity: 1; transform: translate(-50%, 0); } }
+      .voice-switch { position: relative; display: inline-flex; align-items: center; width: 44px; height: 24px; border-radius: 9999px; background: #cbd5e1; cursor: pointer; transition: background 0.2s; flex-shrink: 0; }
+      .voice-switch.on { background: #10b981; }
+      .voice-switch::after { content: ''; position: absolute; top: 2px; left: 2px; width: 20px; height: 20px; border-radius: 50%; background: #fff; transition: left 0.2s; box-shadow: 0 1px 3px rgba(15,23,42,0.2); }
+      .voice-switch.on::after { left: 22px; }
+      .header-mic { background: transparent; border: none; cursor: pointer; padding: 2px; display: grid; place-items: center; border-radius: 4px; }
+      .header-mic.on { color: #34d399; }
+      .header-mic:not(.on) { color: rgba(255,255,255,0.4); }
+      .header-mic:hover { background: rgba(255,255,255,0.08); }
+
+      @media (prefers-reduced-motion: reduce) {
+        .voice-pulse-ring, .record-pulse, .sound-wave-bar, .voice-toast { animation: none !important; }
+        .voice-pulse-ring { display: none; }
+      }
     </style>
   </head>
   <body class="min-h-screen antialiased">
@@ -97,17 +139,46 @@ When you are unsure or don't have reliable information, say so clearly. Never fa
       // "Save Configuration". Leave as '' to force manual entry.
       const DEFAULT_API_KEY = '';
 
+      const DEFAULT_VOICE_PERSONALITY = "Keep all responses to 2-3 short sentences since they will be spoken aloud. Use natural conversational language. Say numbers the way people talk \u2014 like '120 grand' not '$120,000'. Never use markdown, bullet points, or formatting. Be direct and warm.";
+
+      function makeSlot(label, prompt) {
+        return {
+          label, apiKey: DEFAULT_API_KEY, prompt,
+          messages: [], inputText: '', loading: false,
+          voiceEnabled: false,
+          voiceName: label,
+          voicePersonality: DEFAULT_VOICE_PERSONALITY,
+          isListening: false,
+          isSpeaking: false
+        };
+      }
+
       /* ========== STATE ========== */
       const STATE = {
         activeTab: 'home',
         expandedSlot: null,
         editingSlot: 0,
         slots: [
-          { label: 'Assistant 1', apiKey: DEFAULT_API_KEY, prompt: 'You are a helpful AI assistant. Be concise and friendly.', messages: [], inputText: '', loading: false },
-          { label: 'Assistant 2', apiKey: DEFAULT_API_KEY, prompt: ASSISTANT_2_PROMPT, messages: [], inputText: '', loading: false },
-          { label: 'Assistant 3', apiKey: DEFAULT_API_KEY, prompt: 'You are a helpful AI assistant. Be concise and friendly.', messages: [], inputText: '', loading: false },
-          { label: 'Assistant 4', apiKey: DEFAULT_API_KEY, prompt: 'You are a helpful AI assistant. Be concise and friendly.', messages: [], inputText: '', loading: false }
+          makeSlot('Assistant 1', 'You are a helpful AI assistant. Be concise and friendly.'),
+          makeSlot('Assistant 2', ASSISTANT_2_PROMPT),
+          makeSlot('Assistant 3', 'You are a helpful AI assistant. Be concise and friendly.'),
+          makeSlot('Assistant 4', 'You are a helpful AI assistant. Be concise and friendly.')
         ]
+      };
+
+      /* ========== VOICE GLOBAL STATE ========== */
+      const VOICE = {
+        srSupported: !!(window.SpeechRecognition || window.webkitSpeechRecognition),
+        ttsSupported: !!window.speechSynthesis,
+        recognition: null,       // shared SpeechRecognition instance
+        wantRunning: false,      // should the recognizer be running?
+        audioCtx: null,          // lazy AudioContext for beep
+        activeSlot: null,        // slot index currently handling a voice command (post wake-word)
+        awaitingCommand: false,  // wake word heard, waiting for the actual question
+        wakeTimeoutId: null,     // 30s timeout to drop back to passive listening
+        permissionDenied: false,
+        toastTimeoutId: null,
+        toastMessage: ''
       };
 
       const SLOT_COLORS = ['#0070F3','#10b981','#8b5cf6','#f59e0b'];
@@ -116,7 +187,14 @@ When you are unsure or don't have reliable information, say so clearly. Never fa
       const SETTINGS_KEY = 'recast_chatbot_settings';
 
       function saveSettings() {
-        const data = STATE.slots.map(s => ({ label: s.label, apiKey: s.apiKey, prompt: s.prompt }));
+        const data = STATE.slots.map(s => ({
+          label: s.label,
+          apiKey: s.apiKey,
+          prompt: s.prompt,
+          voiceEnabled: s.voiceEnabled,
+          voiceName: s.voiceName,
+          voicePersonality: s.voicePersonality
+        }));
         try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(data)); } catch {}
       }
 
@@ -130,6 +208,9 @@ When you are unsure or don't have reliable information, say so clearly. Never fa
               STATE.slots[i].label = d.label || STATE.slots[i].label;
               STATE.slots[i].apiKey = d.apiKey || DEFAULT_API_KEY;
               STATE.slots[i].prompt = d.prompt || STATE.slots[i].prompt;
+              STATE.slots[i].voiceEnabled = !!d.voiceEnabled;
+              STATE.slots[i].voiceName = d.voiceName || STATE.slots[i].label;
+              STATE.slots[i].voicePersonality = d.voicePersonality || DEFAULT_VOICE_PERSONALITY;
             }
           });
         } catch {}
@@ -137,8 +218,271 @@ When you are unsure or don't have reliable information, say so clearly. Never fa
 
       loadSettings();
 
+      /* ========== VOICE HELPERS ========== */
+      function showToast(msg) {
+        VOICE.toastMessage = msg;
+        render();
+        if (VOICE.toastTimeoutId) clearTimeout(VOICE.toastTimeoutId);
+        VOICE.toastTimeoutId = setTimeout(() => {
+          VOICE.toastMessage = '';
+          render();
+        }, 3500);
+      }
+
+      function playBeep() {
+        if (!VOICE.audioCtx) {
+          try { VOICE.audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
+          catch { return; }
+        }
+        try {
+          const ctx = VOICE.audioCtx;
+          if (ctx.state === 'suspended') ctx.resume();
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(880, ctx.currentTime);
+          osc.frequency.exponentialRampToValueAtTime(1320, ctx.currentTime + 0.12);
+          gain.gain.setValueAtTime(0.0001, ctx.currentTime);
+          gain.gain.exponentialRampToValueAtTime(0.18, ctx.currentTime + 0.01);
+          gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.18);
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+          osc.start();
+          osc.stop(ctx.currentTime + 0.2);
+        } catch {}
+      }
+
+      function stripMarkdown(text) {
+        return String(text)
+          .replace(/```[\s\S]*?```/g, ' ')          // fenced code blocks
+          .replace(/`([^`]+)`/g, '$1')               // inline code
+          .replace(/\*\*([^*]+)\*\*/g, '$1')         // bold
+          .replace(/__([^_]+)__/g, '$1')             // bold alt
+          .replace(/(^|\s)\*([^*\n]+)\*/g, '$1$2')   // italic
+          .replace(/(^|\s)_([^_\n]+)_/g, '$1$2')     // italic alt
+          .replace(/^#{1,6}\s+/gm, '')               // headers
+          .replace(/^\s*[-*+]\s+/gm, '')             // bullets
+          .replace(/^\s*\d+\.\s+/gm, '')             // numbered lists
+          .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')   // links
+          .replace(/!\[([^\]]*)\]\([^)]+\)/g, '$1')  // images
+          .replace(/^\s*>\s?/gm, '')                 // blockquotes
+          .replace(/\n{3,}/g, '\n\n')
+          .trim();
+      }
+
+      function pickDeepVoice() {
+        if (!VOICE.ttsSupported) return null;
+        const voices = window.speechSynthesis.getVoices() || [];
+        if (voices.length === 0) return null;
+        const enVoices = voices.filter(v => /^en(-|_|$)/i.test(v.lang));
+        const pool = enVoices.length ? enVoices : voices;
+        return pool.find(v => /male/i.test(v.name))
+            || pool.find(v => /\b(david|daniel|alex|tom|mark|eric|fred|george|james|guy)\b/i.test(v.name))
+            || pool.find(v => /google us english/i.test(v.name))
+            || pool[0];
+      }
+
+      function speakText(text, idx) {
+        if (!VOICE.ttsSupported) return;
+        const clean = stripMarkdown(text);
+        if (!clean) return;
+        try { window.speechSynthesis.cancel(); } catch {}
+        const u = new SpeechSynthesisUtterance(clean);
+        const v = pickDeepVoice();
+        if (v) u.voice = v;
+        u.pitch = 0.85;
+        u.rate = 0.95;
+        u.onstart = () => { STATE.slots[idx].isSpeaking = true; render(); };
+        u.onend = () => {
+          STATE.slots[idx].isSpeaking = false;
+          VOICE.activeSlot = null;
+          VOICE.awaitingCommand = false;
+          render();
+        };
+        u.onerror = u.onend;
+        try { window.speechSynthesis.speak(u); }
+        catch { STATE.slots[idx].isSpeaking = false; render(); }
+      }
+
+      function stopSpeaking() {
+        if (!VOICE.ttsSupported) return;
+        try { window.speechSynthesis.cancel(); } catch {}
+        STATE.slots.forEach(s => { s.isSpeaking = false; });
+        render();
+      }
+
+      /* ========== WAKE WORD + RECOGNITION ========== */
+      function anyVoiceEnabled() {
+        return STATE.slots.some(s => s.voiceEnabled);
+      }
+
+      function escapeRegex(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+
+      function buildWakePattern(name) {
+        const n = escapeRegex(String(name).trim());
+        return new RegExp('\\b(?:hey|hi|ok|okay|yo)\\s+' + n + '\\b[\\s,.!?:;-]*', 'i');
+      }
+
+      function handleVoiceTranscript(raw) {
+        const text = String(raw).trim();
+        if (!text) return;
+
+        // Echo guard: while TTS is speaking, only accept short stop commands so the
+        // assistant's own voice doesn't get re-transcribed as input.
+        if (STATE.slots.some(s => s.isSpeaking)) {
+          const t = text.toLowerCase();
+          if (/^(stop|cancel|quiet|shut up|never mind)\b/.test(t)) stopSpeaking();
+          return;
+        }
+
+        // If we are already waiting for the command following a wake word, treat this
+        // utterance as the command.
+        if (VOICE.activeSlot !== null && VOICE.awaitingCommand) {
+          // Strip a leading wake phrase if the user repeated it
+          let cleaned = text;
+          const slot = STATE.slots[VOICE.activeSlot];
+          if (slot) {
+            const p = buildWakePattern(slot.voiceName || slot.label);
+            cleaned = text.replace(p, '').trim();
+          }
+          const lower = cleaned.toLowerCase();
+          if (lower === 'stop' || lower === 'cancel' || lower === 'never mind') {
+            stopSpeaking();
+            VOICE.activeSlot = null;
+            VOICE.awaitingCommand = false;
+            if (VOICE.wakeTimeoutId) { clearTimeout(VOICE.wakeTimeoutId); VOICE.wakeTimeoutId = null; }
+            STATE.slots.forEach(s => { s.isListening = false; });
+            render();
+            return;
+          }
+          if (cleaned.length < 2) return; // ignore stray noise
+          if (VOICE.wakeTimeoutId) { clearTimeout(VOICE.wakeTimeoutId); VOICE.wakeTimeoutId = null; }
+          VOICE.awaitingCommand = false;
+          const idx = VOICE.activeSlot;
+          STATE.slots[idx].isListening = false;
+          STATE.slots[idx].inputText = cleaned;
+          sendMessage(idx, true);
+          return;
+        }
+
+        // "Stop speaking" shortcut while TTS is active
+        const lower = text.toLowerCase();
+        if (/\b(stop|cancel|quiet|shut up|never mind)\b/.test(lower) && STATE.slots.some(s => s.isSpeaking)) {
+          stopSpeaking();
+          return;
+        }
+
+        // Otherwise scan for a wake word across enabled slots
+        for (let i = 0; i < STATE.slots.length; i++) {
+          const slot = STATE.slots[i];
+          if (!slot.voiceEnabled) continue;
+          const pattern = buildWakePattern(slot.voiceName || slot.label);
+          const match = text.match(pattern);
+          if (!match) continue;
+
+          playBeep();
+
+          // If the user spoke the wake word AND the question in one breath
+          // (e.g. "Hey Assistant 2 what is application workspace"), handle it now.
+          const after = text.slice(match.index + match[0].length).trim();
+          if (after.length >= 2) {
+            VOICE.activeSlot = i;
+            VOICE.awaitingCommand = false;
+            slot.isListening = false;
+            slot.inputText = after;
+            sendMessage(i, true);
+            return;
+          }
+
+          // Otherwise arm: wait for the next utterance as the command.
+          VOICE.activeSlot = i;
+          VOICE.awaitingCommand = true;
+          slot.isListening = true;
+          if (VOICE.wakeTimeoutId) clearTimeout(VOICE.wakeTimeoutId);
+          VOICE.wakeTimeoutId = setTimeout(() => {
+            VOICE.activeSlot = null;
+            VOICE.awaitingCommand = false;
+            slot.isListening = false;
+            VOICE.wakeTimeoutId = null;
+            render();
+          }, 30000);
+          render();
+          return;
+        }
+      }
+
+      function ensureRecognition() {
+        if (!VOICE.srSupported) return null;
+        if (VOICE.recognition) return VOICE.recognition;
+        const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+        const r = new SR();
+        r.continuous = true;
+        r.interimResults = true;
+        r.lang = 'en-US';
+        r.onresult = (e) => {
+          for (let i = e.resultIndex; i < e.results.length; i++) {
+            const res = e.results[i];
+            if (res.isFinal) {
+              handleVoiceTranscript(res[0].transcript);
+            }
+          }
+        };
+        r.onerror = (e) => {
+          if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+            VOICE.permissionDenied = true;
+            VOICE.wantRunning = false;
+            STATE.slots.forEach(s => { s.voiceEnabled = false; s.isListening = false; });
+            saveSettings();
+            showToast('Microphone access required for voice assistant');
+            render();
+            return;
+          }
+          // For transient errors (no-speech, aborted, network), allow onend to restart.
+        };
+        r.onend = () => {
+          // Auto-restart if any slot still wants voice and we haven't been told to stop.
+          if (VOICE.wantRunning && anyVoiceEnabled()) {
+            try { r.start(); } catch {}
+          }
+        };
+        VOICE.recognition = r;
+        return r;
+      }
+
+      function startRecognition() {
+        const r = ensureRecognition();
+        if (!r) return;
+        VOICE.wantRunning = true;
+        try { r.start(); }
+        catch (e) { /* already started - ignore */ }
+      }
+
+      function stopRecognition() {
+        VOICE.wantRunning = false;
+        if (VOICE.recognition) {
+          try { VOICE.recognition.stop(); } catch {}
+        }
+        if (VOICE.wakeTimeoutId) { clearTimeout(VOICE.wakeTimeoutId); VOICE.wakeTimeoutId = null; }
+        VOICE.activeSlot = null;
+        VOICE.awaitingCommand = false;
+        STATE.slots.forEach(s => { s.isListening = false; });
+      }
+
+      function toggleSlotVoice(idx) {
+        const slot = STATE.slots[idx];
+        if (!VOICE.srSupported) { showToast('Voice not supported in this browser'); return; }
+        slot.voiceEnabled = !slot.voiceEnabled;
+        saveSettings();
+        if (slot.voiceEnabled) {
+          startRecognition();
+        } else if (!anyVoiceEnabled()) {
+          stopRecognition();
+        }
+        render();
+      }
+
       /* ========== API ========== */
-      async function sendMessage(idx) {
+      async function sendMessage(idx, viaVoice = false) {
         const slot = STATE.slots[idx];
         const text = slot.inputText.trim();
         if (!text || slot.loading) return;
@@ -157,13 +501,17 @@ When you are unsure or don't have reliable information, say so clearly. Never fa
           };
           if (slot.apiKey) headers["x-api-key"] = slot.apiKey;
 
+          const systemPrompt = viaVoice && slot.voicePersonality
+            ? slot.prompt + '\n\n' + slot.voicePersonality
+            : slot.prompt;
+
           const resp = await fetch("https://api.anthropic.com/v1/messages", {
             method: "POST",
             headers,
             body: JSON.stringify({
               model: "claude-sonnet-4-20250514",
               max_tokens: 1024,
-              system: slot.prompt,
+              system: systemPrompt,
               messages: slot.messages.filter(m => m.role === 'user' || m.role === 'assistant')
             })
           });
@@ -172,8 +520,13 @@ When you are unsure or don't have reliable information, say so clearly. Never fa
           if (data.error) throw new Error(data.error.message || 'API error');
           const reply = data.content?.map(c => c.text || '').join('') || 'No response.';
           slot.messages.push({ role: 'assistant', content: reply });
+          if (viaVoice) speakText(reply, idx);
         } catch (err) {
           slot.messages.push({ role: 'assistant', content: '\u26a0\ufe0f ' + (err.message || 'Connection failed. Check your API key in Settings.') });
+          if (viaVoice) {
+            VOICE.activeSlot = null;
+            VOICE.awaitingCommand = false;
+          }
         }
 
         slot.loading = false;
@@ -228,6 +581,7 @@ When you are unsure or don't have reliable information, say so clearly. Never fa
             ${STATE.activeTab === 'home' ? renderHome() : renderSettings()}
           </main>
           ${renderExpanded()}
+          ${renderToast()}
         `;
         if (window.lucide?.createIcons) try { window.lucide.createIcons(); } catch {}
         bindEvents();
@@ -248,7 +602,12 @@ When you are unsure or don't have reliable information, say so clearly. Never fa
             <div class="flex items-center gap-2 px-3 py-2 border-b border-slate-100" style="background:var(--navy)">
               <div class="w-6 h-6 rounded-full grid place-items-center text-white font-bold text-[10px]" style="background:${color}">${slot.label.charAt(0)}</div>
               <span class="text-xs font-semibold text-white">${escHtml(slot.label)}</span>
-              <button title="Expand" data-action="expand-slot" data-idx="${idx}" style="margin-left:auto;background:transparent;border:none;cursor:pointer;padding:2px;color:rgba(255,255,255,0.6)">
+              ${VOICE.srSupported ? `
+                <button title="${slot.voiceEnabled?'Voice on':'Voice off'}" class="header-mic ${slot.voiceEnabled?'on':''}" style="margin-left:auto" data-action="toggle-voice" data-idx="${idx}">
+                  <i data-lucide="${slot.voiceEnabled?'mic':'mic-off'}" class="w-3 h-3"></i>
+                </button>
+              ` : ''}
+              <button title="Expand" data-action="expand-slot" data-idx="${idx}" style="${VOICE.srSupported?'':'margin-left:auto;'}background:transparent;border:none;cursor:pointer;padding:2px;color:rgba(255,255,255,0.6)">
                 <i data-lucide="maximize-2" class="w-3 h-3"></i>
               </button>
             </div>
@@ -279,6 +638,50 @@ When you are unsure or don't have reliable information, say so clearly. Never fa
           </div>`;
       }
 
+      /* ========== VOICE WIDGET (expanded view FAB) ========== */
+      function renderVoiceFab(slot, idx, color) {
+        if (!VOICE.srSupported) return '';
+        const isActiveCommand = VOICE.activeSlot === idx && VOICE.awaitingCommand;
+        const isSpeaking = slot.isSpeaking;
+        const enabled = slot.voiceEnabled;
+
+        let inner, bg, title, extraClass = '';
+        if (!enabled) {
+          inner = '<i data-lucide="mic-off" class="w-6 h-6"></i>';
+          bg = '#94a3b8';
+          title = 'Voice off — click to enable';
+        } else if (isSpeaking) {
+          inner = '<span class="sound-wave"><span class="sound-wave-bar"></span><span class="sound-wave-bar"></span><span class="sound-wave-bar"></span></span>';
+          bg = color;
+          title = 'Speaking — click to stop';
+        } else if (isActiveCommand) {
+          inner = '<span style="width:16px;height:16px;border-radius:50%;background:#fff;display:inline-block"></span>';
+          bg = '#ef4444';
+          title = 'Listening for your command';
+          extraClass = 'record-pulse';
+        } else {
+          inner = '<i data-lucide="mic" class="w-6 h-6"></i>';
+          bg = color;
+          title = 'Listening for wake word — click to disable';
+        }
+
+        const action = isSpeaking ? 'stop-speaking' : 'toggle-voice';
+        const showRings = enabled && !isSpeaking && !isActiveCommand;
+
+        return `
+          <div class="voice-fab-wrap" style="color:${bg}">
+            ${showRings ? '<span class="voice-pulse-ring"></span><span class="voice-pulse-ring delay"></span>' : ''}
+            <button class="voice-fab ${extraClass}" style="background:${bg}" title="${title}" data-action="${action}" data-idx="${idx}">
+              ${inner}
+            </button>
+          </div>`;
+      }
+
+      function renderToast() {
+        if (!VOICE.toastMessage) return '';
+        return `<div class="voice-toast">${escHtml(VOICE.toastMessage)}</div>`;
+      }
+
       /* ========== EXPANDED CHAT ========== */
       function renderExpanded() {
         if (STATE.expandedSlot === null) return '';
@@ -292,10 +695,15 @@ When you are unsure or don't have reliable information, say so clearly. Never fa
                 <div class="w-9 h-9 rounded-full grid place-items-center text-white font-bold" style="background:${color}">${slot.label.charAt(0)}</div>
                 <div>
                   <div class="text-sm font-semibold">${escHtml(slot.label)}</div>
-                  <div class="text-[10px] text-white/50">${slot.messages.length} messages</div>
+                  <div class="text-[10px] text-white/50">${slot.messages.length} messages${slot.voiceEnabled?' \u00b7 voice on':''}</div>
                 </div>
               </div>
               <div class="flex items-center gap-2">
+                ${slot.isSpeaking ? `
+                  <button style="background:transparent;border:1px solid rgba(255,255,255,0.25);color:#fca5a5;font-size:11px;padding:5px 10px;border-radius:6px;cursor:pointer;font-weight:600" data-action="stop-speaking" data-idx="${idx}">
+                    <i data-lucide="volume-x" class="w-3 h-3 inline mr-1"></i>Stop Speaking
+                  </button>
+                ` : ''}
                 <button style="background:transparent;border:1px solid rgba(255,255,255,0.25);color:rgba(255,255,255,0.7);font-size:11px;padding:5px 10px;border-radius:6px;cursor:pointer;font-weight:600" data-action="clear-chat" data-idx="${idx}">
                   <i data-lucide="trash-2" class="w-3 h-3 inline mr-1"></i>Clear
                 </button>
@@ -329,6 +737,7 @@ When you are unsure or don't have reliable information, say so clearly. Never fa
                 <i data-lucide="send" class="w-4 h-4"></i>
               </button>
             </div>
+            ${renderVoiceFab(slot, idx, color)}
           </div>`;
       }
 
@@ -372,6 +781,38 @@ When you are unsure or don't have reliable information, say so clearly. Never fa
                 </label>
                 <textarea id="setting-prompt" rows="6" placeholder="You are a helpful AI assistant...">${escHtml(slot.prompt)}</textarea>
                 <p class="text-[11px] text-slate-400 mt-1">These instructions define how this assistant behaves. Changes are saved to cache.</p>
+              </div>
+
+              <div style="border-top:1px dashed #e2e8f0;padding-top:16px">
+                <div class="flex items-center justify-between mb-3">
+                  <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide">
+                    <i data-lucide="mic" class="w-3 h-3 inline mr-1"></i>Voice Assistant
+                  </label>
+                  ${VOICE.srSupported ? `
+                    <div class="voice-switch ${slot.voiceEnabled?'on':''}" data-action="toggle-voice" data-idx="${es}" title="Toggle voice"></div>
+                  ` : `<span class="text-[11px] text-red-500">Not supported in this browser (Chrome/Edge only)</span>`}
+                </div>
+
+                <div class="mb-3">
+                  <label class="block text-[11px] font-semibold text-slate-500 uppercase tracking-wide mb-1">Wake Word Name</label>
+                  <input type="text" id="setting-voicename" value="${escAttr(slot.voiceName || slot.label)}" placeholder="e.g. Randy" ${VOICE.srSupported?'':'disabled'} />
+                  <p class="text-[11px] text-slate-400 mt-1">Say "Hey ${escHtml(slot.voiceName || slot.label)}", "OK ${escHtml(slot.voiceName || slot.label)}", or "Yo ${escHtml(slot.voiceName || slot.label)}" to wake this assistant.</p>
+                </div>
+
+                <div class="mb-3">
+                  <label class="block text-[11px] font-semibold text-slate-500 uppercase tracking-wide mb-1">Voice Personality Override</label>
+                  <textarea id="setting-voicepersonality" rows="4" placeholder="${escAttr(DEFAULT_VOICE_PERSONALITY)}" ${VOICE.srSupported?'':'disabled'}>${escHtml(slot.voicePersonality || DEFAULT_VOICE_PERSONALITY)}</textarea>
+                  <p class="text-[11px] text-slate-400 mt-1">Appended to the system prompt whenever a response is triggered by voice. Kept out of text-only replies.</p>
+                </div>
+
+                ${VOICE.ttsSupported ? `
+                  <div>
+                    <label class="block text-[11px] font-semibold text-slate-500 uppercase tracking-wide mb-1">Available Speech Voices <span class="text-slate-400 normal-case">(picked automatically — prefers deep male)</span></label>
+                    <select id="setting-voice-list" disabled style="opacity:0.85">
+                      ${(window.speechSynthesis.getVoices() || []).filter(v => /^en(-|_|$)/i.test(v.lang)).map(v => `<option>${escHtml(v.name)} \u2014 ${escHtml(v.lang)}</option>`).join('') || '<option>(voices will load after first click)</option>'}
+                    </select>
+                  </div>
+                ` : ''}
               </div>
 
               <div class="flex flex-wrap gap-2 pt-1">
@@ -420,12 +861,25 @@ When you are unsure or don't have reliable information, say so clearly. Never fa
               sendMessage(idx);
               break;
             }
+            case 'toggle-voice': {
+              if (STATE.activeTab === 'settings') readFields();
+              toggleSlotVoice(idx);
+              break;
+            }
+            case 'stop-speaking': {
+              stopSpeaking();
+              break;
+            }
             case 'save-settings': readFields(); saveSettings(); render(); break;
             case 'reset-slot': {
               const s = STATE.slots[idx];
               const DEFAULT_PROMPTS = ['You are a helpful AI assistant. Be concise and friendly.', ASSISTANT_2_PROMPT, 'You are a helpful AI assistant. Be concise and friendly.', 'You are a helpful AI assistant. Be concise and friendly.'];
               s.apiKey = DEFAULT_API_KEY; s.prompt = DEFAULT_PROMPTS[idx];
               s.label = 'Assistant ' + (idx + 1);
+              s.voiceName = s.label;
+              s.voicePersonality = DEFAULT_VOICE_PERSONALITY;
+              s.voiceEnabled = false;
+              if (!anyVoiceEnabled()) stopRecognition();
               saveSettings(); render(); break;
             }
           }
@@ -466,13 +920,32 @@ When you are unsure or don't have reliable information, say so clearly. Never fa
         const l = document.getElementById('setting-label');
         const k = document.getElementById('setting-apikey');
         const p = document.getElementById('setting-prompt');
+        const vn = document.getElementById('setting-voicename');
+        const vp = document.getElementById('setting-voicepersonality');
         if (l) s.label = l.value.trim() || s.label;
         if (k) s.apiKey = k.value.trim();
         if (p) s.prompt = p.value.trim() || s.prompt;
+        if (vn) s.voiceName = vn.value.trim() || s.label;
+        if (vp) s.voicePersonality = vp.value.trim() || DEFAULT_VOICE_PERSONALITY;
       }
 
       /* ========== BOOT ========== */
-      document.addEventListener('DOMContentLoaded', render);
+      document.addEventListener('DOMContentLoaded', () => {
+        render();
+        // Re-render once the browser loads its speech voice list (async in Chrome)
+        if (VOICE.ttsSupported && typeof speechSynthesis.onvoiceschanged !== 'undefined') {
+          window.speechSynthesis.onvoiceschanged = () => {
+            if (STATE.activeTab === 'settings') render();
+          };
+        }
+        // If any slot had voice enabled from localStorage, try to resume recognition.
+        // Chrome requires a user gesture for the very first permission prompt, so this
+        // will silently no-op on cold loads — the user's first click on the mic button
+        // will then trigger the permission flow.
+        if (anyVoiceEnabled() && VOICE.srSupported) {
+          try { startRecognition(); } catch {}
+        }
+      });
     </script>
   </body>
 </html>
