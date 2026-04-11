@@ -302,15 +302,51 @@
 
       function renderProblems(){
         return `
-          <section id="panel-problems" class="flex justify-center items-start pt-6">
-            <div class="section-card p-8 w-full max-w-4xl">
+          <section id="panel-problems" class="pt-6">
+            <div class="grid grid-cols-2 gap-4 w-full" style="min-height: calc(100vh - 200px)">
 
-              <!-- Centered text box -->
-              <div class="text-center max-w-2xl mx-auto">
-                <h2 class="text-2xl font-semibold text-[#0A1C60] mb-4">The Clinical IT Breaking Point</h2>
-                <p class="text-base leading-relaxed text-[#4A5568]">
-                  Healthcare IT teams are being crushed by three forces hitting at the same time. Citrix renewals are coming in at two to three times the previous contract price — and most hospitals were not budgeted for it. Physicians are losing five to ten minutes every day to app login friction, session timeouts, and inconsistent experiences across shared carts, workstations, and remote access. Meanwhile, IT teams spend all their time firefighting VDI issues and manually patching across fragmented environments instead of working on strategic initiatives like telehealth, AI readiness, or Epic upgrades. HIPAA compliance adds another layer — every unpatched week is audit exposure. The gap between what clinical IT needs to deliver and what IT teams can actually handle is widening every quarter.
-                </p>
+              <!-- Box 1 -->
+              <div class="section-card flex flex-col items-center justify-center" style="aspect-ratio: 1 / 1;">
+                <div class="w-full h-full flex items-center justify-center text-[#94a3b8]">
+                  <div class="text-center">
+                    <i data-lucide="layout-grid" class="w-10 h-10 mx-auto mb-3 text-slate-300"></i>
+                    <div class="text-sm font-semibold text-[#0A1C60]">Service 1</div>
+                    <div class="text-xs text-slate-400 mt-1">Content coming soon</div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Box 2 -->
+              <div class="section-card flex flex-col items-center justify-center" style="aspect-ratio: 1 / 1;">
+                <div class="w-full h-full flex items-center justify-center text-[#94a3b8]">
+                  <div class="text-center">
+                    <i data-lucide="layout-grid" class="w-10 h-10 mx-auto mb-3 text-slate-300"></i>
+                    <div class="text-sm font-semibold text-[#0A1C60]">Service 2</div>
+                    <div class="text-xs text-slate-400 mt-1">Content coming soon</div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Box 3 -->
+              <div class="section-card flex flex-col items-center justify-center" style="aspect-ratio: 1 / 1;">
+                <div class="w-full h-full flex items-center justify-center text-[#94a3b8]">
+                  <div class="text-center">
+                    <i data-lucide="layout-grid" class="w-10 h-10 mx-auto mb-3 text-slate-300"></i>
+                    <div class="text-sm font-semibold text-[#0A1C60]">Service 3</div>
+                    <div class="text-xs text-slate-400 mt-1">Content coming soon</div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Box 4 -->
+              <div class="section-card flex flex-col items-center justify-center" style="aspect-ratio: 1 / 1;">
+                <div class="w-full h-full flex items-center justify-center text-[#94a3b8]">
+                  <div class="text-center">
+                    <i data-lucide="layout-grid" class="w-10 h-10 mx-auto mb-3 text-slate-300"></i>
+                    <div class="text-sm font-semibold text-[#0A1C60]">Service 4</div>
+                    <div class="text-xs text-slate-400 mt-1">Content coming soon</div>
+                  </div>
+                </div>
               </div>
 
             </div>
