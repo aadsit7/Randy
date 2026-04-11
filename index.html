@@ -2,1108 +2,404 @@
 <html lang="en">
   <head>
     <meta charset="utf-8">
-    <title>Recast — Compact Click-Through (Realistic Catalog)</title>
+    <title>Recast — AI Assistant Dashboard</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="color-scheme" content="dark light">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="preconnect" href="https://unpkg.com">
     <script src="https://unpkg.com/lucide@latest"></script>
-
     <style>
       :root {
-        --bg-main: #f9fafb;
-        --text-primary: #111827;
-        --primary: #2563eb;
-        --primary-hover: #1d4ed8;
-        --radius: 1rem;
-        --border-subtle: #e5e7eb;
-        --shadow-card: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
-        --shadow-hover: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
-      }
-      html, body {
-        background: var(--bg-main);
-        color: var(--text-primary);
-        font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-      }
-      .focus-ring:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
-      .section-card { border-radius: var(--radius); background: #ffffff; box-shadow: var(--shadow-card); transition: box-shadow 300ms ease, transform 300ms ease; }
-      .section-card:hover { box-shadow: var(--shadow-hover); transform: translateY(-2px); }
-      .sub-card { border-radius: calc(var(--radius) / 1.5); border: 1px solid var(--border-subtle); background: #f9fafb; transition: box-shadow 300ms ease; }
-      .tile { width: 0.45rem; height: 0.45rem; border-radius: 2px; background: #e5e7eb; opacity: 0.9; }
-      .run .tile { animation: tilePulse 1s ease-in-out var(--d, 0s) 1 forwards; }
-      @keyframes tilePulse { 0% { transform: scale(0.7); background: #e5e7eb; opacity: 0.4; } 60% { transform: scale(1); background: var(--primary); opacity: 1; } 100% { background: #e5e7eb; opacity: 0.9; } }
-      .flow-bar { height: 0.22rem; border-radius: 2px; transform-origin: left center; transform: scaleX(0); }
-      .run .flow-bar { animation: barGrow 0.9s ease forwards var(--d, 0s); }
-      @keyframes barGrow { to { transform: scaleX(1); } }
-      .bolt-line { width: 0.22rem; border-radius: 2px; transform-origin: top center; transform: scaleY(0); }
-      .run .bolt-line { animation: boltDrop 0.9s ease forwards var(--d, 0s); }
-      @keyframes boltDrop { to { transform: scaleY(1); } }
-      .logo-ring { width: 2.1rem; height: 2.1rem; border-radius: 9999px; display: grid; place-items: center; background: #ffffff; box-shadow: inset 0 0 0 1px rgba(0,0,0,0.1); transition: all 0.3s ease; }
-      .logo-ring:hover { box-shadow: 0 0 8px rgba(37,99,235,0.3); transform: scale(1.05); }
-      .logo-wrap { display: flex; align-items: center; gap: 0.4rem; position: relative; transition: all 300ms ease; }
-      .logo-name { font-size: 0.7rem; color: #6b7280; opacity: 0; transform: translateX(-10px); transition: all 0.3s ease; }
-      .show-labels .logo-wrap { flex-direction: column; align-items: flex-start; gap: 0.2rem; }
-      .show-labels .logo-name { opacity: 1; transform: translateX(0); white-space: normal; text-align: left; }
-      .show-labels .logo-wrap .logo-ring { width: 1.8rem; height: 1.8rem; }
-      .run .logo-ring { animation: appLiftPulse 1.2s cubic-bezier(0.2, 0.8, 0.2, 1) var(--d, 0s) 1 forwards; }
-      @keyframes appLiftPulse { 0% { transform: translateY(0) scale(1); filter: saturate(0.4); opacity: 0.65; } 30% { transform: translateY(-4px) scale(1.05); } 60% { transform: translateY(-2px) scale(1.02); filter: saturate(1); opacity: 1; } 100% { transform: translateY(0) scale(1); } }
-      .user-beam { height: 0.38rem; border-radius: 2px; transform-origin: left center; transform: scaleX(0); }
-      .run .user-beam { animation: barGrow 1s ease forwards var(--d, 0s); }
-      .badge { width: 1.15rem; height: 1.15rem; border-radius: 9999px; opacity: 0; transform: translateY(-6px) scale(0.9); }
-      .run .badge { animation: badgeDrop 0.8s ease-out var(--d, 0s) forwards; }
-      @keyframes badgeDrop { to { opacity: 1; transform: translateY(0) scale(1); } }
-      .cat-row { display: grid; grid-template-columns: 15ch 1fr; gap: 0.5rem; align-items: center; border-top: 1px solid #e5e7eb; padding-top: 0.5rem; transition: all 300ms ease; }
-      .cat-row:first-child { border-top: none; padding-top: 0; }
-      .cat-title { font-size: 0.7rem; letter-spacing: 0.08em; display: flex; align-items: center; gap: 0.5rem; }
-      .re-primary { background: var(--primary) !important; color: #fff !important; border: 0; border-radius: 9999px; padding: 0.5rem 1.5rem; transition: background 0.2s ease, transform 0.2s ease; }
-      .re-primary:hover { background: var(--primary-hover) !important; transform: scale(1.02); }
-      .re-primary:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
-      .re-secondary { background: transparent !important; color: var(--text-primary) !important; border: 2px solid var(--text-primary) !important; border-radius: 9999px; padding: 0.5rem 1.5rem; transition: all 0.2s ease, transform 0.2s ease; }
-      .re-secondary:hover { color: var(--primary) !important; border-color: var(--primary) !important; transform: scale(1.02); }
-      @media (prefers-reduced-motion: reduce) {
-        .accordion-content { transition: none !important; }
-      }
-      .modal-overlay { transition: opacity 300ms ease; }
-      .modal-content { transition: transform 300ms cubic-bezier(0.2, 0.8, 0.2, 1), opacity 300ms ease; }
-      .modal-open .modal-content { transform: scale(1); opacity: 1; }
-      .modal-closed .modal-content { transform: scale(0.95); opacity: 0; }
-      .check-appear{opacity:0;animation:fadeInOut 1.5s ease var(--d,0s) forwards}
-      @keyframes fadeInOut{0%{opacity:0}30%{opacity:1}70%{opacity:1}100%{opacity:0}}
-      .flow-connect{background-image:linear-gradient(to right, transparent 50%, #e5e7eb 50%);background-size:4px 1px;background-repeat:repeat-x;height:1px;opacity:0.5}
-      .end-user-expand{transition:all 0.5s ease;transform:scale(1.05);background:#ffffff;border-color:#10b981}
-      .icon-launch{animation:iconLaunch 0.5s ease forwards}
-      @keyframes iconLaunch{0%{transform:scale(1)}50%{transform:scale(1.1)}100%{transform:scale(1)}}
-      .tagline-fade{opacity:0;animation:fadeIn 1s ease 10s forwards}
-      @keyframes fadeIn{to{opacity:1}}
-      .overlay-tag{opacity:0;transition:opacity 0.3s ease;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);background:rgba(255,255,255,0.9);padding:1rem;border-radius:var(--radius);box-shadow:var(--shadow-card);z-index:10}
-      .show-labels .overlay-tag{opacity:1;transition-delay:0.5s}
-      .meta-label{font-size:0.6rem;color:#6b7280;opacity:0;transform:translateY(5px);transition:all 0.3s ease;position:relative;top:auto;left:auto;z-index:5;white-space:nowrap;display:flex;flex-direction:column;gap:0.1rem;align-items:flex-start;width:100%;justify-content:flex-start}
-      .show-labels .meta-label{opacity:1;transform:translateY(0)}
-      .show-labels .cat-row{grid-template-columns:15ch 1fr;gap:1rem}
-      .show-labels #flowCard .flex-wrap{gap:1rem}
-      .show-labels .logo-wrap{width:calc(33.333% - 0.666rem);margin-bottom:0.5rem}
-      .env-wrap { display: flex; align-items: center; gap: 0.2rem; position: relative; transition: all 300ms ease; width: calc(16.666% - 0.5rem); flex-direction: column; }
-      .env-name { font-size: 0.7rem; color: #6b7280; opacity: 1; transform: translateY(0); transition: all 0.3s ease; white-space: nowrap; text-align: center; }
-      .env-ring { width: 1.8rem; height: 1.8rem; }
-      .run .env-ring { animation: envPulse 1.2s cubic-bezier(0.2, 0.8, 0.2, 1) var(--d, 0s) 1 forwards; }
-      @keyframes envPulse { 0% { transform: scale(1); filter: saturate(0.4); opacity: 0.65; box-shadow: 0 0 0 rgba(37,99,235,0); } 30% { transform: scale(1.05); box-shadow: 0 0 12px rgba(37,99,235,0.5); } 60% { transform: scale(1.02); filter: saturate(1); opacity: 1; box-shadow: 0 0 8px rgba(37,99,235,0.3); } 100% { transform: scale(1); box-shadow: 0 0 0 rgba(37,99,235,0); } }
-      .arrow-line { height: 1.5rem; width: 0.15rem; background: linear-gradient(to bottom, #e5e7eb, #2563eb); transform-origin: top center; transform: scaleY(0); margin: 0 auto; position: relative; }
-      .arrow-line::after { content: ''; position: absolute; bottom: -0.3rem; left: -0.25rem; border-left: 0.4rem solid transparent; border-right: 0.4rem solid transparent; border-top: 0.6rem solid #1d4ed8; opacity: 0; transition: opacity 0.3s; }
-      .run .arrow-line { animation: arrowDrop 0.8s ease forwards var(--d, 0s); }
-      .run .arrow-line::after { animation: arrowTip 0.8s ease forwards var(--d, 0s); }
-      @keyframes arrowDrop { 0% { transform: scaleY(0); } 100% { transform: scaleY(1); } }
-      @keyframes arrowTip { 0% { opacity: 0; } 80% { opacity: 0; } 100% { opacity: 1; } }
-      .hub-card { opacity: 0; transform: translateY(10px); transition: all 0.5s ease; }
-      .run .hub-card { animation: hubAppear 0.8s ease forwards var(--d, 2.5s); }
-      @keyframes hubAppear { to { opacity: 1; transform: translateY(0); } }
-      .metrics-banner { opacity: 0; transform: translateY(10px); transition: all 0.5s ease; text-align: center; font-size: 0.9rem; font-weight: 500; color: #111827; }
-      .run .metrics-banner { animation: metricsAppear 0.8s ease forwards var(--d, 3.5s); }
-      @keyframes metricsAppear { to { opacity: 1; transform: translateY(0); } }
-      .interactive-node { transition: opacity 0.3s, transform 0.3s; }
-      .interactive-node:hover { opacity: 0.9; transform: scale(1.05); }
-
-      /* New Chart Styles */
-      .chart-container { width: 100%; height: auto; aspect-ratio: 800 / 420; background: linear-gradient(180deg, #fafbfd 0%, #ffffff 100%); border-radius: 12px; border: 1px solid #e2e8f0; padding: 8px; box-shadow: inset 0 1px 2px rgba(0,0,0,0.03); }
-      #capacity-gap-chart { width: 100%; height: 100%; }
-      .chart-text { font-size: 12px; font-weight: 600; fill: #334155; letter-spacing: 0.01em; font-family: Inter, system-ui, sans-serif; }
-      .chart-axis { stroke: #e2e8f0; stroke-width: 1; }
-      .chart-axis-label { font-size: 12px; font-weight: 700; fill: #0A1C60; font-family: Inter, system-ui, sans-serif; letter-spacing: 0.04em; }
-      .chart-year-label { font-size: 12px; fill: #64748b; font-weight: 600; }
-      @media (max-width: 640px) { .chart-year-label { font-size: 10px; } }
-      .chart-annotation { font-size: 13px; font-weight: 600; fill: #94a3b8; font-family: Inter, system-ui, sans-serif; letter-spacing: 0.04em; text-transform: uppercase; }
-      .demand-line { stroke-width: 2.5; filter: drop-shadow(0 2px 4px rgba(239,68,68,0.2)); }
-      .capacity-line { stroke-width: 2.5; filter: drop-shadow(0 2px 4px rgba(10,28,96,0.12)); }
-      .marker-group:hover { transform: scale(1.1); transition: transform 0.2s ease; }
-      .marker-group:hover circle { animation: pulse 1.5s infinite; }
-      @keyframes pulse { 0% { transform: scale(1); } 50% { transform: scale(1.05); } 100% { transform: scale(1); } }
-      .chart-element { opacity: 0; animation: fadeIn 0.5s forwards; }
-      @keyframes fadeIn { to { opacity: 1; } }
-      .axis-element { animation-delay: 0s; }
-      .line-element { animation-delay: 0.3s; }
-      .gap-element { animation-delay: 0.6s; }
-      .marker-element { animation-delay: 0.9s; }
-      .label-element { animation-delay: 1.2s; }
-
-      :root{
         --bg-main: #ffffff;
-        --shadow-card: 0 2px 10px rgba(15, 23, 42, 0.06), 0 1px 3px rgba(15, 23, 42, 0.04);
-        --shadow-hover: 0 14px 36px rgba(15, 23, 42, 0.10), 0 4px 12px rgba(15, 23, 42, 0.06);
-        --shadow-elevated: 0 28px 70px rgba(15, 23, 42, 0.18), 0 10px 24px rgba(15, 23, 42, 0.10);
-        --re-green: #10b981;
+        --primary: #0070F3;
+        --primary-hover: #005AD0;
+        --navy: #0A1C60;
+        --radius: 1rem;
+        --shadow-card: 0 2px 10px rgba(15,23,42,0.06), 0 1px 3px rgba(15,23,42,0.04);
+        --shadow-hover: 0 14px 36px rgba(15,23,42,0.10), 0 4px 12px rgba(15,23,42,0.06);
       }
-      html, body { background: var(--bg-main); background-attachment: fixed; }
-      .section-card{ background: rgba(255,255,255,0.88); border: 1px solid rgba(226,232,240,0.70); }
-      .glass{ background: rgba(255,255,255,0.72) !important; border: 1px solid rgba(255,255,255,0.55); box-shadow: var(--shadow-elevated) !important; backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); }
-      .glass-soft{ background: rgba(255,255,255,0.62) !important; border: 1px solid rgba(255,255,255,0.50); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); }
-      .modal-overlay{ background: rgba(2,6,23,0.55) !important; }
-      .modal-content{ box-shadow: var(--shadow-elevated) !important; }
-      .demand-line, .capacity-line{ stroke-linecap: round; stroke-linejoin: round; }
-      .marker-group{ transition: transform 160ms ease, filter 160ms ease, opacity 160ms ease; }
-      .marker-group:hover{ filter: drop-shadow(0 10px 18px rgba(37,99,235,0.22)); transform: translateY(-1px) scale(1.02); }
-      @media (prefers-reduced-motion: reduce){ .marker-group, .section-card, .logo-ring { transition: none !important; animation: none !important; } }
+      html, body { background: var(--bg-main); color: #111827; font-family: Inter, system-ui, sans-serif; }
+      .card { border-radius: var(--radius); background: rgba(255,255,255,0.88); border: 1px solid rgba(226,232,240,0.70); box-shadow: var(--shadow-card); transition: box-shadow 300ms, transform 300ms; }
+      .card:hover { box-shadow: var(--shadow-hover); transform: translateY(-2px); }
+      .btn-primary { background: var(--primary); color: #fff; border: none; border-radius: 8px; padding: 8px 16px; font-weight: 600; font-size: 13px; cursor: pointer; transition: background 0.2s; }
+      .btn-primary:hover { background: var(--primary-hover); }
+      .btn-outline { background: transparent; color: var(--navy); border: 2px solid var(--navy); border-radius: 8px; padding: 6px 14px; font-weight: 600; font-size: 13px; cursor: pointer; transition: all 0.2s; }
+      .btn-outline:hover { color: var(--primary); border-color: var(--primary); }
+      .btn-danger { background: transparent; color: #ef4444; border: 2px solid #ef4444; border-radius: 8px; padding: 6px 14px; font-weight: 600; font-size: 13px; cursor: pointer; transition: all 0.2s; }
+      .btn-danger:hover { background: #ef4444; color: #fff; }
+      input[type="text"], input[type="password"], textarea {
+        width: 100%; padding: 10px 14px; border: 2px solid #e2e8f0; border-radius: 10px;
+        font-size: 14px; font-weight: 500; color: var(--navy); background: #fff; outline: none; transition: border-color 0.2s, box-shadow 0.2s;
+      }
+      input:focus, textarea:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(0,112,243,0.1); }
+      textarea { resize: vertical; min-height: 80px; }
+      .chat-bubble { padding: 10px 14px; border-radius: 12px; font-size: 14px; line-height: 1.5; max-width: 85%; word-wrap: break-word; white-space: pre-wrap; }
+      .chat-user { background: var(--primary); color: #fff; border-radius: 12px 12px 4px 12px; margin-left: auto; }
+      .chat-bot { background: #f1f5f9; color: #1e293b; border-radius: 12px 12px 12px 4px; }
+      .chat-input-row { display: flex; gap: 8px; align-items: center; padding: 12px; border-top: 1px solid #e2e8f0; background: #fff; }
+      .chat-input-row input { flex: 1; border-radius: 9999px; padding: 10px 16px; font-size: 14px; }
+      .chat-send { width: 40px; height: 40px; border-radius: 50%; background: var(--primary); color: #fff; border: none; display: grid; place-items: center; cursor: pointer; transition: background 0.2s; flex-shrink: 0; }
+      .chat-send:hover { background: var(--primary-hover); }
+      .chat-send:disabled { background: #cbd5e1; cursor: not-allowed; }
+      @keyframes dotPulse { 0%,80%,100% { transform: scale(0); } 40% { transform: scale(1); } }
+      .typing-dot { width: 8px; height: 8px; border-radius: 50%; background: #94a3b8; display: inline-block; animation: dotPulse 1.4s infinite ease-in-out both; }
+      .typing-dot:nth-child(1) { animation-delay: -0.32s; }
+      .typing-dot:nth-child(2) { animation-delay: -0.16s; }
+      .settings-section { border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; background: #fafbfc; }
+      .tab-btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px; font-size: 14px; font-weight: 600; border-radius: 8px; border: none; cursor: pointer; transition: all 0.2s; }
+      .tab-btn.active { background: var(--primary); color: #fff; }
+      .tab-btn:not(.active) { background: transparent; color: var(--navy); }
+      .tab-btn:not(.active):hover { background: #f1f5f9; }
     </style>
   </head>
-
   <body class="min-h-screen antialiased">
-    <div id="app" class="min-h-screen"></div>
-
+    <div id="app"></div>
     <script>
+      /* ========== STATE ========== */
       const STATE = {
-        activeTab: 'problems',
-        ctx: { device: 'Windows', network: 'Corporate', compliant: true },
-        showLabels: false,
-        openWhy: null,
-        openWhyModal: null,
-        modalOpen: false,
-        editTab: 'change',
-        editBuffers: { change: { intro: '', bullets: '', analyst: '' }, now: { intro: '', bullets: '', analyst: '' }, recast: { intro: '', bullets: '', analyst: '' } },
-        insightContent: null,
-        activePopover: null,
-        years: [2025, 2026, 2027, 2028],
-        drivers: [
-          { id: "more_apps", label: "EHR & Clinical App Sprawl", subtext: "Epic, PACS, lab systems, specialty tools", markerYear: 2025.6, bullets: ["Clinical application portfolios grow with every new service line, department, or vendor contract.", "Epic alone has dozens of modules requiring packaging, testing, and ongoing updates.", "Application sprawl creates mounting complexity for already-stretched IT teams."], short: "More clinical apps = more packaging, updates, testing, support overhead.", state: 'off' },
-          { id: "constant_updates", label: "Citrix Renewal Pressure", subtext: "2-3x pricing shock at contract renewal", markerYear: 2026.2, bullets: ["Citrix renewal increases of 2-3x are hitting hospitals unprepared for the budget impact.", "Legacy virtualization architecture was never designed for today's clinical access patterns.", "Health systems face a choice: absorb the shock or find a credible migration path."], short: "Citrix renewal shock forces a difficult decision on constrained hospital budgets.", state: 'off' },
-          { id: "too_many_tools", label: "Fragmented Clinical Endpoints", subtext: "Carts, workstations, tablets, remote access", markerYear: 2026.8, bullets: ["Clinical staff access apps from dozens of device types: shared carts, dedicated workstations, personal tablets.", "Each endpoint type requires its own app delivery and management approach.", "Fragmentation drives inconsistent physician experience and higher support burden."], short: "Same apps, many device types — rebuilt and managed separately for each.", state: 'off' },
-          { id: "manual_rework", label: "Remote Physician Access", subtext: "Telehealth and off-site documentation demands", markerYear: 2027.3, bullets: ["Physicians documenting from home need the same low-latency app experience as on-site.", "Remote access through legacy VPN and Citrix stacks creates friction and productivity loss.", "Credential and session management complexity grows with each off-network access pattern."], short: "Remote physicians need the same frictionless experience as on-site staff.", state: 'off' },
-          { id: "security_compliance", label: "HIPAA & Compliance Urgency", subtext: "Patching timelines under regulatory scrutiny", markerYear: 2027.7, bullets: ["HIPAA and healthcare-specific regulations require timely security patches across all clinical endpoints.", "Manual, platform-by-platform patching processes stretch validation timelines dangerously.", "Audit exposure grows every week a known vulnerability remains unpatched."], short: "Regulatory pressure demands fast patching — fragmented environments make it slow.", state: 'off' }
-        ],
-        tippingPointYear: 2027.5,
-        tippingPoint: {
-          title: "Clinical IT Inflection Point",
-          bullets: ["Citrix renewal shock hits budget", "Physician productivity loss compounds", "IT team capacity maxes out", "Modernization roadmap stalls"],
-          closing: "This is the moment health systems either absorb the cost or make a strategic shift to a sustainable model."
-        },
-        chartConfig: {
-          yAxis: "Clinical IT Complexity",
-          xAxis: "Time",
-          center: "IT Capacity",
-          footer: "",
-          tipping: ""
-        },
-        currentDemandExponent: 1.6,
-        targetDemandExponent: 1.6,
-        currentCapacitySlope: 0,
-        targetCapacitySlope: 0,
-        showTippingPoint: false,
-        currentState: {
-          change: {
-            intro: "Healthcare IT is at a breaking point: Citrix renewal shock, physician productivity loss, and mounting clinical app complexity are converging at once.",
-            bullets: [
-              "Clinical app delivery is tied to virtual desktop infrastructure built for a different era — and priced accordingly.",
-              "Physicians lose billable time every day to login friction, session timeouts, and app inconsistencies on shared carts and remote access.",
-              "The same Epic update gets packaged, validated, and deployed separately for every delivery environment — Citrix, workstations, remote VPN.",
-              "HIPAA patching obligations require speed that manual, fragmented workflows cannot deliver.",
-              "IT teams are firefighting VDI issues instead of driving strategic modernization, AI readiness, or telehealth expansion."
-            ],
-            analyst: "Healthcare CIOs increasingly identify clinical application delivery — not infrastructure — as the primary constraint on physician productivity and IT modernization."
-          },
-          now: {
-            intro: "Three forces are converging right now that make inaction more expensive than migration.",
-            bullets: [
-              "Citrix renewal windows are approaching for many health systems — 2-3x price shock is the new normal, not an exception.",
-              "Physician burnout is a board-level issue. Every minute of avoidable app friction adds to cognitive load and documentation burden.",
-              "Azure Virtual Desktop and Nerdio have matured into production-grade alternatives — the risk of migration is now lower than the cost of staying.",
-            ],
-            analyst: "Health systems that delay modernization now face compounding costs: rising Citrix licensing, growing IT team burnout, and physician productivity loss that directly affects throughput, billing, and retention."
-          },
-          recast: {
-            intro: "Recast Application Workspace, paired with Nerdio and AVD, eliminates the clinical app delivery problem at its root.",
-            bullets: [
-              "Migrate Citrix-dependent clinical apps to Azure Virtual Desktop — reducing licensing exposure while preserving the clinical user experience.",
-              "Recast delivers apps to the user, not the device — physicians get the same frictionless access from a shared cart, workstation, or home office.",
-              "Define clinical app updates once. Recast propagates them consistently across every delivery environment — no per-platform rebuilds.",
-              "Nerdio AVD management layer optimizes Azure compute costs automatically — reducing cloud spend through intelligent autoscaling.",
-              "IT teams shift from reactive VDI firefighting to proactive management — freeing capacity for telehealth, AI integration, and Epic upgrades.",
-              "Patch clinical environments faster and more reliably — reducing HIPAA exposure and audit risk with automated, validated deployment."
-            ],
-            analyst: "Leading health systems are adopting a Citrix minimization strategy: retaining virtual desktops only for true legacy dependencies while migrating the majority of clinical users to a modern, cost-efficient AVD and Recast stack."
-          }
-        },
-        defaultsCurrentState() {
-          return JSON.parse(JSON.stringify(this.currentState));
-        },
-        defaultsChartConfig() {
-          return JSON.parse(JSON.stringify({
-            yAxis: "Clinical IT Complexity",
-            xAxis: "Time",
-            center: "IT Capacity",
-            footer: "",
-            tipping: "Renewal shock + complexity"
-          }));
-        },
-        defaultsDrivers() {
-          return JSON.parse(JSON.stringify(this.drivers));
-        }
+        activeTab: 'home',
+        expandedSlot: null,
+        editingSlot: 0,
+        slots: [
+          { label: 'Assistant 1', apiKey: '', prompt: 'You are a helpful AI assistant. Be concise and friendly.', messages: [], inputText: '', loading: false },
+          { label: 'Assistant 2', apiKey: '', prompt: 'You are a helpful AI assistant. Be concise and friendly.', messages: [], inputText: '', loading: false },
+          { label: 'Assistant 3', apiKey: '', prompt: 'You are a helpful AI assistant. Be concise and friendly.', messages: [], inputText: '', loading: false },
+          { label: 'Assistant 4', apiKey: '', prompt: 'You are a helpful AI assistant. Be concise and friendly.', messages: [], inputText: '', loading: false }
+        ]
       };
 
-      STATE.recastMode = false;
-      STATE.flowTimers = { intervals: [], timeouts: [] };
-      STATE.editChartBuffer = null;
-      STATE.highlightDriverId = null;
+      const SLOT_COLORS = ['#0070F3','#10b981','#8b5cf6','#f59e0b'];
 
-      /* Shared slot system — drives both Home and Settings */
-      STATE.slots = [
-        { label: 'Service 1', url: 'https://app.nimbusweb.me/ai-agent-public/6jq9zfv9i9e5sr0c?orgId=b3sj8e3db1iv2urj' },
-        { label: 'Service 2', url: '' },
-        { label: 'Service 3', url: '' },
-        { label: 'Service 4', url: '' }
-      ];
-      STATE.expandedSlot = null;   /* index of full-screen slot, null = closed */
-      STATE.editingSlot = 0;       /* which slot the Settings input targets */
-      STATE.settingsInput = '';    /* live text in the Settings URL field */
+      /* ========== LOCAL STORAGE ========== */
+      const SETTINGS_KEY = 'recast_chatbot_settings';
 
-      /* ===== TABS — Business Impact removed ===== */
-      const TABS = [
-        { id: 'problems', label: 'Home', icon: 'home' },
-        { id: 'solution', label: 'Settings', icon: 'settings' }
-      ];
+      function saveSettings() {
+        const data = STATE.slots.map(s => ({ label: s.label, apiKey: s.apiKey, prompt: s.prompt }));
+        try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(data)); } catch {}
+      }
 
-      function cx(...a){ return a.filter(Boolean).join(' '); }
+      function loadSettings() {
+        try {
+          const raw = localStorage.getItem(SETTINGS_KEY);
+          if (!raw) return;
+          const data = JSON.parse(raw);
+          data.forEach((d, i) => {
+            if (STATE.slots[i]) {
+              STATE.slots[i].label = d.label || STATE.slots[i].label;
+              STATE.slots[i].apiKey = d.apiKey || '';
+              STATE.slots[i].prompt = d.prompt || STATE.slots[i].prompt;
+            }
+          });
+        } catch {}
+      }
+
+      loadSettings();
+
+      /* ========== API ========== */
+      async function sendMessage(idx) {
+        const slot = STATE.slots[idx];
+        const text = slot.inputText.trim();
+        if (!text || slot.loading) return;
+
+        slot.messages.push({ role: 'user', content: text });
+        slot.inputText = '';
+        slot.loading = true;
+        render();
+        scrollChat();
+
+        try {
+          const headers = { "Content-Type": "application/json" };
+          if (slot.apiKey) headers["x-api-key"] = slot.apiKey;
+
+          const resp = await fetch("https://api.anthropic.com/v1/messages", {
+            method: "POST",
+            headers,
+            body: JSON.stringify({
+              model: "claude-sonnet-4-20250514",
+              max_tokens: 1024,
+              system: slot.prompt,
+              messages: slot.messages.filter(m => m.role === 'user' || m.role === 'assistant')
+            })
+          });
+
+          const data = await resp.json();
+          if (data.error) throw new Error(data.error.message || 'API error');
+          const reply = data.content?.map(c => c.text || '').join('') || 'No response.';
+          slot.messages.push({ role: 'assistant', content: reply });
+        } catch (err) {
+          slot.messages.push({ role: 'assistant', content: '\u26a0\ufe0f ' + (err.message || 'Connection failed. Check your API key in Settings.') });
+        }
+
+        slot.loading = false;
+        render();
+        scrollChat();
+      }
+
+      function scrollChat() {
+        setTimeout(() => {
+          const el = document.getElementById('chat-scroll');
+          if (el) el.scrollTop = el.scrollHeight;
+        }, 50);
+      }
+
+      function clearChat(idx) {
+        STATE.slots[idx].messages = [];
+        STATE.slots[idx].inputText = '';
+        STATE.slots[idx].loading = false;
+        render();
+      }
+
+      /* ========== HELPERS ========== */
+      function escHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+      function escAttr(s) { return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;'); }
 
       /* ========== RENDER ========== */
-
-      function render(){
-        const root=document.getElementById('app');
+      function render() {
+        const root = document.getElementById('app');
         root.innerHTML = `
-          <header class="relative">
-            <div class="relative mx-auto max-w-6xl px-4 pt-8 pb-6">
-              <h1 class="text-[40px] md:text-[56px] font-semibold leading-tight"><span style="color:#000000">Re</span><span style="color:#CC0000">cast Software</span></h1>
+          <header>
+            <div class="mx-auto max-w-6xl px-4 pt-8 pb-4">
+              <h1 class="text-[40px] md:text-[52px] font-semibold leading-tight">
+                <span style="color:#000">Re</span><span style="color:#CC0000">cast Software</span>
+              </h1>
             </div>
-
-            <div class="relative mx-auto max-w-6xl px-4">
-              <div role="tablist" aria-label="Demo sections" class="flex w-full flex-wrap gap-2 rounded bg-white/60 backdrop-blur-lg p-1 ring-1 ring-slate-200">
-                ${TABS.map(t=>`
-                  <button type="button"
-                    class="${cx('inline-flex items-center gap-2 px-3.5 py-1.5 text-sm focus-ring transition',
-                      STATE.activeTab===t.id ? 'bg-[#0070F3] text-white hover:bg-[#005AD0] rounded' : 'text-[#0A1C60] hover:bg-slate-100 rounded')}"
-                    data-action="switch-tab"
-                    data-tab="${t.id}"
-                    aria-controls="panel-${t.id}"
-                    aria-selected="${STATE.activeTab===t.id}">
-                    <i data-lucide="${t.icon}" class="w-4 h-4"></i><span>${t.label}</span>
-                  </button>
-                `).join('')}
+            <div class="mx-auto max-w-6xl px-4 pb-2">
+              <div class="flex gap-2 bg-white/60 backdrop-blur-lg p-1 rounded-lg ring-1 ring-slate-200 inline-flex">
+                <button class="tab-btn ${STATE.activeTab==='home'?'active':''}" data-action="switch-tab" data-tab="home">
+                  <i data-lucide="home" class="w-4 h-4"></i> Home
+                </button>
+                <button class="tab-btn ${STATE.activeTab==='settings'?'active':''}" data-action="switch-tab" data-tab="settings">
+                  <i data-lucide="settings" class="w-4 h-4"></i> Settings
+                </button>
               </div>
             </div>
           </header>
-
-          <main class="mx-auto max-w-6xl px-4 pb-16">
-            <section class="mt-5">${renderActivePanel()}</section>
+          <main class="mx-auto max-w-6xl px-4 pb-16 mt-4">
+            ${STATE.activeTab === 'home' ? renderHome() : renderSettings()}
           </main>
-
-          ${renderExpandedSlot()}
-          ${renderModal()}
+          ${renderExpanded()}
         `;
-
-        if (window.lucide?.createIcons) { try { window.lucide.createIcons(); } catch {} }
-        attachEvents();
+        if (window.lucide?.createIcons) try { window.lucide.createIcons(); } catch {}
+        bindEvents();
       }
 
-      function renderActivePanel(){
-        if (STATE.activeTab==='problems') return renderProblems();
-        if (STATE.activeTab==='solution') return renderSolution();
-        return '';
+      /* ========== HOME ========== */
+      function renderHome() {
+        return `<div class="grid grid-cols-2 gap-4" style="min-height:calc(100vh - 220px)">
+          ${STATE.slots.map((s, i) => renderCard(s, i)).join('')}
+        </div>`;
       }
 
-      /* ==========================================================
-         SHARED: Slot card (used by both Home and Settings)
-         ========================================================== */
-
-      function renderSlotCard(slot, idx){
-        const hasUrl = slot.url && slot.url.trim();
+      function renderCard(slot, idx) {
+        const color = SLOT_COLORS[idx];
+        const msgs = slot.messages;
+        const last3 = msgs.slice(-3);
         return `
-          <div class="section-card overflow-hidden cursor-pointer transition hover:shadow-lg hover:scale-[1.01]"
-               style="aspect-ratio: 1 / 1; position: relative;"
-               data-action="expand-slot" data-idx="${idx}">
-            <div class="w-full h-full flex items-center justify-center">
-              <div class="text-center">
-                ${hasUrl
-                  ? `<div class="w-14 h-14 mx-auto mb-3 rounded-xl grid place-items-center" style="background:linear-gradient(135deg,#0070F3,#0A1C60)">
-                       <i data-lucide="globe" class="w-7 h-7 text-white"></i>
-                     </div>
-                     <div class="text-sm font-semibold text-[#0A1C60]">${slot.label}</div>
-                     <div class="text-xs text-emerald-600 mt-1 font-medium">Click to open</div>`
-                  : `<i data-lucide="layout-grid" class="w-10 h-10 mx-auto mb-3 text-slate-300"></i>
-                     <div class="text-sm font-semibold text-[#0A1C60]">${slot.label}</div>
-                     <div class="text-xs text-slate-400 mt-1">No embed configured</div>`
-                }
-              </div>
+          <div class="card flex flex-col overflow-hidden cursor-pointer" style="aspect-ratio:1/1;position:relative" data-action="expand-slot" data-idx="${idx}">
+            <div class="flex items-center gap-2 px-3 py-2 border-b border-slate-100" style="background:var(--navy)">
+              <div class="w-6 h-6 rounded-full grid place-items-center text-white font-bold text-[10px]" style="background:${color}">${slot.label.charAt(0)}</div>
+              <span class="text-xs font-semibold text-white">${escHtml(slot.label)}</span>
+              <i data-lucide="maximize-2" class="w-3 h-3 text-white/40 ml-auto"></i>
             </div>
-            <div style="position:absolute;bottom:0;left:0;right:0;z-index:3;background:linear-gradient(0deg,rgba(255,255,255,0.95),transparent);padding:8px 12px;display:flex;align-items:center;justify-content:space-between;">
-              <span class="text-xs font-semibold text-[#0A1C60]">${slot.label}</span>
-              <i data-lucide="maximize-2" class="w-3.5 h-3.5 text-slate-400"></i>
-            </div>
-          </div>
-        `;
-      }
-
-      /* ==========================================================
-         FULL-SCREEN OVERLAY (click a box → expands here)
-         ========================================================== */
-
-      function renderExpandedSlot(){
-        if (STATE.expandedSlot === null) return '';
-        const slot = STATE.slots[STATE.expandedSlot];
-        if (!slot) return '';
-        const hasUrl = slot.url && slot.url.trim();
-        return `
-          <div class="fixed inset-0 z-50 flex flex-col" style="background:rgba(2,6,23,0.7);backdrop-filter:blur(4px);" data-action="close-expanded">
-            <div class="flex items-center justify-between px-4 py-3" style="background:rgba(255,255,255,0.95);border-bottom:1px solid #e2e8f0;">
-              <div class="flex items-center gap-2">
-                <i data-lucide="layout-grid" class="w-4 h-4 text-[#0070F3]"></i>
-                <span class="text-sm font-semibold text-[#0A1C60]">${slot.label}</span>
-              </div>
-              <button type="button" data-action="close-expanded" class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-transparent text-slate-500 hover:text-[#0A1C60] hover:bg-slate-100 transition">
-                <i data-lucide="minimize-2" class="w-4 h-4"></i> Close
-              </button>
-            </div>
-            <div class="flex-1" style="background:white;" onclick="event.stopPropagation()">
-              ${hasUrl ? `
-                <iframe src="${slot.url}" width="100%" height="100%" frameborder="0"
-                  allow="clipboard-write; clipboard-read"
-                  sandbox="allow-scripts allow-same-origin allow-popups allow-forms allow-top-navigation"
-                  style="display:block; border:none;"></iframe>
-              ` : `
-                <div class="w-full h-full flex items-center justify-center">
+            <div class="flex-1 overflow-hidden px-3 py-2 flex flex-col justify-end gap-1.5" style="background:#fafbfc">
+              ${msgs.length === 0 ? `
+                <div class="flex-1 flex items-center justify-center">
                   <div class="text-center">
-                    <i data-lucide="code" class="w-16 h-16 mx-auto mb-4 text-slate-200"></i>
-                    <div class="text-lg font-semibold text-[#0A1C60]">${slot.label}</div>
-                    <div class="text-sm text-slate-400 mt-1">No embed URL configured — add one in Settings</div>
+                    <div class="w-12 h-12 mx-auto mb-2 rounded-full grid place-items-center" style="background:${color}18">
+                      <i data-lucide="message-circle" class="w-6 h-6" style="color:${color}"></i>
+                    </div>
+                    <div class="text-xs font-semibold text-slate-600">${escHtml(slot.label)}</div>
+                    <div class="text-[10px] text-slate-400 mt-0.5">Click to start chatting</div>
                   </div>
                 </div>
-              `}
+              ` : last3.map(m => `
+                <div class="flex ${m.role==='user'?'justify-end':'justify-start'}">
+                  <div class="${m.role==='user'?'chat-user':'chat-bot'}" style="font-size:11px;padding:5px 9px;max-width:80%">${escHtml(m.content).substring(0,100)}${m.content.length>100?'...':''}</div>
+                </div>
+              `).join('')}
+              ${slot.loading?'<div class="flex justify-start"><div class="chat-bot" style="padding:6px 12px"><span class="typing-dot"></span> <span class="typing-dot"></span> <span class="typing-dot"></span></div></div>':''}
             </div>
-          </div>
-        `;
+            <div style="position:absolute;inset:0;z-index:2" data-action="expand-slot" data-idx="${idx}"></div>
+          </div>`;
       }
 
-      /* ==========================================================
-         HOME TAB — 2x2 grid of live slot cards
-         ========================================================== */
-
-      function renderProblems(){
+      /* ========== EXPANDED CHAT ========== */
+      function renderExpanded() {
+        if (STATE.expandedSlot === null) return '';
+        const idx = STATE.expandedSlot;
+        const slot = STATE.slots[idx];
+        const color = SLOT_COLORS[idx];
         return `
-          <section id="panel-problems" class="pt-6">
-            <div class="grid grid-cols-2 gap-4 w-full" style="min-height: calc(100vh - 200px)">
-              ${STATE.slots.map((s, i) => renderSlotCard(s, i)).join('')}
+          <div class="fixed inset-0 z-50 flex flex-col" style="background:#fff">
+            <div class="flex items-center justify-between px-4 py-3 flex-shrink-0" style="background:var(--navy);color:#fff">
+              <div class="flex items-center gap-3">
+                <div class="w-9 h-9 rounded-full grid place-items-center text-white font-bold" style="background:${color}">${slot.label.charAt(0)}</div>
+                <div>
+                  <div class="text-sm font-semibold">${escHtml(slot.label)}</div>
+                  <div class="text-[10px] text-white/50">${slot.messages.length} messages</div>
+                </div>
+              </div>
+              <div class="flex items-center gap-2">
+                <button style="background:transparent;border:1px solid rgba(255,255,255,0.25);color:rgba(255,255,255,0.7);font-size:11px;padding:5px 10px;border-radius:6px;cursor:pointer;font-weight:600" data-action="clear-chat" data-idx="${idx}">
+                  <i data-lucide="trash-2" class="w-3 h-3 inline mr-1"></i>Clear
+                </button>
+                <button style="background:transparent;border:1px solid rgba(255,255,255,0.25);color:#fff;font-size:11px;padding:5px 10px;border-radius:6px;cursor:pointer;font-weight:600" data-action="close-expanded">
+                  <i data-lucide="x" class="w-3 h-3 inline mr-1"></i>Close
+                </button>
+              </div>
             </div>
-          </section>
-        `;
+            <div id="chat-scroll" class="flex-1 overflow-y-auto px-4 py-4 space-y-3" style="background:#fafbfc">
+              ${slot.messages.length === 0 ? `
+                <div class="flex items-center justify-center" style="min-height:60vh">
+                  <div class="text-center">
+                    <div class="w-20 h-20 mx-auto mb-4 rounded-full grid place-items-center" style="background:${color}15">
+                      <i data-lucide="message-circle" class="w-10 h-10" style="color:${color}"></i>
+                    </div>
+                    <div class="text-lg font-semibold text-slate-700">${escHtml(slot.label)}</div>
+                    <div class="text-sm text-slate-400 mt-1">Type a message below to start chatting.</div>
+                  </div>
+                </div>
+              ` : slot.messages.map(m => `
+                <div class="flex ${m.role==='user'?'justify-end':'justify-start'}">
+                  ${m.role==='assistant'?'<div class="w-7 h-7 rounded-full grid place-items-center text-white text-xs font-bold flex-shrink-0 mr-2 mt-1" style="background:'+color+'">'+slot.label.charAt(0)+'</div>':''}
+                  <div class="chat-bubble ${m.role==='user'?'chat-user':'chat-bot'}">${escHtml(m.content)}</div>
+                </div>
+              `).join('')}
+              ${slot.loading?`<div class="flex justify-start"><div class="w-7 h-7 rounded-full grid place-items-center text-white text-xs font-bold flex-shrink-0 mr-2 mt-1" style="background:${color}">${slot.label.charAt(0)}</div><div class="chat-bubble chat-bot"><span class="typing-dot"></span> <span class="typing-dot"></span> <span class="typing-dot"></span></div></div>`:''}
+            </div>
+            <div class="chat-input-row flex-shrink-0">
+              <input type="text" id="expanded-input" placeholder="Type a message..." value="${escAttr(slot.inputText)}" ${slot.loading?'disabled':''} />
+              <button class="chat-send" data-action="send-expanded" ${slot.loading?'disabled':''}>
+                <i data-lucide="send" class="w-4 h-4"></i>
+              </button>
+            </div>
+          </div>`;
       }
 
-      /* ==========================================================
-         SETTINGS TAB — Same grid + URL editor
-         ========================================================== */
-
-      function renderSolution(){
+      /* ========== SETTINGS ========== */
+      function renderSettings() {
         const es = STATE.editingSlot;
-        const currentUrl = STATE.slots[es]?.url || '';
+        const slot = STATE.slots[es];
+        const color = SLOT_COLORS[es];
         return `
-          <section id="panel-solution" class="pt-6 space-y-4">
-
-            <!-- Slot selector tabs -->
+          <div class="space-y-4">
             <div class="flex gap-2">
               ${STATE.slots.map((s, i) => `
-                <button type="button" data-action="select-editing-slot" data-idx="${i}"
-                  class="flex-1 px-3 py-2.5 text-sm font-semibold rounded-lg border-2 transition
-                  ${es === i
-                    ? 'bg-[#0070F3] text-white border-[#0070F3]'
-                    : s.url ? 'bg-white text-[#0A1C60] border-[#0A1C60] hover:border-[#0070F3] hover:text-[#0070F3]' : 'bg-white text-[#94a3b8] border-[#e2e8f0] hover:border-[#0070F3] hover:text-[#0070F3]'}">
-                  <span>${s.label}</span>
-                  ${s.url ? '<i data-lucide="check-circle" class="w-3 h-3 inline ml-1"></i>' : ''}
+                <button class="tab-btn flex-1 ${es===i?'active':''}" data-action="select-editing-slot" data-idx="${i}">
+                  ${escHtml(s.label)} ${s.apiKey?'<i data-lucide="check-circle" class="w-3 h-3 inline ml-1"></i>':''}
                 </button>
               `).join('')}
             </div>
 
-            <!-- URL editor for selected slot -->
-            <div class="section-card p-5 w-full">
-              <div class="text-xs font-semibold text-[#64748b] uppercase tracking-wide mb-2">
-                Embed URL for ${STATE.slots[es]?.label || 'Slot'}
-              </div>
+            <div class="settings-section space-y-5">
               <div class="flex items-center gap-3">
-                <input type="text" id="settings-input"
-                  value="${(STATE.settingsInput !== null ? STATE.settingsInput : currentUrl).replace(/"/g, '&quot;')}"
-                  placeholder="Paste iframe src URL here..."
-                  class="flex-1 px-4 py-2.5 border-2 border-[#e2e8f0] rounded-lg text-sm font-medium text-[#0A1C60] bg-white outline-none transition focus:border-[#0070F3] focus:shadow-[0_0_0_3px_rgba(0,112,243,0.1)]" />
-                <button type="button" data-action="settings-save" class="inline-flex items-center gap-1.5 px-4 py-2.5 text-sm font-semibold rounded-lg bg-[#0070F3] text-white hover:bg-[#005AD0] transition">
-                  <i data-lucide="save" class="w-4 h-4"></i> Save
-                </button>
-                <button type="button" data-action="settings-reset" class="inline-flex items-center gap-1.5 px-4 py-2.5 text-sm font-semibold rounded-lg bg-transparent text-[#0A1C60] border-2 border-[#0A1C60] hover:text-[#0070F3] hover:border-[#0070F3] transition">
-                  <i data-lucide="rotate-ccw" class="w-4 h-4"></i> Reset
-                </button>
-                <button type="button" data-action="settings-clear" class="inline-flex items-center gap-1.5 px-4 py-2.5 text-sm font-semibold rounded-lg bg-transparent text-[#ef4444] border-2 border-[#ef4444] hover:bg-[#ef4444] hover:text-white transition">
-                  <i data-lucide="trash-2" class="w-4 h-4"></i> Clear
-                </button>
+                <div class="w-9 h-9 rounded-full grid place-items-center text-white font-bold" style="background:${color}">${slot.label.charAt(0)}</div>
+                <h3 class="text-lg font-semibold" style="color:var(--navy)">${escHtml(slot.label)} — Configuration</h3>
               </div>
-              ${currentUrl ? '<div class="mt-2 text-xs text-emerald-600 font-medium"><i data-lucide="check-circle" class="w-3 h-3 inline mr-1"></i>Active embed configured</div>' : '<div class="mt-2 text-xs text-slate-400">No URL saved for this slot yet</div>'}
-            </div>
 
-            <!-- Same 2x2 grid as Home — click to expand -->
-            <div class="grid grid-cols-2 gap-4 w-full" style="min-height: calc(100vh - 420px)">
-              ${STATE.slots.map((s, i) => renderSlotCard(s, i)).join('')}
-            </div>
+              <div>
+                <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1.5">Display Name</label>
+                <input type="text" id="setting-label" value="${escAttr(slot.label)}" placeholder="Assistant name..." />
+              </div>
 
-          </section>
-        `;
-      }
+              <div>
+                <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1.5">
+                  <i data-lucide="key" class="w-3 h-3 inline mr-1"></i>Anthropic API Key
+                </label>
+                <input type="password" id="setting-apikey" value="${escAttr(slot.apiKey)}" placeholder="sk-ant-api03-..." />
+                <p class="text-[11px] text-slate-400 mt-1">Get a key at console.anthropic.com → Settings → API Keys.</p>
+              </div>
 
-      /* ========== CHART RENDERING (unchanged) ========== */
+              <div>
+                <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1.5">
+                  <i data-lucide="file-text" class="w-3 h-3 inline mr-1"></i>System Prompt Instructions
+                </label>
+                <textarea id="setting-prompt" rows="6" placeholder="You are a helpful AI assistant...">${escHtml(slot.prompt)}</textarea>
+                <p class="text-[11px] text-slate-400 mt-1">These instructions define how this assistant behaves. Changes are saved to cache.</p>
+              </div>
 
-      function renderCapacityGapChart(){
-        const svg = document.getElementById('capacity-gap-chart');
-        if (!svg) return;
-
-        svg.innerHTML = '';
-        svg.setAttribute('viewBox', '0 0 800 420');
-
-        const width = 700, height = 310, margin = {left: 55, bottom: 50, top: 40, right: 50};
-        const xScale = t => margin.left + t * width;
-        const yScale = v => margin.top + height - v * height;
-
-        const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
-        defs.innerHTML = `
-          <linearGradient id="demandGradient" x1="0" y1="0" x2="1" y2="0">
-            <stop offset="0%" stop-color="#f87171"/>
-            <stop offset="100%" stop-color="#dc2626"/>
-          </linearGradient>
-          <linearGradient id="capacityGradient" x1="0" y1="0" x2="1" y2="0">
-            <stop offset="0%" stop-color="#0A1C60"/>
-            <stop offset="100%" stop-color="#0070F3"/>
-          </linearGradient>
-          <linearGradient id="gapGradient" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stop-color="rgba(239,68,68,0.08)"/>
-            <stop offset="100%" stop-color="rgba(10,28,96,0.04)"/>
-          </linearGradient>
-          <linearGradient id="capFillGrad" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stop-color="rgba(10,28,96,0.08)"/>
-            <stop offset="100%" stop-color="rgba(10,28,96,0.02)"/>
-          </linearGradient>
-        `;
-        svg.appendChild(defs);
-
-        const gridG = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-        for (let i = 0; i <= 4; i++) {
-          const y = margin.top + (height / 4) * i;
-          gridG.innerHTML += '<line x1="' + margin.left + '" y1="' + y + '" x2="' + (margin.left + width) + '" y2="' + y + '" stroke="#f1f5f9" stroke-width="1" stroke-dasharray="4 4"/>';
-        }
-        svg.appendChild(gridG);
-
-        const xAxis = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-        xAxis.classList.add('axis-element', 'chart-element');
-        xAxis.innerHTML = `
-          <line x1="${margin.left}" y1="${margin.top + height}" x2="${margin.left + width}" y2="${margin.top + height}" class="chart-axis"/>
-          <text x="${margin.left + width / 2}" y="${margin.top + height + 38}" text-anchor="middle" class="chart-axis-label">${STATE.chartConfig.xAxis}</text>
-          ${STATE.years.map((year, i) => {
-            const x = xScale(i / 3);
-            return `
-              <line x1="${x}" y1="${margin.top + height}" x2="${x}" y2="${margin.top + height + 6}" class="chart-axis"/>
-              <text x="${x}" y="${margin.top + height + 22}" text-anchor="middle" class="chart-year-label chart-element">${year}</text>
-            `;
-          }).join('')}
-        `;
-        svg.appendChild(xAxis);
-
-        const yAxis = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-        yAxis.classList.add('axis-element', 'chart-element');
-        yAxis.innerHTML = `
-          <line x1="${margin.left}" y1="${margin.top}" x2="${margin.left}" y2="${margin.top + height}" class="chart-axis"/>
-          <text x="${margin.left - 14}" y="${margin.top + height / 2}" text-anchor="middle" class="chart-axis-label" transform="rotate(-90, ${margin.left - 14}, ${margin.top + height / 2})">${STATE.chartConfig.yAxis}</text>
-        `;
-        svg.appendChild(yAxis);
-
-        const exp = STATE.currentDemandExponent;
-        const slope = STATE.currentCapacitySlope;
-
-        let demandPath = `M ${xScale(0)} ${yScale(0)}`;
-        let capacityPath = `M ${xScale(0)} ${yScale(0.3)}`;
-        const demandPoints = [];
-        const capacityPoints = [];
-
-        for (let i = 0; i <= 100; i++) {
-          const t = i / 100;
-          const dem = Math.pow(t, exp);
-          const cap = 0.3 + slope * t;
-          demandPath += ` L ${xScale(t)} ${yScale(dem)}`;
-          capacityPath += ` L ${xScale(t)} ${yScale(cap)}`;
-          demandPoints.push({x: xScale(t), y: yScale(dem)});
-          capacityPoints.push({x: xScale(t), y: yScale(cap)});
-        }
-
-        const demandLine = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-        demandLine.setAttribute('d', demandPath);
-        demandLine.setAttribute('stroke', 'url(#demandGradient)');
-        demandLine.setAttribute('fill', 'none');
-        demandLine.classList.add('demand-line', 'line-element', 'chart-element');
-        svg.appendChild(demandLine);
-
-        const capacityLine = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-        capacityLine.setAttribute('d', capacityPath);
-        capacityLine.setAttribute('stroke', 'url(#capacityGradient)');
-        capacityLine.setAttribute('fill', 'none');
-        capacityLine.classList.add('capacity-line', 'line-element', 'chart-element');
-        svg.appendChild(capacityLine);
-
-        const capAreaPath = capacityPath + ` L ${xScale(1)} ${yScale(0)} L ${xScale(0)} ${yScale(0)} Z`;
-        const capArea = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-        capArea.setAttribute('d', capAreaPath);
-        capArea.setAttribute('fill', 'url(#capFillGrad)');
-        capArea.classList.add('gap-element', 'chart-element');
-        svg.appendChild(capArea);
-
-        const gapPath = demandPoints.map(p => `L ${p.x} ${p.y}`).join(' ') +
-          capacityPoints.slice().reverse().map(p => `L ${p.x} ${p.y}`).join(' ') + 'Z';
-        const gap = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-        gap.setAttribute('d', `M ${demandPoints[0].x} ${demandPoints[0].y} ` + gapPath);
-        gap.setAttribute('fill', 'url(#gapGradient)');
-        gap.classList.add('gap-fill', 'gap-element', 'chart-element');
-        svg.appendChild(gap);
-
-        const gapLabel = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-        gapLabel.setAttribute('x', xScale(0.5));
-        gapLabel.setAttribute('y', yScale(0.5));
-        gapLabel.setAttribute('text-anchor', 'middle');
-        gapLabel.classList.add('chart-annotation', 'label-element', 'chart-element');
-        gapLabel.textContent = STATE.chartConfig.center;
-        svg.appendChild(gapLabel);
-
-        STATE.drivers.forEach(d => {
-          if (d.markerYear && (d.state === 'normal' || d.state === 'accelerating')) {
-            const t = (d.markerYear - 2025) / 3;
-            const dem = Math.pow(t, exp);
-            const x = xScale(t);
-            const y = yScale(dem);
-            const isHot = d.id && STATE.highlightDriverId === d.id;
-            const emphasis = isHot ? 7 : (d.state === 'accelerating' ? 6 : 5);
-            const dotColor = '#ef4444';
-            const dotFilter = isHot ? 'filter: drop-shadow(0 3px 8px rgba(239,68,68,0.35));' : '';
-            const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-            g.classList.add('marker-group', 'marker-element', 'chart-element');
-            g.setAttribute('role', 'button');
-            g.setAttribute('tabindex', '0');
-            g.setAttribute('aria-label', `Learn more about ${d.label}`);
-            g.innerHTML = `
-              <title>${d.short}</title>
-              <circle cx="${x}" cy="${y}" r="18" fill="transparent" stroke="none"/>
-              <circle cx="${x}" cy="${y}" r="${emphasis}" fill="${dotColor}" stroke="white" stroke-width="2" style="${dotFilter}"/>
-              <text x="${x + 10}" y="${y - 2}" class="chart-text label-element chart-element" font-size="11" font-weight="700" fill="#334155">${d.label}</text>
-            `;
-            g.addEventListener('click', () => openInsight(d));
-            g.addEventListener('keydown', e => { if (e.key === 'Enter') openInsight(d); });
-            svg.appendChild(g);
-          }
-        });
-
-        if (STATE.showTippingPoint) {
-          const t = (STATE.tippingPointYear - 2025) / 3;
-          const x = xScale(t);
-          const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-          line.setAttribute('x1', x); line.setAttribute('y1', yScale(0));
-          line.setAttribute('x2', x); line.setAttribute('y2', yScale(1));
-          line.setAttribute('stroke', '#ef4444'); line.setAttribute('stroke-width', '1.5');
-          line.setAttribute('stroke-dasharray', '6 4');
-          line.classList.add('line-element', 'chart-element');
-          svg.appendChild(line);
-          const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-          label.setAttribute('x', x + 8); label.setAttribute('y', yScale(1) - 6);
-          label.setAttribute('font-size', '11');
-          label.setAttribute('font-weight', '700');
-          label.setAttribute('fill', '#0A1C60');
-          label.setAttribute('font-family', 'Inter, system-ui, sans-serif');
-          label.classList.add('chart-text', 'label-element', 'chart-element');
-          label.textContent = 'IT Inflection Point';
-          svg.appendChild(label);
-          const ann = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-          ann.setAttribute('x', x + 8); ann.setAttribute('y', yScale(0.8) + 5);
-          ann.setAttribute('fill', '#ef4444');
-          ann.setAttribute('font-size', '10');
-          ann.setAttribute('font-weight', '600');
-          ann.setAttribute('font-family', 'Inter, system-ui, sans-serif');
-          ann.classList.add('chart-text', 'label-element', 'chart-element');
-          ann.textContent = STATE.chartConfig.tipping;
-          svg.appendChild(ann);
-          const hit = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-          hit.setAttribute('role', 'button'); hit.setAttribute('tabindex', '0');
-          hit.setAttribute('aria-label', 'Learn more about Projected Tipping Point');
-          hit.innerHTML = `<rect x="${x - 10}" y="${yScale(1) - 20}" width="20" height="${height}" fill="transparent"/>`;
-          hit.addEventListener('click', () => openInsight(STATE.tippingPoint));
-          hit.addEventListener('keydown', e => { if (e.key === 'Enter') openInsight(STATE.tippingPoint); });
-          svg.appendChild(hit);
-        }
-      }
-
-      /* ========== CHART CURVE LOGIC ========== */
-
-      function updateCurves(){
-        if (STATE.recastMode) {
-          STATE.targetDemandExponent = 1.55;
-          STATE.targetCapacitySlope = 0.18;
-          STATE.showTippingPoint = false;
-          return;
-        }
-        let numNormal = 0, numAccelerating = 0;
-        STATE.drivers.forEach(d => { if (d.state === 'normal') numNormal++; if (d.state === 'accelerating') numAccelerating++; });
-        STATE.targetDemandExponent = 1.6 + (numNormal * 0.15 + numAccelerating * 0.3);
-        STATE.targetDemandExponent = Math.min(Math.max(STATE.targetDemandExponent, 1.2), 3);
-        STATE.targetCapacitySlope = 0;
-        STATE.showTippingPoint = numAccelerating >= 3;
-      }
-
-      function animateCurves(){
-        STATE.currentDemandExponent += (STATE.targetDemandExponent - STATE.currentDemandExponent) * 0.1;
-        STATE.currentCapacitySlope += (STATE.targetCapacitySlope - STATE.currentCapacitySlope) * 0.1;
-        renderCapacityGapChart();
-        if (Math.abs(STATE.currentDemandExponent - STATE.targetDemandExponent) > 0.001 || Math.abs(STATE.currentCapacitySlope - STATE.targetCapacitySlope) > 0.001) {
-          requestAnimationFrame(animateCurves);
-        }
-      }
-
-      function resetSliders(){
-        STATE.recastMode = false;
-        STATE.drivers.forEach(d => d.state = 'off');
-        STATE.currentDemandExponent = 1.6;
-        STATE.targetDemandExponent = 1.6;
-        STATE.currentCapacitySlope = 0;
-        STATE.targetCapacitySlope = 0;
-        STATE.showTippingPoint = false;
-        STATE.highlightDriverId = null;
-        render();
-      }
-
-      function openInsight(content){
-        STATE.insightContent = content;
-        STATE.highlightDriverId = content?.id || null;
-        render();
-      }
-
-      /* ========== INSIGHT MODAL ========== */
-
-      function renderInsightModal(){
-        if (!STATE.insightContent) return '';
-        const c = STATE.insightContent;
-        const title = c.title || c.label;
-        const intro = c.intro || c.short;
-        const bullets = c.bullets || [];
-        const closing = c.closing || '';
-        return `
-          <div class="fixed inset-0 z-50 flex items-center justify-center modal-overlay" role="dialog" aria-modal="true" aria-labelledby="insight-modal-title">
-            <div class="w-full max-w-4xl mx-4 rounded-2xl overflow-hidden transform modal-content glass">
-              <div class="bg-white/40 backdrop-blur-lg px-8 py-6 flex items-center justify-between" style="border-bottom:1px solid var(--border-subtle)">
-                <div class="flex items-center gap-3">
-                  <i data-lucide="lightbulb" class="w-8 h-8 text-[#0A1C60]" aria-hidden="true"></i>
-                  <h2 id="insight-modal-title" class="text-3xl font-bold tracking-tight text-[#0A1C60]">${title}</h2>
-                </div>
-                <button type="button" class="text-slate-500 hover:text-slate-700 focus-ring p-2" data-action="close-insight-modal" aria-label="Close">
-                  <i data-lucide="x" class="w-6 h-6"></i>
+              <div class="flex flex-wrap gap-2 pt-1">
+                <button class="btn-primary" data-action="save-settings">
+                  <i data-lucide="save" class="w-4 h-4 inline mr-1"></i> Save Configuration
+                </button>
+                <button class="btn-outline" data-action="reset-slot" data-idx="${es}">
+                  <i data-lucide="rotate-ccw" class="w-4 h-4 inline mr-1"></i> Reset Defaults
+                </button>
+                <button class="btn-danger" data-action="clear-chat" data-idx="${es}">
+                  <i data-lucide="trash-2" class="w-4 h-4 inline mr-1"></i> Clear Chat History
                 </button>
               </div>
-              <div class="p-8 bg-white/35 backdrop-blur-lg">
-                ${intro ? `<p class="text-base leading-relaxed text-[#4A5568] mb-4">${intro}</p>` : ''}
-                <div class="space-y-4">
-                  ${bullets.map(b=>`
-                    <div class="bg-white/70 backdrop-blur-lg p-4 rounded-lg shadow-sm flex items-start gap-3 hover:shadow-md transition-shadow">
-                      <i data-lucide="check-circle" class="w-5 h-5 text-[#0070F3] flex-shrink-0 mt-0.5"></i>
-                      <p class="text-base leading-relaxed text-[#4A5568]">${b}</p>
-                    </div>
-                  `).join('')}
-                </div>
-                ${closing ? `
-                  <div class="mt-6 bg-white/70 backdrop-blur-lg p-4 rounded-lg shadow-sm hover:shadow-md transition-shadow flex items-start gap-3">
-                    <i data-lucide="sparkles" class="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5"></i>
-                    <p class="text-base italic text-[#4A5568]">${closing}</p>
-                  </div>
-                ` : ''}
-              </div>
             </div>
-          </div>
-        `;
+          </div>`;
       }
 
-      /* ========== WHY CHANGE / WHY NOW / WHY RECAST MODAL ========== */
-
-      const whyOrder = ['change', 'now', 'recast'];
-
-      function renderWhyModal(){
-        if(!STATE.openWhyModal) return '';
-        const id = STATE.openWhyModal;
-        const iconMap = { change: 'alert-triangle', now: 'clock-4', recast: 'sparkles' };
-        const labelMap = { change: 'Why Change', now: 'Why Now', recast: 'Why Recast' };
-        const data = STATE.currentState[id];
-        const currentIdx = whyOrder.indexOf(id);
-        const prev = currentIdx > 0 ? whyOrder[currentIdx - 1] : null;
-        const next = currentIdx < whyOrder.length - 1 ? whyOrder[currentIdx + 1] : null;
-        const isRecast = id === 'recast';
-
-        return `
-          <div class="fixed inset-0 z-50 flex items-center justify-center modal-overlay" role="dialog" aria-modal="true" aria-labelledby="why-modal-title-${id}">
-            <div class="w-full ${isRecast ? 'max-w-5xl' : 'max-w-4xl'} mx-4 rounded-2xl overflow-hidden transform modal-content glass" style="${isRecast ? 'max-height:95vh;display:flex;flex-direction:column' : ''}">
-              <div class="bg-white/40 backdrop-blur-lg px-6 py-4 flex items-center justify-between flex-shrink-0" style="border-bottom:1px solid var(--border-subtle)">
-                <div class="flex items-center gap-3">
-                  <i data-lucide="${iconMap[id]}" class="w-7 h-7 text-[#0A1C60]" aria-hidden="true"></i>
-                  <h2 id="why-modal-title-${id}" class="text-2xl font-bold tracking-tight text-[#0A1C60]">${labelMap[id]}</h2>
-                </div>
-                <button type="button" class="text-slate-500 hover:text-slate-700 focus-ring p-2" data-action="close-why-modal" aria-label="Close"><i data-lucide="x" class="w-5 h-5"></i></button>
-              </div>
-              <div class="${isRecast ? 'px-6 py-4 overflow-y-auto' : 'p-8'} bg-white/35 backdrop-blur-lg" style="${isRecast ? 'flex:1;min-height:0' : ''}">
-                ${isRecast ? `
-                  <p class="text-sm leading-relaxed text-[#4A5568] mb-3">${data.intro}</p>
-                  <div class="grid grid-cols-1 md:grid-cols-2 gap-2 mb-4">
-                    ${data.bullets.map(b=>`
-                      <div class="bg-white/70 backdrop-blur-lg p-2.5 rounded-lg shadow-sm flex items-start gap-2">
-                        <i data-lucide="check-circle" class="w-4 h-4 text-[#0070F3] flex-shrink-0 mt-0.5"></i>
-                        <p class="text-xs leading-relaxed text-[#4A5568]">${b}</p>
-                      </div>
-                    `).join('')}
-                  </div>
-                  <div class="bg-white/70 backdrop-blur-lg p-2.5 rounded-lg shadow-sm flex items-start gap-2 mb-4">
-                    <i data-lucide="lightbulb" class="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5"></i>
-                    <p class="text-xs italic text-[#4A5568]">${data.analyst}</p>
-                  </div>
-                  <div class="rounded-xl border border-slate-200 bg-white/80 p-4">
-                    <div class="text-sm font-semibold text-[#0A1C60] mb-3 text-center">How It Fits Together</div>
-                    <div class="text-center mb-2">
-                      <div class="text-[9px] font-semibold uppercase tracking-widest text-[#64748b] mb-2">Your Existing Clinical Infrastructure</div>
-                      <div class="flex flex-wrap justify-center gap-1.5">
-                        <span class="px-3 py-1 rounded-full text-xs font-medium text-white" style="background:#374151">Citrix</span>
-                        <span class="px-3 py-1 rounded-full text-xs font-medium text-white" style="background:#0078D4">AVD / Nerdio</span>
-                        <span class="px-3 py-1 rounded-full text-xs font-medium text-white" style="background:#0078D4">Intune</span>
-                        <span class="px-3 py-1 rounded-full text-xs font-medium text-white" style="background:#0078D4">ConfigMgr</span>
-                        <span class="px-3 py-1 rounded-full text-xs font-medium text-white" style="background:#E87722">Imprivata</span>
-                      </div>
-                    </div>
-                    <div class="flex justify-center"><div style="width:70%;height:20px;border:2px dashed #cbd5e1;border-top:none;border-radius:0 0 12px 12px"></div></div>
-                    <div class="relative my-1.5">
-                      <div class="flex items-center">
-                        <div class="hidden md:flex flex-col gap-1 flex-shrink-0 mr-3">
-                          <div class="flex items-center gap-1 px-2 py-0.5 rounded-full border border-slate-200 bg-white text-[10px] text-[#475569]"><div class="w-1.5 h-1.5 rounded-full bg-green-400"></div>8,000+ Pre-tested Apps</div>
-                          <div class="flex items-center gap-1 px-2 py-0.5 rounded-full border border-slate-200 bg-white text-[10px] text-[#475569]"><div class="w-1.5 h-1.5 rounded-full bg-blue-400"></div>Clinical App Packaging</div>
-                          <div class="flex items-center gap-1 px-2 py-0.5 rounded-full border border-slate-200 bg-white text-[10px] text-[#475569]"><div class="w-1.5 h-1.5 rounded-full bg-purple-400"></div>Badge-Tap SSO</div>
-                        </div>
-                        <div class="flex-1 rounded-lg p-3 text-center" style="background:linear-gradient(135deg,#0A1C60 0%,#0070F3 100%)">
-                          <div class="text-base font-bold text-white">Application Workspace</div>
-                          <div class="text-[11px] text-blue-200 mt-0.5">Package &middot; Deliver &middot; Update &middot; Self-Service &middot; Audit</div>
-                        </div>
-                        <div class="hidden md:flex flex-col gap-1 flex-shrink-0 ml-3">
-                          <div class="flex items-center gap-1 px-2 py-0.5 rounded-full border border-slate-200 bg-white text-[10px] text-[#475569]"><div class="w-1.5 h-1.5 rounded-full bg-indigo-400"></div>Identity-Based Access</div>
-                          <div class="flex items-center gap-1 px-2 py-0.5 rounded-full border border-slate-200 bg-white text-[10px] text-[#475569]"><div class="w-1.5 h-1.5 rounded-full bg-red-400"></div>HIPAA Auto-Patching</div>
-                        </div>
-                      </div>
-                    </div>
-                    <div class="flex justify-center"><div style="width:70%;height:20px;border:2px solid #0070F3;border-top:none;border-radius:0 0 12px 12px"></div></div>
-                    <div class="text-center mt-2">
-                      <div class="text-[9px] font-semibold uppercase tracking-widest text-[#0070F3] mb-1.5">Clinicians & Clinical Endpoints</div>
-                      <div class="flex flex-wrap justify-center gap-1.5">
-                        ${['Shared Cart','Workstation','Virtual Desktop','Home Office','Tablet / BYOD'].map(d => `
-                          <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-200 bg-white text-[11px] text-[#475569]">${d}</span>
-                        `).join('')}
-                      </div>
-                    </div>
-                  </div>
-                ` : `
-                  <p class="text-base leading-relaxed text-[#4A5568] mb-4">${data.intro}</p>
-                  <div class="space-y-4">
-                    ${data.bullets.map(b=>`
-                      <div class="bg-white/70 backdrop-blur-lg p-4 rounded-lg shadow-sm flex items-start gap-3 hover:shadow-md transition-shadow">
-                        <i data-lucide="check-circle" class="w-5 h-5 text-[#0070F3] flex-shrink-0 mt-0.5"></i>
-                        <p class="text-base leading-relaxed text-[#4A5568]">${b}</p>
-                      </div>
-                    `).join('')}
-                  </div>
-                  <div class="mt-6 bg-white/70 backdrop-blur-lg p-4 rounded-lg shadow-sm hover:shadow-md transition-shadow flex items-start gap-3">
-                    <i data-lucide="lightbulb" class="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5"></i>
-                    <p class="text-base italic text-[#4A5568]">${data.analyst}</p>
-                  </div>
-                `}
-                <div class="mt-4 flex items-center justify-between w-full">
-                  ${prev ? `<button type="button" class="re-secondary inline-flex items-center gap-2" data-action="why-nav" data-to="${prev}"><i data-lucide="arrow-left" class="w-4 h-4"></i> Back</button>` : '<div></div>'}
-                  ${next ? `<button type="button" class="re-primary inline-flex items-center gap-2" data-action="why-nav" data-to="${next}">Next <i data-lucide="arrow-right" class="w-4 h-4"></i></button>` : '<div></div>'}
-                </div>
-              </div>
-            </div>
-          </div>
-        `;
-      }
-
-      /* ========== EDIT MODAL ========== */
-
-      function parseLines(s, max=4){ return (s || '').split('\n').map(l => l.trim()).filter(Boolean).slice(0, max); }
-
-      function editorSection(key,label,introValue,bulletsValue,analystValue){
-        return `
-          <div class="flex flex-col gap-4">
-            <span class="text-sm font-semibold">${label}</span>
-            <label class="flex flex-col gap-1"><span class="text-xs text-[#4A5568]">Introduction</span><textarea id="${key}Intro" data-action="edit-buffer" data-key="${key}" data-subkey="intro" class="min-h-[80px] rounded-[2px] border border-slate-200 bg-white p-3 text-sm leading-5 focus-ring" rows="2">${introValue}</textarea></label>
-            <label class="flex flex-col gap-1"><div class="flex items-center gap-2 text-xs text-[#4A5568]"><i data-lucide="check-circle" class="w-4 h-4 text-[#0070F3]"></i>Bullets (one per line, max 4)</div><textarea id="${key}Bullets" data-action="edit-buffer" data-key="${key}" data-subkey="bullets" class="min-h-[160px] rounded-[2px] border border-slate-200 bg-white p-3 text-sm leading-5 focus-ring" rows="6">${bulletsValue}</textarea></label>
-            <label class="flex flex-col gap-1"><span class="text-xs text-[#4A5568]">Analyst Trend</span><textarea id="${key}Analyst" data-action="edit-buffer" data-key="${key}" data-subkey="analyst" class="min-h-[80px] rounded-[2px] border border-slate-200 bg-white p-3 text-sm leading-5 focus-ring" rows="2">${analystValue}</textarea></label>
-          </div>
-        `;
-      }
-
-      function editorSectionChart(){
-        const buffer = STATE.editChartBuffer || { chartConfig: { ...STATE.chartConfig }, drivers: STATE.drivers.map(d => ({ label: d.label, bullets: d.bullets.join('\n') })) };
-        const conf = buffer.chartConfig || {};
-        const drv = buffer.drivers || [];
-        return `
-          <div class="flex flex-col gap-4">
-            <span class="text-sm font-semibold">XY Chart</span>
-            <label class="flex flex-col gap-1"><span class="text-xs text-[#4A5568]">Y-axis label</span><input id="chart-yaxis" value="${conf.yAxis ?? STATE.chartConfig.yAxis}" class="rounded border border-slate-200 bg-white p-3 text-sm focus-ring" /></label>
-            <label class="flex flex-col gap-1"><span class="text-xs text-[#4A5568]">X-axis label</span><input id="chart-xaxis" value="${conf.xAxis ?? STATE.chartConfig.xAxis}" class="rounded border border-slate-200 bg-white p-3 text-sm focus-ring" /></label>
-            <label class="flex flex-col gap-1"><span class="text-xs text-[#4A5568]">Center text</span><input id="chart-center" value="${conf.center ?? STATE.chartConfig.center}" class="rounded border border-slate-200 bg-white p-3 text-sm focus-ring" /></label>
-            <label class="flex flex-col gap-1"><span class="text-xs text-[#4A5568]">Footer caption</span><input id="chart-footer" value="${conf.footer ?? STATE.chartConfig.footer}" class="rounded border border-slate-200 bg-white p-3 text-sm focus-ring" /></label>
-            <label class="flex flex-col gap-1"><span class="text-xs text-[#4A5568]">Tipping point annotation</span><input id="chart-tipping" value="${conf.tipping ?? STATE.chartConfig.tipping}" class="rounded border border-slate-200 bg-white p-3 text-sm focus-ring" /></label>
-            <div class="space-y-4">
-              ${STATE.drivers.map((d, i) => {
-                const dBuf = drv[i] || {};
-                return `<div><label class="flex flex-col gap-1"><span class="text-xs text-[#4A5568]">Point ${i+1} title</span><input id="driver${i}-label" value="${(dBuf.label ?? d.label)}" class="rounded border border-slate-200 bg-white p-3 text-sm focus-ring" /></label><label class="flex flex-col gap-1 mt-2"><span class="text-xs text-[#4A5568]">Point ${i+1} bullets (one per line, exactly 3)</span><textarea id="driver${i}-bullets" rows="4" class="min-h-[100px] rounded border border-slate-200 bg-white p-3 text-sm leading-5 focus-ring">${(dBuf.bullets ?? d.bullets.join('\n'))}</textarea></label></div>`;
-              }).join('')}
-            </div>
-          </div>
-        `;
-      }
-
-      function renderModal(){
-        if(!STATE.modalOpen) return '';
-        const buf = STATE.editBuffers;
-        const toLines = arr => arr.join('\n');
-        const ensure = v => v ?? '';
-        const editTabs = [ {id: 'change', label: 'Why Change'}, {id: 'now', label: 'Why Now'}, {id: 'recast', label: 'Why Recast'}, {id: 'chart', label: 'Chart Config'} ];
-        return `
-          <div role="dialog" aria-modal="true" aria-labelledby="cs-editor-title" class="fixed inset-0 z-50 flex items-center justify-center modal-overlay overflow-auto p-4 md:p-8">
-            <div class="w-[95vw] h-[95vh] rounded-2xl shadow-2xl p-8 overflow-y-auto glass">
-              <div class="flex items-center justify-between">
-                <h2 id="cs-editor-title" class="text-xl font-semibold tracking-normal">Edit Current State</h2>
-                <button type="button" class="bg-transparent text-[#0A1C60] p-2 focus-ring rounded" data-action="close-modal" aria-label="Close"><i data-lucide="x" class="w-4 h-4"></i></button>
-              </div>
-              <p class="mt-1 text-sm text-[#4A5568]">Edit the introduction, bullets (one per line, max 4), and analyst trend for each section.</p>
-              <div role="tablist" aria-label="Edit sections" class="flex w-full flex-wrap gap-2 rounded bg-white/60 backdrop-blur-lg p-1 ring-1 ring-slate-200 mt-4">
-                ${editTabs.map(t=>`
-                  <button type="button" class="${cx('inline-flex items-center gap-2 px-3.5 py-1.5 text-sm focus-ring transition', STATE.editTab===t.id ? 'bg-[#0070F3] text-white hover:bg-[#005AD0] rounded' : 'text-[#0A1C60] hover:bg-slate-100 rounded')}" data-action="switch-edit-tab" data-tab="${t.id}" aria-selected="${STATE.editTab===t.id}"><span>${t.label}</span></button>
-                `).join('')}
-              </div>
-              <div class="mt-4">
-                ${STATE.editTab === 'change' ? editorSection('change','Why Change', ensure(buf.change.intro) || STATE.currentState.change.intro, ensure(buf.change.bullets) || toLines(STATE.currentState.change.bullets), ensure(buf.change.analyst) || STATE.currentState.change.analyst) : ''}
-                ${STATE.editTab === 'now' ? editorSection('now','Why Now', ensure(buf.now.intro) || STATE.currentState.now.intro, ensure(buf.now.bullets) || toLines(STATE.currentState.now.bullets), ensure(buf.now.analyst) || STATE.currentState.now.analyst) : ''}
-                ${STATE.editTab === 'recast' ? editorSection('recast','Why Recast', ensure(buf.recast.intro) || STATE.currentState.recast.intro, ensure(buf.recast.bullets) || toLines(STATE.currentState.recast.bullets), ensure(buf.recast.analyst) || STATE.currentState.recast.analyst) : ''}
-                ${STATE.editTab === 'chart' ? editorSectionChart() : ''}
-              </div>
-              <div class="mt-5 flex flex-wrap gap-2">
-                <button id="btnSaveCurrentState" type="button" data-action="save-currentstate" class="inline-flex items-center gap-2 bg-[#0070F3] text-white px-4 py-2 text-sm font-semibold focus-ring rounded hover:bg-[#005AD0]"><i data-lucide="save" class="w-4 h-4"></i> Save</button>
-                <button id="btnResetCurrentState" type="button" data-action="reset-currentstate-defaults" class="inline-flex items-center gap-2 bg-transparent text-[#0A1C60] border-2 border-[#0A1C60] px-4 py-2 text-sm font-semibold focus-ring rounded hover:text-[#0070F3] hover:border-[#0070F3]"><i data-lucide="rotate-ccw" class="w-4 h-4"></i> Reset to default</button>
-              </div>
-            </div>
-          </div>
-        `;
-      }
-
-      /* ========== LOCAL STORAGE HELPERS ========== */
-
-      const USER_ID = String(window.APP_USER_ID || "guest");
-      const PAGE_SCOPE = location.origin + location.pathname + location.search;
-      const STORAGE_KEY = `currentState:${USER_ID}:${PAGE_SCOPE}`;
-      const $ = (sel, ctx = document) => ctx.querySelector(sel);
-
-      const fields = {
-        changeIntro: () => $('#changeIntro'), changeBullets: () => $('#changeBullets'), changeAnalyst: () => $('#changeAnalyst'),
-        nowIntro: () => $('#nowIntro'), nowBullets: () => $('#nowBullets'), nowAnalyst: () => $('#nowAnalyst'),
-        recastIntro: () => $('#recastIntro'), recastBullets: () => $('#recastBullets'), recastAnalyst: () => $('#recastAnalyst')
-      };
-
-      function readFields(){
-        return {
-          change: { intro: fields.changeIntro()?.value ?? "", bullets: fields.changeBullets()?.value ?? "", analyst: fields.changeAnalyst()?.value ?? "" },
-          now: { intro: fields.nowIntro()?.value ?? "", bullets: fields.nowBullets()?.value ?? "", analyst: fields.nowAnalyst()?.value ?? "" },
-          recast: { intro: fields.recastIntro()?.value ?? "", bullets: fields.recastBullets()?.value ?? "", analyst: fields.recastAnalyst()?.value ?? "" }
-        };
-      }
-
-      function readChartFieldsRaw(){
-        const getVal = (id) => { const el = document.getElementById(id); return el ? el.value : undefined; };
-        return {
-          chartConfig: { yAxis: getVal('chart-yaxis'), xAxis: getVal('chart-xaxis'), center: getVal('chart-center'), footer: getVal('chart-footer'), tipping: getVal('chart-tipping') },
-          drivers: STATE.drivers.map((_,i) => ({ label: getVal(`driver${i}-label`), bullets: getVal(`driver${i}-bullets`) }))
-        };
-      }
-
-      function writeFields(data){
-        if(!data) return;
-        if(fields.changeIntro()) fields.changeIntro().value = data.change.intro ?? "";
-        if(fields.changeBullets()) fields.changeBullets().value = data.change.bullets ?? "";
-        if(fields.changeAnalyst()) fields.changeAnalyst().value = data.change.analyst ?? "";
-        if(fields.nowIntro()) fields.nowIntro().value = data.now.intro ?? "";
-        if(fields.nowBullets()) fields.nowBullets().value = data.now.bullets ?? "";
-        if(fields.nowAnalyst()) fields.nowAnalyst().value = data.now.analyst ?? "";
-        if(fields.recastIntro()) fields.recastIntro().value = data.recast.intro ?? "";
-        if(fields.recastBullets()) fields.recastBullets().value = data.recast.bullets ?? "";
-        if(fields.recastAnalyst()) fields.recastAnalyst().value = data.recast.analyst ?? "";
-      }
-
-      function writeChartFields(config, drivers){
-        if($('#chart-yaxis')) $('#chart-yaxis').value = config?.yAxis ?? "";
-        if($('#chart-xaxis')) $('#chart-xaxis').value = config?.xAxis ?? "";
-        if($('#chart-center')) $('#chart-center').value = config?.center ?? "";
-        if($('#chart-footer')) $('#chart-footer').value = config?.footer ?? "";
-        if($('#chart-tipping')) $('#chart-tipping').value = config?.tipping ?? "";
-        drivers?.forEach((dd, i) => {
-          const labelEl = $(`#driver${i}-label`); const bulletsEl = $(`#driver${i}-bullets`);
-          if(labelEl) labelEl.value = dd.label ?? "";
-          if(bulletsEl) bulletsEl.value = dd.bullets ?? "";
-        });
-      }
-
-      function loadDraft(){ try{ const raw = localStorage.getItem(STORAGE_KEY); return raw ? JSON.parse(raw) : null; }catch{return null;} }
-      function saveDraft(payload){ try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(payload)); } catch(e){ console.warn('Save failed:', e); } }
-      function clearDraft(){ try{ localStorage.removeItem(STORAGE_KEY); }catch{} }
-
-      function initCurrentStateModal(){
-        const draft = loadDraft();
-        if(draft) {
-          writeFields(draft);
-          STATE.editChartBuffer = { chartConfig: draft.chartConfig || {}, drivers: draft.drivers || [] };
-          writeChartFields(draft.chartConfig, draft.drivers);
-        } else {
-          STATE.editChartBuffer = { chartConfig: { ...STATE.chartConfig }, drivers: STATE.drivers.map(d => ({ label: d.label, bullets: d.bullets.join('\n') })) };
-          writeChartFields(STATE.chartConfig, STATE.drivers.map(d => ({label: d.label, bullets: d.bullets.join('\n')})));
-        }
-      }
-
-      /* ========== EVENT SYSTEM ========== */
-
-      function attachEvents(){
+      /* ========== EVENTS ========== */
+      let _bound = false;
+      function bindEvents() {
         const root = document.getElementById('app');
-        if (!root || root.dataset.bound === '1') return;
-        root.dataset.bound = '1';
+        if (_bound) return;
+        _bound = true;
 
-        root.addEventListener('click', (e) => {
+        document.addEventListener('click', e => {
           const act = e.target.closest('[data-action]');
-          const action = act?.getAttribute('data-action');
+          if (!act) return;
+          const action = act.dataset.action;
+          const idx = act.dataset.idx !== undefined ? parseInt(act.dataset.idx) : null;
 
-          const node = e.target.closest('.interactive-node');
-          if (node) { const id = node.dataset.id; STATE.activePopover = STATE.activePopover === id ? null : id; render(); return; }
-
-          if (!action) return;
-
-          if (action === 'switch-tab') { STATE.activeTab = act.getAttribute('data-tab'); STATE.activePopover = null; STATE.openWhyModal = null; STATE.insightContent = null; STATE.highlightDriverId = null; render(); return; }
-
-          /* Slot & settings actions */
-          if (action === 'expand-slot') {
-            STATE.expandedSlot = parseInt(act.getAttribute('data-idx'), 10);
-            render(); return;
-          }
-          if (action === 'close-expanded') {
-            STATE.expandedSlot = null;
-            render(); return;
-          }
-          if (action === 'select-editing-slot') {
-            const idx = parseInt(act.getAttribute('data-idx'), 10);
-            STATE.editingSlot = idx;
-            STATE.settingsInput = STATE.slots[idx]?.url || '';
-            render(); return;
-          }
-          if (action === 'settings-save') {
-            const inp = document.getElementById('settings-input');
-            if (inp) {
-              STATE.slots[STATE.editingSlot].url = inp.value.trim();
-              STATE.settingsInput = inp.value.trim();
+          switch (action) {
+            case 'switch-tab': STATE.activeTab = act.dataset.tab; render(); break;
+            case 'expand-slot': STATE.expandedSlot = idx; render(); scrollChat(); setTimeout(()=>document.getElementById('expanded-input')?.focus(),100); break;
+            case 'close-expanded': STATE.expandedSlot = null; render(); break;
+            case 'clear-chat': clearChat(idx); break;
+            case 'select-editing-slot': readFields(); STATE.editingSlot = idx; render(); break;
+            case 'send-expanded': {
+              const inp = document.getElementById('expanded-input');
+              if (inp) STATE.slots[STATE.expandedSlot].inputText = inp.value;
+              sendMessage(STATE.expandedSlot);
+              break;
             }
-            render(); return;
+            case 'save-settings': readFields(); saveSettings(); render(); break;
+            case 'reset-slot': {
+              const s = STATE.slots[idx];
+              s.apiKey = ''; s.prompt = 'You are a helpful AI assistant. Be concise and friendly.';
+              s.label = 'Assistant ' + (idx + 1);
+              saveSettings(); render(); break;
+            }
           }
-          if (action === 'settings-reset') {
-            STATE.settingsInput = STATE.slots[STATE.editingSlot]?.url || '';
-            render(); return;
-          }
-          if (action === 'settings-clear') {
-            STATE.slots[STATE.editingSlot].url = '';
-            STATE.settingsInput = '';
-            render(); return;
-          }
-          if (action === 'close-modal') { STATE.modalOpen = false; render(); return; }
-          if (action === 'close-why-modal') { STATE.openWhyModal = null; render(); return; }
-          if (action === 'close-insight-modal') { STATE.insightContent = null; STATE.highlightDriverId = null; render(); return; }
-          if (action === 'why-nav') { STATE.openWhyModal = act.getAttribute('data-to'); render(); return; }
-
-          if (action === 'open-why-modal') {
-            const id = act.getAttribute('data-why');
-            STATE.recastMode = false;
-            STATE.drivers.forEach(d => d.state = 'off');
-            STATE.showTippingPoint = false;
-            if (id === 'change') { STATE.drivers.forEach(d => { if (['more_apps','constant_updates','too_many_tools','manual_rework'].includes(d.id)) d.state = 'normal'; }); }
-            else if (id === 'now') { STATE.drivers.forEach(d => { if (['more_apps','constant_updates','too_many_tools','manual_rework','security_compliance'].includes(d.id)) d.state = 'accelerating'; }); STATE.showTippingPoint = true; }
-            else if (id === 'recast') { STATE.recastMode = true; }
-            updateCurves(); requestAnimationFrame(animateCurves);
-            STATE.openWhyModal = id; render(); return;
-          }
-
-          if (action === 'open-currentstate-editor') {
-            STATE.modalOpen = true; STATE.editTab = 'change';
-            STATE.editBuffers = { change: { intro: '', bullets: '', analyst: '' }, now: { intro: '', bullets: '', analyst: '' }, recast: { intro: '', bullets: '', analyst: '' } };
-            STATE.editChartBuffer = null; render();
-            setTimeout(()=>{ try { window.lucide?.createIcons?.(); } catch{} }, 0);
-            setTimeout(()=>{ initCurrentStateModal(); }, 0);
-            return;
-          }
-
-          if (action === 'switch-edit-tab') { STATE.editTab = act.getAttribute('data-tab'); render(); setTimeout(()=>{ try { window.lucide?.createIcons?.(); } catch{} }, 0); return; }
-
-          if (action === 'save-currentstate') {
-            const fallback = STATE.defaultsCurrentState();
-            const formData = readFields();
-            STATE.currentState = {
-              change: { intro: (formData.change.intro || '').trim() || fallback.change.intro, bullets: parseLines(formData.change.bullets) || fallback.change.bullets, analyst: (formData.change.analyst || '').trim() || fallback.change.analyst },
-              now: { intro: (formData.now.intro || '').trim() || fallback.now.intro, bullets: parseLines(formData.now.bullets) || fallback.now.bullets, analyst: (formData.now.analyst || '').trim() || fallback.now.analyst },
-              recast: { intro: (formData.recast.intro || '').trim() || fallback.recast.intro, bullets: parseLines(formData.recast.bullets) || fallback.recast.bullets, analyst: (formData.recast.analyst || '').trim() || fallback.recast.analyst }
-            };
-            const raw = STATE.editChartBuffer || readChartFieldsRaw();
-            const pick = (v, keep) => (typeof v === 'string' && v.trim()) ? v.trim() : keep;
-            const fallbackChart = STATE.defaultsChartConfig();
-            const cfg = raw?.chartConfig || {};
-            STATE.chartConfig = {
-              yAxis: pick(cfg.yAxis, STATE.chartConfig.yAxis || fallbackChart.yAxis),
-              xAxis: pick(cfg.xAxis, STATE.chartConfig.xAxis || fallbackChart.xAxis),
-              center: pick(cfg.center, STATE.chartConfig.center || fallbackChart.center),
-              footer: pick(cfg.footer, STATE.chartConfig.footer || fallbackChart.footer),
-              tipping: pick(cfg.tipping, STATE.chartConfig.tipping || fallbackChart.tipping)
-            };
-            const fallbackDrivers = STATE.defaultsDrivers();
-            const dRaw = raw?.drivers || [];
-            STATE.drivers.forEach((d, i) => {
-              d.label = pick(dRaw[i]?.label, d.label || fallbackDrivers[i].label);
-              const bulletsRaw = dRaw[i]?.bullets;
-              if (typeof bulletsRaw === 'string') { const b = parseLines(bulletsRaw, 3); d.bullets = b.length === 3 ? b : (d.bullets || fallbackDrivers[i].bullets); }
-              else { d.bullets = d.bullets || fallbackDrivers[i].bullets; }
-            });
-            saveDraft({ ...formData, chartConfig: { ...STATE.chartConfig }, drivers: STATE.drivers.map(d => ({ label: d.label, bullets: d.bullets.join('\n') })) });
-            STATE.modalOpen = false; STATE.activeTab = 'problems'; render(); return;
-          }
-
-          if (action === 'reset-currentstate-defaults') { clearDraft(); STATE.chartConfig = STATE.defaultsChartConfig(); STATE.drivers = STATE.defaultsDrivers(); STATE.currentState = STATE.defaultsCurrentState(); STATE.editChartBuffer = null; render(); return; }
-          if (action === 'reset-sliders') { resetSliders(); return; }
         });
 
-        root.addEventListener('input', (e) => {
-          if (e.target?.id === 'settings-input') { STATE.settingsInput = e.target.value; return; }
-          const buf = e.target.closest('[data-action="edit-buffer"]');
-          if (buf) { const key = buf.getAttribute('data-key'); const sub = buf.getAttribute('data-subkey'); if (STATE.editBuffers?.[key]) STATE.editBuffers[key][sub] = e.target.value; }
-          if (STATE.modalOpen && STATE.editTab === 'chart') { STATE.editChartBuffer = readChartFieldsRaw(); }
+        document.addEventListener('input', e => {
+          if (e.target.id === 'expanded-input' && STATE.expandedSlot !== null) {
+            STATE.slots[STATE.expandedSlot].inputText = e.target.value;
+          }
         });
+
+        document.addEventListener('keydown', e => {
+          if (e.key === 'Enter' && !e.shiftKey && e.target.id === 'expanded-input' && STATE.expandedSlot !== null) {
+            e.preventDefault();
+            STATE.slots[STATE.expandedSlot].inputText = e.target.value;
+            sendMessage(STATE.expandedSlot);
+          }
+          if (e.key === 'Escape' && STATE.expandedSlot !== null) {
+            STATE.expandedSlot = null; render();
+          }
+        });
+      }
+
+      function readFields() {
+        const i = STATE.editingSlot;
+        const s = STATE.slots[i];
+        const l = document.getElementById('setting-label');
+        const k = document.getElementById('setting-apikey');
+        const p = document.getElementById('setting-prompt');
+        if (l) s.label = l.value.trim() || s.label;
+        if (k) s.apiKey = k.value.trim();
+        if (p) s.prompt = p.value.trim() || s.prompt;
       }
 
       /* ========== BOOT ========== */
-
-      STATE.drivers.forEach(d => d.state = 'accelerating');
-      STATE.showTippingPoint = true;
-      updateCurves();
-      STATE.currentDemandExponent = STATE.targetDemandExponent;
-      STATE.currentCapacitySlope = STATE.targetCapacitySlope;
-
       document.addEventListener('DOMContentLoaded', render);
-
-      document.addEventListener('keydown',(e)=>{
-        if(e.key==='Escape' && (STATE.expandedSlot !== null || STATE.modalOpen || STATE.openWhyModal || STATE.insightContent)){
-          STATE.expandedSlot=null; STATE.modalOpen=false; STATE.openWhyModal=null; STATE.insightContent=null; STATE.highlightDriverId=null; render();
-        }
-      });
     </script>
   </body>
 </html>
