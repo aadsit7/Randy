@@ -169,24 +169,22 @@ When you are unsure or don't have reliable information, say so clearly. Never fa
 
       const DEFAULT_VOICE_PERSONALITY = "Keep all responses to 2-3 short sentences since they will be spoken aloud. Use natural conversational language. Say numbers the way people talk \u2014 like '120 grand' not '$120,000'. Never use markdown, bullet points, or formatting. Be direct and warm.";
 
-      const ASSISTANT_1_PROMPT = `You are a world-class AI assistant designed by a senior UX engineer from Google/Salesforce/Microsoft. You deliver every response as structured, interactive HTML cards.
+      // Shared output format appended to every assistant's system prompt
+      const HTML_OUTPUT_FORMAT = `
 
 # CRITICAL OUTPUT FORMAT — ALWAYS FOLLOW THIS EXACTLY
 
-Every response MUST use this exact HTML structure. No exceptions. No markdown. Only raw HTML.
+You deliver every response as structured, interactive HTML cards. No exceptions. No markdown. Only raw HTML.
 
 ## Structure
 
 1. **Summary Card** (ALWAYS first) — a brief 2-3 sentence overview wrapped in:
-\`\`\`
 <div class="summary-card">
   <strong>Summary</strong>
   <p>Your concise overview here.</p>
 </div>
-\`\`\`
 
 2. **Collapsible Detail Sections** — group ALL detailed content into collapsible sections:
-\`\`\`
 <div class="section-group">
   <details>
     <summary><span class="s-icon" style="background:#dbeafe;color:#2563eb">EMOJI</span> Section Title</summary>
@@ -199,7 +197,6 @@ Every response MUST use this exact HTML structure. No exceptions. No markdown. O
     </div>
   </details>
 </div>
-\`\`\`
 
 ## Rules
 
@@ -215,6 +212,10 @@ Every response MUST use this exact HTML structure. No exceptions. No markdown. O
 - Make the content scannable — a user should understand the answer from the summary card alone, then drill into sections for detail.
 - Be thorough in the detail sections but concise in the summary.
 - If the user asks a simple question (yes/no, one fact), still use the format but with fewer sections.`;
+
+      const ASSISTANT_1_PROMPT = 'You are a world-class AI assistant designed by a senior UX engineer from Google/Salesforce/Microsoft. Be helpful, accurate, and thorough.' + HTML_OUTPUT_FORMAT;
+
+      const DEFAULT_SIMPLE_PROMPT = 'You are a helpful AI assistant. Be concise and friendly.' + HTML_OUTPUT_FORMAT;
 
       function makeSlot(label, prompt) {
         return {
@@ -235,9 +236,9 @@ Every response MUST use this exact HTML structure. No exceptions. No markdown. O
         editingSlot: 0,
         slots: [
           makeSlot('Assistant 1', ASSISTANT_1_PROMPT),
-          makeSlot('Assistant 2', ASSISTANT_2_PROMPT),
-          makeSlot('Assistant 3', 'You are a helpful AI assistant. Be concise and friendly.'),
-          makeSlot('Assistant 4', 'You are a helpful AI assistant. Be concise and friendly.')
+          makeSlot('Assistant 2', ASSISTANT_2_PROMPT + HTML_OUTPUT_FORMAT),
+          makeSlot('Assistant 3', DEFAULT_SIMPLE_PROMPT),
+          makeSlot('Assistant 4', DEFAULT_SIMPLE_PROMPT)
         ]
       };
 
@@ -611,9 +612,8 @@ Every response MUST use this exact HTML structure. No exceptions. No markdown. O
           const reply = data.content?.map(c => c.text || '').join('') || 'No response.';
           slot.messages.push({ role: 'assistant', content: reply });
           if (viaVoice) {
-            // For Assistant 1, speak only the summary card text
-            const textToSpeak = idx === 0 ? extractSummary(reply) : reply;
-            speakText(textToSpeak, idx);
+            // Speak only the summary card text (all assistants output structured HTML)
+            speakText(extractSummary(reply), idx);
           }
         } catch (err) {
           slot.messages.push({ role: 'assistant', content: '\u26a0\ufe0f ' + (err.message || 'Connection failed. Check your API key in Settings.') });
@@ -666,10 +666,9 @@ Every response MUST use this exact HTML structure. No exceptions. No markdown. O
         return div.innerHTML;
       }
 
-      // Render bot message content: HTML for slot 0, escaped text for others
-      function renderBotContent(content, slotIdx) {
-        if (slotIdx === 0) return sanitizeHtml(content);
-        return escHtml(content);
+      // Render bot message content: sanitized HTML for all assistants
+      function renderBotContent(content) {
+        return sanitizeHtml(content);
       }
 
       // Extract summary text from Assistant 1 HTML for voice reading
@@ -752,7 +751,7 @@ Every response MUST use this exact HTML structure. No exceptions. No markdown. O
                 <div class="flex ${m.role==='user'?'justify-end':'justify-start'}">
                   ${m.role==='user'
                     ? `<div class="chat-user" style="font-size:11px;padding:6px 10px;max-width:85%;word-wrap:break-word;white-space:pre-wrap">${escHtml(m.content)}</div>`
-                    : `<div class="chat-bot ${idx===0?'chat-html':''}" style="font-size:11px;padding:6px 10px;max-width:95%;word-wrap:break-word;${idx===0?'white-space:normal':'white-space:pre-wrap'}">${renderBotContent(m.content, idx)}</div>`}
+                    : `<div class="chat-bot chat-html" style="font-size:11px;padding:6px 10px;max-width:95%;word-wrap:break-word;white-space:normal">${renderBotContent(m.content)}</div>`}
                 </div>
               `).join('')}
               ${slot.loading?'<div class="flex justify-start"><div class="chat-bot" style="padding:6px 12px"><span class="typing-dot"></span> <span class="typing-dot"></span> <span class="typing-dot"></span></div></div>':''}
@@ -856,7 +855,7 @@ Every response MUST use this exact HTML structure. No exceptions. No markdown. O
                   ${m.role==='assistant'?'<div class="w-7 h-7 rounded-full grid place-items-center text-white text-xs font-bold flex-shrink-0 mr-2 mt-1" style="background:'+color+'">'+slot.label.charAt(0)+'</div>':''}
                   ${m.role==='user'
                     ? `<div class="chat-bubble chat-user">${escHtml(m.content)}</div>`
-                    : `<div class="chat-bubble chat-bot ${idx===0?'chat-html':''}" style="${idx===0?'white-space:normal;max-width:95%':''}">${renderBotContent(m.content, idx)}</div>`}
+                    : `<div class="chat-bubble chat-bot chat-html" style="white-space:normal;max-width:95%">${renderBotContent(m.content)}</div>`}
                 </div>
               `).join('')}
               ${slot.loading?`<div class="flex justify-start"><div class="w-7 h-7 rounded-full grid place-items-center text-white text-xs font-bold flex-shrink-0 mr-2 mt-1" style="background:${color}">${slot.label.charAt(0)}</div><div class="chat-bubble chat-bot"><span class="typing-dot"></span> <span class="typing-dot"></span> <span class="typing-dot"></span></div></div>`:''}
@@ -1003,7 +1002,7 @@ Every response MUST use this exact HTML structure. No exceptions. No markdown. O
             case 'save-settings': readFields(); saveSettings(); render(); break;
             case 'reset-slot': {
               const s = STATE.slots[idx];
-              const DEFAULT_PROMPTS = [ASSISTANT_1_PROMPT, ASSISTANT_2_PROMPT, 'You are a helpful AI assistant. Be concise and friendly.', 'You are a helpful AI assistant. Be concise and friendly.'];
+              const DEFAULT_PROMPTS = [ASSISTANT_1_PROMPT, ASSISTANT_2_PROMPT + HTML_OUTPUT_FORMAT, DEFAULT_SIMPLE_PROMPT, DEFAULT_SIMPLE_PROMPT];
               s.apiKey = DEFAULT_API_KEY; s.prompt = DEFAULT_PROMPTS[idx];
               s.label = 'Assistant ' + (idx + 1);
               s.voiceName = s.label;
