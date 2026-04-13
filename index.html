@@ -89,13 +89,6 @@
       .header-mic:not(.on) { color: rgba(255,255,255,0.4); }
       .header-mic:hover { background: rgba(255,255,255,0.08); }
 
-      /* ===== TTS speaker button ===== */
-      .tts-btn { position: absolute; bottom: 2px; right: 2px; background: transparent; border: none; cursor: pointer; padding: 3px; border-radius: 4px; color: #94a3b8; transition: color 0.15s, background 0.15s; line-height: 0; }
-      .tts-btn:hover { color: #475569; background: rgba(148,163,184,0.12); }
-      .tts-btn.playing { color: var(--primary); }
-      .tts-btn.loading { color: #f59e0b; }
-      .msg-wrap { position: relative; }
-
       @media (prefers-reduced-motion: reduce) {
         .voice-pulse-ring, .record-pulse, .sound-wave-bar, .voice-toast { animation: none !important; }
         .voice-pulse-ring { display: none; }
@@ -147,29 +140,6 @@ When you are unsure or don't have reliable information, say so clearly. Never fa
       const DEFAULT_API_KEY = '';
 
       const DEFAULT_VOICE_PERSONALITY = "Keep all responses to 2-3 short sentences since they will be spoken aloud. Use natural conversational language. Say numbers the way people talk \u2014 like '120 grand' not '$120,000'. Never use markdown, bullet points, or formatting. Be direct and warm.";
-
-      /* ========== ELEVENLABS TTS CONFIG ========== */
-      const TTS_DEFAULT_WORKER_URL = 'https://tts-relay.YOUR_SUBDOMAIN.workers.dev';
-
-      // ElevenLabs voice IDs — find more at https://api.elevenlabs.io/v1/voices
-      const TTS_VOICES = [
-        { id: 'pNInz6obpgDQGcFmaJgB', name: 'Adam (deep male)' },
-        { id: 'EXAVITQu4vr4xnSDxMaL', name: 'Bella (female)' },
-        { id: 'ErXwobaYiN019PkySvjV', name: 'Antoni (male)' },
-        { id: '21m00Tcm4TlvDq8ikWAM', name: 'Rachel (female)' }
-      ];
-
-      const TTS_STATE = {
-        enabled: false,
-        voiceId: TTS_VOICES[0].id,
-        autoSpeak: false,
-        workerUrl: TTS_DEFAULT_WORKER_URL,
-        playingMsgIdx: null,    // { slotIdx, msgIdx } of the message currently playing
-        loadingMsgIdx: null,    // { slotIdx, msgIdx } of the message currently loading
-        audioEl: null           // shared <audio> element, created lazily
-      };
-
-      const TTS_SETTINGS_KEY = 'recast_tts_settings';
 
       function makeSlot(label, prompt) {
         return {
@@ -248,144 +218,7 @@ When you are unsure or don't have reliable information, say so clearly. Never fa
 
       loadSettings();
 
-      /* ========== TTS PERSISTENCE ========== */
-      function saveTtsSettings() {
-        try {
-          localStorage.setItem(TTS_SETTINGS_KEY, JSON.stringify({
-            enabled: TTS_STATE.enabled,
-            voiceId: TTS_STATE.voiceId,
-            autoSpeak: TTS_STATE.autoSpeak,
-            workerUrl: TTS_STATE.workerUrl
-          }));
-        } catch {}
-      }
 
-      function loadTtsSettings() {
-        try {
-          const raw = localStorage.getItem(TTS_SETTINGS_KEY);
-          if (!raw) return;
-          const d = JSON.parse(raw);
-          TTS_STATE.enabled = !!d.enabled;
-          TTS_STATE.voiceId = d.voiceId || TTS_VOICES[0].id;
-          TTS_STATE.autoSpeak = !!d.autoSpeak;
-          TTS_STATE.workerUrl = d.workerUrl || TTS_DEFAULT_WORKER_URL;
-        } catch {}
-      }
-
-      loadTtsSettings();
-
-      /* ========== TTS PLAYBACK ========== */
-      function getTtsAudio() {
-        if (!TTS_STATE.audioEl) {
-          const a = document.createElement('audio');
-          a.id = 'ttsAudio';
-          a.addEventListener('ended', () => {
-            TTS_STATE.playingMsgIdx = null;
-            TTS_STATE.loadingMsgIdx = null;
-            render();
-          });
-          a.addEventListener('error', () => {
-            TTS_STATE.playingMsgIdx = null;
-            TTS_STATE.loadingMsgIdx = null;
-            render();
-          });
-          a.addEventListener('playing', () => {
-            TTS_STATE.loadingMsgIdx = null;
-            render();
-          });
-          document.body.appendChild(a);
-          TTS_STATE.audioEl = a;
-        }
-        return TTS_STATE.audioEl;
-      }
-
-      function ttsStop() {
-        const a = getTtsAudio();
-        a.pause();
-        a.removeAttribute('src');
-        a.load();
-        if (TTS_STATE.playingMsgIdx) {
-          TTS_STATE.playingMsgIdx = null;
-          TTS_STATE.loadingMsgIdx = null;
-          render();
-        }
-      }
-
-      function ttsSpeak(text, slotIdx, msgIdx) {
-        if (!TTS_STATE.enabled) return;
-        const key = { slotIdx, msgIdx };
-
-        // If already playing this exact message, stop it
-        if (TTS_STATE.playingMsgIdx &&
-            TTS_STATE.playingMsgIdx.slotIdx === slotIdx &&
-            TTS_STATE.playingMsgIdx.msgIdx === msgIdx) {
-          ttsStop();
-          return;
-        }
-
-        const clean = stripMarkdown(text);
-        if (!clean) return;
-
-        // Stop any current playback
-        ttsStop();
-
-        TTS_STATE.loadingMsgIdx = key;
-        TTS_STATE.playingMsgIdx = key;
-        render();
-
-        const audio = getTtsAudio();
-
-        if (clean.length <= 500) {
-          // Short text: use GET endpoint for simple <audio src> playback
-          const params = new URLSearchParams({
-            text: clean,
-            voiceId: TTS_STATE.voiceId
-          });
-          audio.src = TTS_WORKER_URL + '/tts?' + params.toString();
-          audio.play().catch(() => {
-            TTS_STATE.playingMsgIdx = null;
-            TTS_STATE.loadingMsgIdx = null;
-            render();
-          });
-        } else {
-          // Long text: POST, get blob, create object URL
-          fetch(TTS_STATE.workerUrl + '/tts', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text: clean, voiceId: TTS_STATE.voiceId })
-          })
-          .then(r => {
-            if (!r.ok) throw new Error('TTS error ' + r.status);
-            return r.blob();
-          })
-          .then(blob => {
-            const url = URL.createObjectURL(blob);
-            audio.src = url;
-            audio.play().catch(() => {});
-            audio.addEventListener('ended', () => URL.revokeObjectURL(url), { once: true });
-          })
-          .catch(() => {
-            TTS_STATE.playingMsgIdx = null;
-            TTS_STATE.loadingMsgIdx = null;
-            render();
-          });
-        }
-      }
-
-      function ttsBtnHtml(slotIdx, msgIdx) {
-        if (!TTS_STATE.enabled) return '';
-        const isPlaying = TTS_STATE.playingMsgIdx &&
-          TTS_STATE.playingMsgIdx.slotIdx === slotIdx &&
-          TTS_STATE.playingMsgIdx.msgIdx === msgIdx &&
-          !TTS_STATE.loadingMsgIdx;
-        const isLoading = TTS_STATE.loadingMsgIdx &&
-          TTS_STATE.loadingMsgIdx.slotIdx === slotIdx &&
-          TTS_STATE.loadingMsgIdx.msgIdx === msgIdx;
-        const cls = isPlaying ? 'playing' : isLoading ? 'loading' : '';
-        const icon = isPlaying ? 'volume-2' : isLoading ? 'loader' : 'volume-2';
-        const title = isPlaying ? 'Stop' : isLoading ? 'Loading...' : 'Speak';
-        return `<button class="tts-btn ${cls}" title="${title}" data-action="tts-speak" data-slot="${slotIdx}" data-msg="${msgIdx}"><i data-lucide="${icon}" class="w-3 h-3"></i></button>`;
-      }
 
       /* ========== VOICE HELPERS ========== */
       function showToast(msg) {
@@ -703,11 +536,6 @@ When you are unsure or don't have reliable information, say so clearly. Never fa
           const reply = data.content?.map(c => c.text || '').join('') || 'No response.';
           slot.messages.push({ role: 'assistant', content: reply });
           if (viaVoice) speakText(reply, idx);
-          // ElevenLabs auto-speak (only when not already handled by browser TTS via viaVoice)
-          if (!viaVoice && TTS_STATE.enabled && TTS_STATE.autoSpeak) {
-            const mi = slot.messages.length - 1;
-            ttsSpeak(reply, idx, mi);
-          }
         } catch (err) {
           slot.messages.push({ role: 'assistant', content: '\u26a0\ufe0f ' + (err.message || 'Connection failed. Check your API key in Settings.') });
           if (viaVoice) {
@@ -809,9 +637,9 @@ When you are unsure or don't have reliable information, say so clearly. Never fa
                     <div class="text-[10px] text-slate-400 mt-0.5">Type below to start chatting</div>
                   </div>
                 </div>
-              ` : msgs.map((m, mi) => `
+              ` : msgs.map(m => `
                 <div class="flex ${m.role==='user'?'justify-end':'justify-start'}">
-                  ${m.role==='assistant' ? `<div class="msg-wrap"><div class="chat-bot" style="font-size:11px;padding:6px 10px;padding-right:22px;max-width:85%;word-wrap:break-word;white-space:pre-wrap">${escHtml(m.content)}</div>${ttsBtnHtml(idx, mi)}</div>` : `<div class="chat-user" style="font-size:11px;padding:6px 10px;max-width:85%;word-wrap:break-word;white-space:pre-wrap">${escHtml(m.content)}</div>`}
+                  <div class="${m.role==='user'?'chat-user':'chat-bot'}" style="font-size:11px;padding:6px 10px;max-width:85%;word-wrap:break-word;white-space:pre-wrap">${escHtml(m.content)}</div>
                 </div>
               `).join('')}
               ${slot.loading?'<div class="flex justify-start"><div class="chat-bot" style="padding:6px 12px"><span class="typing-dot"></span> <span class="typing-dot"></span> <span class="typing-dot"></span></div></div>':''}
@@ -910,10 +738,10 @@ When you are unsure or don't have reliable information, say so clearly. Never fa
                     <div class="text-sm text-slate-400 mt-1">Type a message below to start chatting.</div>
                   </div>
                 </div>
-              ` : slot.messages.map((m, mi) => `
+              ` : slot.messages.map(m => `
                 <div class="flex ${m.role==='user'?'justify-end':'justify-start'}">
                   ${m.role==='assistant'?'<div class="w-7 h-7 rounded-full grid place-items-center text-white text-xs font-bold flex-shrink-0 mr-2 mt-1" style="background:'+color+'">'+slot.label.charAt(0)+'</div>':''}
-                  ${m.role==='assistant' ? `<div class="msg-wrap"><div class="chat-bubble chat-bot" style="padding-right:26px">${escHtml(m.content)}</div>${ttsBtnHtml(idx, mi)}</div>` : `<div class="chat-bubble chat-user">${escHtml(m.content)}</div>`}
+                  <div class="chat-bubble ${m.role==='user'?'chat-user':'chat-bot'}">${escHtml(m.content)}</div>
                 </div>
               `).join('')}
               ${slot.loading?`<div class="flex justify-start"><div class="w-7 h-7 rounded-full grid place-items-center text-white text-xs font-bold flex-shrink-0 mr-2 mt-1" style="background:${color}">${slot.label.charAt(0)}</div><div class="chat-bubble chat-bot"><span class="typing-dot"></span> <span class="typing-dot"></span> <span class="typing-dot"></span></div></div>`:''}
@@ -1002,37 +830,6 @@ When you are unsure or don't have reliable information, say so clearly. Never fa
                 ` : ''}
               </div>
 
-              <div style="border-top:1px dashed #e2e8f0;padding-top:16px">
-                <div class="flex items-center justify-between mb-3">
-                  <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide">
-                    <i data-lucide="volume-2" class="w-3 h-3 inline mr-1"></i>ElevenLabs TTS
-                  </label>
-                  <div class="voice-switch ${TTS_STATE.enabled?'on':''}" data-action="toggle-tts" title="Toggle ElevenLabs TTS"></div>
-                </div>
-
-                <div class="mb-3">
-                  <label class="block text-[11px] font-semibold text-slate-500 uppercase tracking-wide mb-1">Voice</label>
-                  <select id="setting-tts-voice" style="width:100%;padding:8px 12px;border:2px solid #e2e8f0;border-radius:10px;font-size:13px;color:var(--navy);background:#fff">
-                    ${TTS_VOICES.map(v => `<option value="${v.id}" ${TTS_STATE.voiceId===v.id?'selected':''}>${escHtml(v.name)}</option>`).join('')}
-                  </select>
-                  <p class="text-[11px] text-slate-400 mt-1">Select an ElevenLabs voice. Find more voice IDs at api.elevenlabs.io/v1/voices.</p>
-                </div>
-
-                <div class="flex items-center justify-between mb-3">
-                  <div>
-                    <label class="block text-[11px] font-semibold text-slate-500 uppercase tracking-wide">Auto-Speak Responses</label>
-                    <p class="text-[11px] text-slate-400">Automatically speak every new bot response without clicking</p>
-                  </div>
-                  <div class="voice-switch ${TTS_STATE.autoSpeak?'on':''}" data-action="toggle-tts-autospeak" title="Toggle auto-speak"></div>
-                </div>
-
-                <div>
-                  <label class="block text-[11px] font-semibold text-slate-500 uppercase tracking-wide mb-1">Worker URL</label>
-                  <input type="text" id="setting-tts-url" value="${escAttr(TTS_STATE.workerUrl)}" placeholder="https://tts-relay.YOUR_SUBDOMAIN.workers.dev" />
-                  <p class="text-[11px] text-slate-400 mt-1">Your Cloudflare Worker URL. Deploy tts-worker/ then paste the URL here.</p>
-                </div>
-              </div>
-
               <div class="flex flex-wrap gap-2 pt-1">
                 <button class="btn-primary" data-action="save-settings">
                   <i data-lucide="save" class="w-4 h-4 inline mr-1"></i> Save Configuration
@@ -1088,28 +885,7 @@ When you are unsure or don't have reliable information, say so clearly. Never fa
               stopSpeaking();
               break;
             }
-            case 'tts-speak': {
-              const si = parseInt(act.dataset.slot, 10);
-              const mi = parseInt(act.dataset.msg, 10);
-              const msg = STATE.slots[si]?.messages[mi];
-              if (msg && msg.role === 'assistant') ttsSpeak(msg.content, si, mi);
-              break;
-            }
-            case 'toggle-tts': {
-              readTtsFields();
-              TTS_STATE.enabled = !TTS_STATE.enabled;
-              saveTtsSettings();
-              render();
-              break;
-            }
-            case 'toggle-tts-autospeak': {
-              readTtsFields();
-              TTS_STATE.autoSpeak = !TTS_STATE.autoSpeak;
-              saveTtsSettings();
-              render();
-              break;
-            }
-            case 'save-settings': readFields(); readTtsFields(); saveSettings(); saveTtsSettings(); render(); break;
+            case 'save-settings': readFields(); saveSettings(); render(); break;
             case 'reset-slot': {
               const s = STATE.slots[idx];
               const DEFAULT_PROMPTS = ['You are a helpful AI assistant. Be concise and friendly.', ASSISTANT_2_PROMPT, 'You are a helpful AI assistant. Be concise and friendly.', 'You are a helpful AI assistant. Be concise and friendly.'];
@@ -1166,13 +942,6 @@ When you are unsure or don't have reliable information, say so clearly. Never fa
         if (p) s.prompt = p.value.trim() || s.prompt;
         if (vn) s.voiceName = vn.value.trim() || s.label;
         if (vp) s.voicePersonality = vp.value.trim() || DEFAULT_VOICE_PERSONALITY;
-      }
-
-      function readTtsFields() {
-        const v = document.getElementById('setting-tts-voice');
-        const u = document.getElementById('setting-tts-url');
-        if (v) TTS_STATE.voiceId = v.value;
-        if (u) TTS_STATE.workerUrl = u.value.trim() || TTS_DEFAULT_WORKER_URL;
       }
 
       /* ========== BOOT ========== */
