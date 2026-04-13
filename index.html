@@ -37,6 +37,34 @@
       .chat-bubble { padding: 10px 14px; border-radius: 12px; font-size: 14px; line-height: 1.5; max-width: 85%; word-wrap: break-word; white-space: pre-wrap; }
       .chat-user { background: var(--primary); color: #fff; border-radius: 12px 12px 4px 12px; margin-left: auto; }
       .chat-bot { background: #f1f5f9; color: #1e293b; border-radius: 12px 12px 12px 4px; }
+
+      /* ===== Assistant 1 structured HTML cards ===== */
+      .chat-html { white-space: normal; }
+      .chat-html details { margin: 6px 0; border: 1px solid #e2e8f0; border-radius: 10px; overflow: hidden; background: #fff; transition: box-shadow 0.2s; }
+      .chat-html details[open] { box-shadow: 0 2px 8px rgba(15,23,42,0.06); }
+      .chat-html summary { display: flex; align-items: center; gap: 8px; padding: 10px 14px; font-weight: 600; font-size: 13px; color: var(--navy); cursor: pointer; user-select: none; background: linear-gradient(135deg, #f8fafc, #f1f5f9); border-bottom: 1px solid transparent; transition: background 0.15s, border-color 0.15s; list-style: none; }
+      .chat-html details[open] > summary { border-bottom-color: #e2e8f0; background: linear-gradient(135deg, #eef2ff, #e0e7ff); }
+      .chat-html summary::-webkit-details-marker { display: none; }
+      .chat-html summary::before { content: '\25B6'; font-size: 9px; color: #94a3b8; transition: transform 0.2s; flex-shrink: 0; }
+      .chat-html details[open] > summary::before { transform: rotate(90deg); color: var(--primary); }
+      .chat-html summary:hover { background: linear-gradient(135deg, #eef2ff, #dbeafe); }
+      .chat-html summary .s-icon { width: 22px; height: 22px; border-radius: 6px; display: grid; place-items: center; font-size: 12px; flex-shrink: 0; }
+      .chat-html details > div { padding: 12px 14px; font-size: 13px; line-height: 1.65; color: #334155; }
+      .chat-html details > div p { margin: 0 0 8px; }
+      .chat-html details > div p:last-child { margin-bottom: 0; }
+      .chat-html details > div ul, .chat-html details > div ol { margin: 4px 0 8px 18px; padding: 0; }
+      .chat-html details > div li { margin-bottom: 4px; }
+      .chat-html details > div strong { color: var(--navy); }
+      .chat-html details > div code { background: #f1f5f9; padding: 2px 5px; border-radius: 4px; font-size: 12px; }
+      .chat-html .summary-card { background: linear-gradient(135deg, #0070F3, #005AD0); color: #fff; border-radius: 10px; padding: 14px 16px; margin-bottom: 8px; font-size: 13px; line-height: 1.6; }
+      .chat-html .summary-card strong { color: #fff; }
+      .chat-html .summary-card p { margin: 0 0 6px; }
+      .chat-html .summary-card p:last-child { margin-bottom: 0; }
+      .chat-html .section-group { margin-top: 4px; }
+      .chat-html .checklist-item { display: flex; align-items: flex-start; gap: 6px; margin-bottom: 3px; }
+      .chat-html .check { color: #10b981; font-weight: 700; flex-shrink: 0; }
+      .chat-html .pending { color: #f59e0b; flex-shrink: 0; }
+      .chat-html h4 { margin: 0 0 6px; font-size: 13px; font-weight: 700; color: var(--navy); }
       .chat-input-row { display: flex; gap: 8px; align-items: center; padding: 12px; border-top: 1px solid #e2e8f0; background: #fff; }
       .chat-input-row input { flex: 1; border-radius: 9999px; padding: 10px 16px; font-size: 14px; }
       .chat-send { width: 40px; height: 40px; border-radius: 50%; background: var(--primary); color: #fff; border: none; display: grid; place-items: center; cursor: pointer; transition: background 0.2s; flex-shrink: 0; }
@@ -141,6 +169,53 @@ When you are unsure or don't have reliable information, say so clearly. Never fa
 
       const DEFAULT_VOICE_PERSONALITY = "Keep all responses to 2-3 short sentences since they will be spoken aloud. Use natural conversational language. Say numbers the way people talk \u2014 like '120 grand' not '$120,000'. Never use markdown, bullet points, or formatting. Be direct and warm.";
 
+      const ASSISTANT_1_PROMPT = `You are a world-class AI assistant designed by a senior UX engineer from Google/Salesforce/Microsoft. You deliver every response as structured, interactive HTML cards.
+
+# CRITICAL OUTPUT FORMAT — ALWAYS FOLLOW THIS EXACTLY
+
+Every response MUST use this exact HTML structure. No exceptions. No markdown. Only raw HTML.
+
+## Structure
+
+1. **Summary Card** (ALWAYS first) — a brief 2-3 sentence overview wrapped in:
+\`\`\`
+<div class="summary-card">
+  <strong>Summary</strong>
+  <p>Your concise overview here.</p>
+</div>
+\`\`\`
+
+2. **Collapsible Detail Sections** — group ALL detailed content into collapsible sections:
+\`\`\`
+<div class="section-group">
+  <details>
+    <summary><span class="s-icon" style="background:#dbeafe;color:#2563eb">EMOJI</span> Section Title</summary>
+    <div>
+      <p>Content here with <strong>bold highlights</strong> for key terms.</p>
+      <ul>
+        <li><span class="check">\u2713</span> Completed item</li>
+        <li><span class="pending">\u25CB</span> Pending item</li>
+      </ul>
+    </div>
+  </details>
+</div>
+\`\`\`
+
+## Rules
+
+- NEVER use markdown. ONLY output raw HTML using the tags above.
+- ALWAYS start with the summary-card div.
+- Group related information into logical collapsible sections (3-7 sections typical).
+- Use descriptive section titles with a relevant emoji in the s-icon span.
+- Use check marks (\u2713) for confirmed/completed items, circles (\u25CB) for pending/unknown.
+- Use <strong> tags for key terms, names, numbers, and important concepts.
+- Use <p>, <ul>, <ol>, <li>, <code> tags inside detail sections. Never use <h1>-<h6> outside summary. Use <h4> sparingly inside sections.
+- Keep each section focused. If a topic is complex, break it into multiple sections.
+- Use these icon background colors to categorize: blue (#dbeafe/#2563eb) for info, green (#dcfce7/#16a34a) for success/done, amber (#fef3c7/#d97706) for warnings/pending, red (#fee2e2/#dc2626) for errors/critical, purple (#f3e8ff/#7c3aed) for technical.
+- Make the content scannable — a user should understand the answer from the summary card alone, then drill into sections for detail.
+- Be thorough in the detail sections but concise in the summary.
+- If the user asks a simple question (yes/no, one fact), still use the format but with fewer sections.`;
+
       function makeSlot(label, prompt) {
         return {
           label, apiKey: DEFAULT_API_KEY, prompt,
@@ -159,7 +234,7 @@ When you are unsure or don't have reliable information, say so clearly. Never fa
         expandedSlot: null,
         editingSlot: 0,
         slots: [
-          makeSlot('Assistant 1', 'You are a helpful AI assistant. Be concise and friendly.'),
+          makeSlot('Assistant 1', ASSISTANT_1_PROMPT),
           makeSlot('Assistant 2', ASSISTANT_2_PROMPT),
           makeSlot('Assistant 3', 'You are a helpful AI assistant. Be concise and friendly.'),
           makeSlot('Assistant 4', 'You are a helpful AI assistant. Be concise and friendly.')
@@ -535,7 +610,11 @@ When you are unsure or don't have reliable information, say so clearly. Never fa
           if (data.error) throw new Error(data.error.message || 'API error');
           const reply = data.content?.map(c => c.text || '').join('') || 'No response.';
           slot.messages.push({ role: 'assistant', content: reply });
-          if (viaVoice) speakText(reply, idx);
+          if (viaVoice) {
+            // For Assistant 1, speak only the summary card text
+            const textToSpeak = idx === 0 ? extractSummary(reply) : reply;
+            speakText(textToSpeak, idx);
+          }
         } catch (err) {
           slot.messages.push({ role: 'assistant', content: '\u26a0\ufe0f ' + (err.message || 'Connection failed. Check your API key in Settings.') });
           if (viaVoice) {
@@ -570,6 +649,38 @@ When you are unsure or don't have reliable information, say so clearly. Never fa
       /* ========== HELPERS ========== */
       function escHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
       function escAttr(s) { return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;'); }
+
+      // Sanitize HTML for Assistant 1: only allow safe structural tags
+      function sanitizeHtml(raw) {
+        const div = document.createElement('div');
+        div.innerHTML = raw;
+        // Remove script, style, iframe, form, input, and event attributes
+        div.querySelectorAll('script,style,iframe,form,input,textarea,button,object,embed,link,meta').forEach(el => el.remove());
+        div.querySelectorAll('*').forEach(el => {
+          for (const attr of [...el.attributes]) {
+            if (attr.name.startsWith('on') || attr.name === 'href' && attr.value.trim().toLowerCase().startsWith('javascript')) {
+              el.removeAttribute(attr.name);
+            }
+          }
+        });
+        return div.innerHTML;
+      }
+
+      // Render bot message content: HTML for slot 0, escaped text for others
+      function renderBotContent(content, slotIdx) {
+        if (slotIdx === 0) return sanitizeHtml(content);
+        return escHtml(content);
+      }
+
+      // Extract summary text from Assistant 1 HTML for voice reading
+      function extractSummary(html) {
+        const div = document.createElement('div');
+        div.innerHTML = html;
+        const card = div.querySelector('.summary-card');
+        if (card) return card.textContent.replace(/\s+/g, ' ').trim();
+        // Fallback: first 200 chars of plain text
+        return div.textContent.replace(/\s+/g, ' ').trim().substring(0, 200);
+      }
 
       /* ========== RENDER ========== */
       function render() {
@@ -639,7 +750,9 @@ When you are unsure or don't have reliable information, say so clearly. Never fa
                 </div>
               ` : msgs.map(m => `
                 <div class="flex ${m.role==='user'?'justify-end':'justify-start'}">
-                  <div class="${m.role==='user'?'chat-user':'chat-bot'}" style="font-size:11px;padding:6px 10px;max-width:85%;word-wrap:break-word;white-space:pre-wrap">${escHtml(m.content)}</div>
+                  ${m.role==='user'
+                    ? `<div class="chat-user" style="font-size:11px;padding:6px 10px;max-width:85%;word-wrap:break-word;white-space:pre-wrap">${escHtml(m.content)}</div>`
+                    : `<div class="chat-bot ${idx===0?'chat-html':''}" style="font-size:11px;padding:6px 10px;max-width:95%;word-wrap:break-word;${idx===0?'white-space:normal':'white-space:pre-wrap'}">${renderBotContent(m.content, idx)}</div>`}
                 </div>
               `).join('')}
               ${slot.loading?'<div class="flex justify-start"><div class="chat-bot" style="padding:6px 12px"><span class="typing-dot"></span> <span class="typing-dot"></span> <span class="typing-dot"></span></div></div>':''}
@@ -741,7 +854,9 @@ When you are unsure or don't have reliable information, say so clearly. Never fa
               ` : slot.messages.map(m => `
                 <div class="flex ${m.role==='user'?'justify-end':'justify-start'}">
                   ${m.role==='assistant'?'<div class="w-7 h-7 rounded-full grid place-items-center text-white text-xs font-bold flex-shrink-0 mr-2 mt-1" style="background:'+color+'">'+slot.label.charAt(0)+'</div>':''}
-                  <div class="chat-bubble ${m.role==='user'?'chat-user':'chat-bot'}">${escHtml(m.content)}</div>
+                  ${m.role==='user'
+                    ? `<div class="chat-bubble chat-user">${escHtml(m.content)}</div>`
+                    : `<div class="chat-bubble chat-bot ${idx===0?'chat-html':''}" style="${idx===0?'white-space:normal;max-width:95%':''}">${renderBotContent(m.content, idx)}</div>`}
                 </div>
               `).join('')}
               ${slot.loading?`<div class="flex justify-start"><div class="w-7 h-7 rounded-full grid place-items-center text-white text-xs font-bold flex-shrink-0 mr-2 mt-1" style="background:${color}">${slot.label.charAt(0)}</div><div class="chat-bubble chat-bot"><span class="typing-dot"></span> <span class="typing-dot"></span> <span class="typing-dot"></span></div></div>`:''}
@@ -888,7 +1003,7 @@ When you are unsure or don't have reliable information, say so clearly. Never fa
             case 'save-settings': readFields(); saveSettings(); render(); break;
             case 'reset-slot': {
               const s = STATE.slots[idx];
-              const DEFAULT_PROMPTS = ['You are a helpful AI assistant. Be concise and friendly.', ASSISTANT_2_PROMPT, 'You are a helpful AI assistant. Be concise and friendly.', 'You are a helpful AI assistant. Be concise and friendly.'];
+              const DEFAULT_PROMPTS = [ASSISTANT_1_PROMPT, ASSISTANT_2_PROMPT, 'You are a helpful AI assistant. Be concise and friendly.', 'You are a helpful AI assistant. Be concise and friendly.'];
               s.apiKey = DEFAULT_API_KEY; s.prompt = DEFAULT_PROMPTS[idx];
               s.label = 'Assistant ' + (idx + 1);
               s.voiceName = s.label;
