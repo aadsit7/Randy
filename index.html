@@ -176,7 +176,7 @@ When you are unsure or don't have reliable information, say so clearly. Never fa
       const DEFAULT_VOICE_PERSONALITY = "Keep all responses to 2-3 short sentences since they will be spoken aloud. Use natural conversational language. Say numbers the way people talk \u2014 like '120 grand' not '$120,000'. Never use markdown, bullet points, or formatting. Be direct and warm.";
 
       // ElevenLabs TTS configuration
-      const DEFAULT_ELEVENLABS_API_KEY = 'sk_9add5313a8b57b9fed2f069e878fab1cfede03d04d378135';
+      const DEFAULT_ELEVENLABS_API_KEY = '';
       const DEFAULT_ELEVENLABS_VOICE_ID = 'JBFqnCBsd6RMkjVDRZzb'; // George
       const ELEVENLABS_VOICES = [
         { id: 'JBFqnCBsd6RMkjVDRZzb', name: 'George', desc: 'Warm British male' },
@@ -376,7 +376,11 @@ You deliver every response as structured, interactive HTML cards. No exceptions.
 
       async function elevenLabsSpeak(text, idx) {
         const slot = STATE.slots[idx];
-        if (!slot.elevenlabsEnabled || !slot.elevenlabsApiKey) return false;
+        if (!slot.elevenlabsEnabled) return false;
+        if (!slot.elevenlabsApiKey) {
+          showToast('No ElevenLabs API key \u2014 add one in Settings or disable ElevenLabs');
+          return false;
+        }
 
         const clean = stripMarkdown(text);
         if (!clean) return false;
@@ -408,7 +412,16 @@ You deliver every response as structured, interactive HTML cards. No exceptions.
 
           if (!resp.ok) {
             const errBody = await resp.text().catch(() => '');
-            throw new Error(`ElevenLabs ${resp.status}: ${errBody.substring(0, 120)}`);
+            let userMsg;
+            switch (resp.status) {
+              case 401: userMsg = 'Invalid ElevenLabs API key — update in Settings'; break;
+              case 403: userMsg = 'ElevenLabs API key lacks permission — check your plan'; break;
+              case 429: userMsg = 'ElevenLabs rate limit reached — try again shortly'; break;
+              case 400: userMsg = 'ElevenLabs request error — voice or model may be invalid'; break;
+              default:  userMsg = `ElevenLabs error (${resp.status}) — using browser voice`;
+            }
+            console.warn(`ElevenLabs TTS ${resp.status}:`, errBody.substring(0, 200));
+            throw new Error(userMsg);
           }
 
           const blob = await resp.blob();
@@ -421,8 +434,9 @@ You deliver every response as structured, interactive HTML cards. No exceptions.
           await audio.play();
           return true;
         } catch (err) {
-          console.warn('ElevenLabs TTS failed, falling back to browser TTS:', err.message);
-          showToast('ElevenLabs failed — using browser voice');
+          const msg = err.message || 'ElevenLabs failed';
+          console.warn('ElevenLabs TTS failed, falling back to browser TTS:', msg);
+          showToast(msg);
           slot.isSpeaking = false;
           EL_AUDIO.speakingSlot = null;
           render();
@@ -1109,7 +1123,7 @@ You deliver every response as structured, interactive HTML cards. No exceptions.
                 <div class="mb-3">
                   <label class="block text-[11px] font-semibold text-slate-500 uppercase tracking-wide mb-1">ElevenLabs API Key</label>
                   <input type="password" id="setting-el-apikey" value="${escAttr(slot.elevenlabsApiKey)}" placeholder="sk_..." />
-                  <p class="text-[11px] text-slate-400 mt-1">Get a free key at elevenlabs.io. Each key includes free monthly characters.</p>
+                  <p class="text-[11px] text-slate-400 mt-1">Get a free key at <a href="https://elevenlabs.io/app/settings/api-keys" target="_blank" rel="noopener" style="color:#0070F3;text-decoration:underline">elevenlabs.io</a>. Each key includes free monthly characters.</p>
                 </div>
 
                 <div class="mb-3">
