@@ -1338,9 +1338,6 @@ Search first, then answer. Never skip the search step. Never guess when you can 
                 <button class="btn-danger" data-action="clear-chat" data-idx="${es}">
                   <i data-lucide="trash-2" class="w-4 h-4 inline mr-1"></i> Clear Chat History
                 </button>
-                <button class="btn-outline" style="font-size:11px;padding:5px 12px" data-action="copy-key" data-key="agent">
-                  <i data-lucide="copy" class="w-3 h-3 inline mr-1"></i> Agent
-                </button>
                 <button class="btn-outline" style="font-size:11px;padding:5px 12px" data-action="copy-key" data-key="voice">
                   <i data-lucide="copy" class="w-3 h-3 inline mr-1"></i> Voice
                 </button>
@@ -1369,13 +1366,12 @@ Search first, then answer. Never skip the search step. Never guess when you can 
             case 'clear-chat': clearChat(idx); break;
             case 'copy-key': {
               const keys = {
-                agent: 'sk-ant-api03-CSSZg-24BJtdvaN7HBOXhCYEdFMFUyZk66jPs2T_Tvr5rHNGScUtEwdnpA516',
                 voice: 'sk_9add5313a8b57b9fed2f069e878fab1cfede03d04d378135'
               };
               const which = act.dataset.key;
               const val = keys[which];
               if (!val) break;
-              const done = () => showToast((which === 'agent' ? 'Agent' : 'Voice') + ' key copied');
+              const done = () => showToast('Voice key copied');
               if (navigator.clipboard && navigator.clipboard.writeText) {
                 navigator.clipboard.writeText(val).then(done).catch(() => {
                   const ta = document.createElement('textarea');
