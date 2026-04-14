@@ -924,13 +924,14 @@ Search first, then answer. Never skip the search step. Never guess when you can 
               model: "claude-sonnet-4-20250514",
               max_tokens: 1024,
               system: systemPrompt,
+              tools: [{ type: "web_search_20250305", name: "web_search" }],
               messages: slot.messages.filter(m => m.role === 'user' || m.role === 'assistant')
             })
           });
 
           const data = await resp.json();
           if (data.error) throw new Error(data.error.message || 'API error');
-          const reply = data.content?.map(c => c.text || '').join('') || 'No response.';
+          const reply = data.content?.filter(c => c.type === 'text').map(c => c.text).join('') || 'No response.';
           slot.messages.push({ role: 'assistant', content: reply });
           const assistantMsgIdx = slot.messages.length - 1;
           const lastUserMsg = slot.messages.filter(m => m.role === 'user').pop();
