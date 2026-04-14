@@ -560,7 +560,8 @@ Web search is invisible to the user. Never mention that you are searching, looki
         toastMessage: '',
         playingMsg: null,        // { slot, msg } of the specific assistant message currently being spoken
         interimText: '',         // live partial transcript from SpeechRecognition
-        interimSlot: null        // slot idx the interim transcript belongs to
+        interimSlot: null,       // slot idx the interim transcript belongs to
+        lastTtsEndAt: 0          // timestamp of last TTS end, for post-playback echo grace window
       };
 
       const SLOT_COLORS = ['#10b981'];
@@ -669,6 +670,7 @@ Web search is invisible to the user. Never mention that you are searching, looki
             }
             EL_AUDIO.speakingSlot = null;
             VOICE.playingMsg = null;
+            markTtsEnded();
             render();
           });
           a.addEventListener('error', () => {
@@ -678,6 +680,7 @@ Web search is invisible to the user. Never mention that you are searching, looki
             }
             EL_AUDIO.speakingSlot = null;
             VOICE.playingMsg = null;
+            markTtsEnded();
             render();
           });
           document.body.appendChild(a);
@@ -696,6 +699,7 @@ Web search is invisible to the user. Never mention that you are searching, looki
 
       function stopElAudio() {
         const a = EL_AUDIO.el;
+        const wasPlaying = !!(a && EL_AUDIO.speakingSlot !== null);
         if (a) {
           a.pause();
           a.removeAttribute('src');
@@ -707,6 +711,7 @@ Web search is invisible to the user. Never mention that you are searching, looki
         }
         EL_AUDIO.speakingSlot = null;
         VOICE.playingMsg = null;
+        if (wasPlaying) markTtsEnded();
       }
 
       // Play a cached ElevenLabs blob URL that lives on a message (no re-fetch).
@@ -827,6 +832,7 @@ Web search is invisible to the user. Never mention that you are searching, looki
           slot.isSpeaking = false;
           EL_AUDIO.speakingSlot = null;
           VOICE.playingMsg = null;
+          markTtsEnded();
           render();
           return false;
         }
@@ -859,6 +865,7 @@ Web search is invisible to the user. Never mention that you are searching, looki
         const slot = STATE.slots[idx];
         const q = slot && slot.ttsQueue;
         if (!q) return;
+        const wasActive = !!q.audio || q.blobs.length > 0;
         try {
           if (q.audio) {
             q.audio.pause();
@@ -870,6 +877,7 @@ Web search is invisible to the user. Never mention that you are searching, looki
         if (EL_AUDIO.speakingSlot === idx) EL_AUDIO.speakingSlot = null;
         slot.isSpeaking = false;
         VOICE.playingMsg = null;
+        if (wasActive) markTtsEnded();
       }
 
       function enqueueTtsSentence(idx, text) {
@@ -909,6 +917,7 @@ Web search is invisible to the user. Never mention that you are searching, looki
             slot.isSpeaking = false;
             if (EL_AUDIO.speakingSlot === idx) EL_AUDIO.speakingSlot = null;
             VOICE.playingMsg = null;
+            markTtsEnded();
             render();
           }
         }
@@ -1133,6 +1142,7 @@ Web search is invisible to the user. Never mention that you are searching, looki
             VOICE.awaitingCommand = false;
           }
           VOICE.playingMsg = null;
+          markTtsEnded();
           render();
         };
         u.onerror = u.onend;
@@ -1140,6 +1150,7 @@ Web search is invisible to the user. Never mention that you are searching, looki
         catch {
           STATE.slots[idx].isSpeaking = false;
           VOICE.playingMsg = null;
+          markTtsEnded();
           render();
         }
       }
@@ -1153,6 +1164,7 @@ Web search is invisible to the user. Never mention that you are searching, looki
         }
         STATE.slots.forEach(s => { s.isSpeaking = false; });
         VOICE.playingMsg = null;
+        markTtsEnded();
         render();
       }
 
@@ -1160,6 +1172,17 @@ Web search is invisible to the user. Never mention that you are searching, looki
       function anyVoiceEnabled() {
         return STATE.slots.some(s => s.voiceEnabled);
       }
+
+      // True while Randy is speaking OR within the 700ms tail window after
+      // speech ends. The physical speaker keeps producing audio briefly after
+      // the last onended fires, and we don't want the mic to transcribe
+      // Randy's own voice as user input.
+      const TTS_ECHO_GRACE_MS = 700;
+      function ttsEchoActive() {
+        if (STATE.slots.some(s => s.isSpeaking)) return true;
+        return (Date.now() - VOICE.lastTtsEndAt) < TTS_ECHO_GRACE_MS;
+      }
+      function markTtsEnded() { VOICE.lastTtsEndAt = Date.now(); }
 
       function escapeRegex(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 
@@ -1175,6 +1198,11 @@ Web search is invisible to the user. Never mention that you are searching, looki
       // interim transcript, returns to passive wake-word listening. Called from the Stop
       // button and from spoken exit phrases.
       function exitConversationMode() {
+        // If an interim transcript was pending for a slot, clear its composer
+        // text so we don't leave the half-captured phrase hanging in the input.
+        if (VOICE.interimSlot !== null && STATE.slots[VOICE.interimSlot]) {
+          STATE.slots[VOICE.interimSlot].inputText = '';
+        }
         // Abort whatever's in flight (Anthropic stream + ElevenLabs stream).
         STATE.slots.forEach((s, i) => {
           if (s.abortController) { try { s.abortController.abort(); } catch {} s.abortController = null; }
@@ -1206,9 +1234,10 @@ Web search is invisible to the user. Never mention that you are searching, looki
         const text = String(raw).trim();
         if (!text) return;
 
-        // Echo guard: while TTS is speaking, only accept short stop commands so the
-        // assistant's own voice doesn't get re-transcribed as input.
-        if (STATE.slots.some(s => s.isSpeaking)) {
+        // Echo guard: while TTS is speaking (or within the post-playback tail
+        // window) only accept short stop commands, so Randy's own voice isn't
+        // re-transcribed as user input.
+        if (ttsEchoActive()) {
           const t = text.toLowerCase();
           if (/^(stop|cancel|quiet|shut up|never mind)\b/.test(t)) stopSpeaking();
           return;
@@ -1277,6 +1306,10 @@ Web search is invisible to the user. Never mention that you are searching, looki
           return;
         }
 
+        // Any remaining utterance that lands inside the TTS tail window is
+        // almost certainly Randy's own voice — drop it.
+        if (ttsEchoActive()) return;
+
         // Otherwise scan for a wake word across enabled slots
         for (let i = 0; i < STATE.slots.length; i++) {
           const slot = STATE.slots[i];
@@ -1284,6 +1317,11 @@ Web search is invisible to the user. Never mention that you are searching, looki
           const pattern = buildWakePattern(slot.voiceName || slot.label);
           const match = text.match(pattern);
           if (!match) continue;
+
+          // Don't accept a new wake-word while a previous turn is still
+          // streaming a response — that utterance is likely echo, and we
+          // don't want two concurrent sendMessage calls for the same slot.
+          if (slot.loading) return;
 
           playBeep();
 
@@ -1307,14 +1345,16 @@ Web search is invisible to the user. Never mention that you are searching, looki
           VOICE.awaitingCommand = true;
           slot.isListening = true;
           if (VOICE.wakeTimeoutId) clearTimeout(VOICE.wakeTimeoutId);
+          const armedSlotIdx = i;
           VOICE.wakeTimeoutId = setTimeout(() => {
-            if (!VOICE.conversationMode) {
-              VOICE.activeSlot = null;
-              VOICE.awaitingCommand = false;
-              slot.isListening = false;
-              VOICE.wakeTimeoutId = null;
-              render();
-            }
+            VOICE.wakeTimeoutId = null;
+            if (VOICE.conversationMode) return;
+            if (VOICE.activeSlot !== armedSlotIdx) return; // user already moved on
+            VOICE.activeSlot = null;
+            VOICE.awaitingCommand = false;
+            const s = STATE.slots[armedSlotIdx];
+            if (s) s.isListening = false;
+            render();
           }, 30000);
           render();
           return;
@@ -1334,9 +1374,10 @@ Web search is invisible to the user. Never mention that you are searching, looki
       // Update the interim transcript in place without re-rendering the whole tree.
       // This is called on every SpeechRecognition tick (~100-300ms), so it must be cheap.
       function updateInterim(text) {
-        // Echo guard: suppress interim while Randy is speaking so his own voice
-        // being re-transcribed doesn't flash onscreen.
-        if (STATE.slots.some(s => s.isSpeaking)) { clearInterim(); return; }
+        // Echo guard: suppress interim while Randy is speaking (or in the
+        // brief tail window after) so his own voice being re-transcribed
+        // doesn't flash onscreen.
+        if (ttsEchoActive()) { clearInterim(); return; }
         const trimmed = String(text || '').trim();
         if (trimmed.length < 2) { clearInterim(); return; }
         const target = interimTargetSlot();
@@ -1415,9 +1456,18 @@ Web search is invisible to the user. Never mention that you are searching, looki
         };
         r.onend = () => {
           // Auto-restart if any slot still wants voice and we haven't been told to stop.
-          if (VOICE.wantRunning && anyVoiceEnabled()) {
-            try { r.start(); } catch {}
-          }
+          if (!VOICE.wantRunning || !anyVoiceEnabled()) return;
+          // r.start() can throw InvalidStateError if the recognizer is still
+          // shutting down from a previous session — retry with backoff so we
+          // don't end up with a silently-dead recognizer.
+          const tryStart = (attempt) => {
+            if (!VOICE.wantRunning || !anyVoiceEnabled()) return;
+            try { r.start(); }
+            catch (err) {
+              if (attempt < 4) setTimeout(() => tryStart(attempt + 1), 250 * (attempt + 1));
+            }
+          };
+          tryStart(0);
         };
         VOICE.recognition = r;
         return r;
@@ -1543,12 +1593,16 @@ Web search is invisible to the user. Never mention that you are searching, looki
 
       async function sendMessage(idx, viaVoice = false) {
         const slot = STATE.slots[idx];
+        // Claim the slot synchronously BEFORE any await/render, so two
+        // near-simultaneous callers (e.g. voice finalization + Enter key)
+        // can't both pass the check-then-set guard.
+        if (slot.loading) return;
         const text = slot.inputText.trim();
-        if (!text || slot.loading) return;
+        if (!text) return;
+        slot.loading = true;
 
         slot.messages.push({ role: 'user', content: text });
         slot.inputText = '';
-        slot.loading = true;
 
         // Abort controller so Stop/Cancel can tear down the in-flight request.
         const controller = new AbortController();
@@ -1679,12 +1733,9 @@ Web search is invisible to the user. Never mention that you are searching, looki
             const errMsg = '\u26a0\ufe0f ' + (err.message || 'Connection failed. Check your API key in Settings.');
             if (placeholder && placeholder.role === 'assistant') placeholder.content = errMsg;
             else slot.messages.push({ role: 'assistant', content: errMsg });
-            if (viaVoice) {
-              VOICE.activeSlot = null;
-              VOICE.awaitingCommand = false;
-              VOICE.conversationMode = false;
-              teardownTtsQueue(idx);
-            }
+            // Keep the user in conversation mode so they can just try again —
+            // a transient fetch error shouldn't force them to re-wake Randy.
+            if (viaVoice) teardownTtsQueue(idx);
           }
         }
 
@@ -1756,6 +1807,11 @@ Web search is invisible to the user. Never mention that you are searching, looki
       function interimBubbleHtml(slotIdx, expanded) {
         if (!VOICE.wantRunning || !VOICE.interimText) return '';
         if (VOICE.interimSlot !== slotIdx) return '';
+        // Don't flash an interim bubble for a slot that isn't voice-enabled
+        // or while Randy's voice is echoing through the mic.
+        const slot = STATE.slots[slotIdx];
+        if (!slot || !slot.voiceEnabled) return '';
+        if (ttsEchoActive()) return '';
         const fontSize = expanded ? '' : 'font-size:11px;padding:6px 10px;';
         const cancelSize = expanded ? 'font-size:11px;padding:4px 10px;' : 'font-size:10px;padding:3px 8px;';
         return `
@@ -1905,7 +1961,10 @@ Web search is invisible to the user. Never mention that you are searching, looki
         const voiceOn = !!slot.voiceEnabled;
         const isSpeaking = !!slot.isSpeaking;
         const inConversation = VOICE.conversationMode && VOICE.activeSlot === idx;
-        const isListening = voiceOn && (inConversation || (VOICE.activeSlot === idx && VOICE.awaitingCommand));
+        // Mask the red "listening" state off while Randy is thinking or
+        // talking — the mic isn't actually accepting input then (echo guard).
+        const isListening = voiceOn && !slot.loading && !isSpeaking &&
+          (inConversation || (VOICE.activeSlot === idx && VOICE.awaitingCommand));
 
         // Big mic button state. Four visual modes:
         //   off (grey)  ·  idle listening (blue, no pulse)  ·  listening/recording (red, pulse)  ·  speaking (green with stop icon)
@@ -1986,7 +2045,7 @@ Web search is invisible to the user. Never mention that you are searching, looki
                   </button>
                 </div>
               ` : ''}
-              <button class="action-btn send" title="Send message" aria-label="Send message" data-action="send-home" data-idx="${idx}" ${slot.loading ? 'disabled' : ''}>
+              <button class="action-btn send" title="Send message" aria-label="Send message" data-action="send-home" data-idx="${idx}" ${(slot.loading || !hasText) ? 'disabled' : ''}>
                 <i data-lucide="send" class="w-5 h-5"></i>
               </button>
             </div>
@@ -1996,13 +2055,20 @@ Web search is invisible to the user. Never mention that you are searching, looki
       /* ========== VOICE WIDGET (expanded view FAB) ========== */
       function renderVoiceFab(slot, idx, color) {
         if (!VOICE.srSupported) return '';
-        const isActiveCommand = VOICE.activeSlot === idx && VOICE.awaitingCommand;
         const isSpeaking = slot.isSpeaking;
         const enabled = slot.voiceEnabled;
-        const inConversation = VOICE.conversationMode && VOICE.activeSlot === idx;
+        // "Listening" visuals are only true when we're actually accepting mic
+        // input — never while Randy is thinking or talking.
+        const isActiveCommand = VOICE.activeSlot === idx && VOICE.awaitingCommand && !slot.loading && !isSpeaking;
+        const inConversation = VOICE.conversationMode && VOICE.activeSlot === idx && !slot.loading && !isSpeaking;
         // Show the dedicated Stop button whenever the system is "busy" — speaking, loading,
         // armed for a command, or in continuous conversation. Click exits conversation mode.
-        const showStopBtn = enabled && (inConversation || isSpeaking || isActiveCommand || slot.loading);
+        const showStopBtn = enabled && (
+          (VOICE.conversationMode && VOICE.activeSlot === idx) ||
+          isSpeaking ||
+          (VOICE.activeSlot === idx && VOICE.awaitingCommand) ||
+          slot.loading
+        );
 
         let inner, bg, title, extraClass = '';
         if (!enabled) {
@@ -2100,7 +2166,7 @@ Web search is invisible to the user. Never mention that you are searching, looki
             </div>
             <div class="chat-input-row flex-shrink-0">
               <input type="text" id="expanded-input" placeholder="Type a message..." value="${escAttr(slot.inputText)}" ${slot.loading?'disabled':''} />
-              <button class="chat-send" data-action="send-expanded" ${slot.loading?'disabled':''}>
+              <button class="chat-send" data-action="send-expanded" ${(slot.loading || !(slot.inputText || '').trim()) ? 'disabled' : ''}>
                 <i data-lucide="send" class="w-4 h-4"></i>
               </button>
             </div>
@@ -2470,11 +2536,25 @@ Web search is invisible to the user. Never mention that you are searching, looki
         });
 
         document.addEventListener('input', e => {
+          // Keep STATE in sync with the composer, and keep the Send button's
+          // disabled state in sync live — we can't re-render on every keystroke
+          // because that would yank focus out of the composer, so we patch the
+          // button's disabled attr directly.
+          const syncSendBtn = (sendBtn, slot) => {
+            if (!sendBtn || !slot) return;
+            const shouldDisable = !!slot.loading || !(slot.inputText || '').trim();
+            if (sendBtn.disabled !== shouldDisable) sendBtn.disabled = shouldDisable;
+          };
           if (e.target.id === 'expanded-input' && STATE.expandedSlot !== null) {
-            STATE.slots[STATE.expandedSlot].inputText = e.target.value;
+            const slot = STATE.slots[STATE.expandedSlot];
+            slot.inputText = e.target.value;
+            syncSendBtn(document.querySelector('[data-action="send-expanded"]'), slot);
           } else if (typeof e.target.id === 'string' && e.target.id.startsWith('home-input-')) {
             const hi = parseInt(e.target.id.slice('home-input-'.length), 10);
-            if (!Number.isNaN(hi) && STATE.slots[hi]) STATE.slots[hi].inputText = e.target.value;
+            if (!Number.isNaN(hi) && STATE.slots[hi]) {
+              STATE.slots[hi].inputText = e.target.value;
+              syncSendBtn(document.querySelector('[data-action="send-home"][data-idx="' + hi + '"]'), STATE.slots[hi]);
+            }
           }
         });
 
