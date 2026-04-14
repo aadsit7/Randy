@@ -258,6 +258,7 @@ Search first, then answer. Never skip the search step. Never guess when you can 
 
       // Google Sheet webhook for saving Q&A results
       let GSHEET_WEBHOOK = 'https://script.google.com/macros/s/AKfycbz0gE7H7Nd6LX9S4JJsWZb4h0W0qf04CDVloFFbfnc_0s80orwybcATHs3L7vicQAbE/exec';
+      const SESSION_ID = 'S-' + Date.now().toString(36) + Math.random().toString(36).substring(2, 6);
 
       function makeSlot(label, prompt) {
         return {
@@ -870,29 +871,56 @@ Search first, then answer. Never skip the search step. Never guess when you can 
       }
 
       /* ========== API ========== */
-      async function saveToSheet(question, answerHtml) {
-        console.log('saveToSheet called, webhook:', GSHEET_WEBHOOK ? 'set' : 'empty');
-        if (!GSHEET_WEBHOOK) return;
-        try {
-          const div = document.createElement('div');
-          div.innerHTML = answerHtml;
-          const plainAnswer = div.textContent.replace(/\s+/g, ' ').trim();
-          const links = [];
-          div.querySelectorAll('a[href]').forEach(a => links.push(a.href));
-          const sources = links.join(', ');
-          await fetch(GSHEET_WEBHOOK, {
-            method: 'POST',
-            mode: 'no-cors',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              question: question,
-              answer: plainAnswer.substring(0, 50000),
-              sources: sources
-            })
-          });
-        } catch (err) {
-          console.warn('Sheet save failed:', err);
+      async function saveToSheet(slotIdx) {
+        if (!GSHEET_WEBHOOK) {
+          console.warn('No Google Sheet webhook URL configured');
+          return;
         }
+        const slot = STATE.slots[slotIdx];
+        if (!slot) return;
+
+        const pairs = [];
+        for (let i = 0; i < slot.messages.length; i++) {
+          if (slot.messages[i].role === 'user' && slot.messages[i + 1]?.role === 'assistant') {
+            pairs.push({
+              question: slot.messages[i].content,
+              answer: slot.messages[i + 1].content
+            });
+          }
+        }
+
+        if (pairs.length === 0) {
+          showToast('No Q&A pairs to save');
+          return;
+        }
+
+        let saved = 0;
+        for (const pair of pairs) {
+          try {
+            const div = document.createElement('div');
+            div.innerHTML = pair.answer;
+            const plainAnswer = div.textContent.replace(/\s+/g, ' ').trim();
+            const links = [];
+            div.querySelectorAll('a[href]').forEach(a => links.push(a.href));
+
+            await fetch(GSHEET_WEBHOOK, {
+              method: 'POST',
+              mode: 'no-cors',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                question: pair.question,
+                answer: plainAnswer.substring(0, 50000),
+                sources: links.join(', '),
+                model: 'claude-sonnet-4-20250514',
+                session_id: SESSION_ID
+              })
+            });
+            saved++;
+          } catch (err) {
+            console.warn('Sheet save failed for pair:', err);
+          }
+        }
+        showToast('Saved ' + saved + ' Q&A pair' + (saved !== 1 ? 's' : '') + ' to Google Sheet');
       }
 
       async function sendMessage(idx, viaVoice = false) {
@@ -937,9 +965,6 @@ Search first, then answer. Never skip the search step. Never guess when you can 
           const reply = data.content?.filter(c => c.type === 'text').map(c => c.text).join('') || 'No response.';
           slot.messages.push({ role: 'assistant', content: reply });
           const assistantMsgIdx = slot.messages.length - 1;
-          const lastUserMsg = slot.messages.filter(m => m.role === 'user').pop();
-          console.log('Saving to sheet:', GSHEET_WEBHOOK, lastUserMsg?.content?.substring(0, 50));
-          saveToSheet(lastUserMsg?.content || '', slot.messages[slot.messages.length - 1].content);
           if (viaVoice) {
             // Speak only the summary card text (all assistants output structured HTML)
             speakText(extractSummary(reply), idx, assistantMsgIdx);
@@ -1117,6 +1142,9 @@ Search first, then answer. Never skip the search step. Never guess when you can 
             </div>
             <div class="chat-input-row flex items-center gap-1.5 px-2 py-2 border-t border-slate-200" style="background:#fff">
               <input type="text" id="home-input-${idx}" placeholder="Type a message..." value="${escAttr(slot.inputText)}" ${slot.loading?'disabled':''} style="flex:1;padding:6px 12px;border:1.5px solid #e2e8f0;border-radius:9999px;font-size:12px;outline:none;color:var(--navy);min-width:0" />
+              <button class="chat-send" style="width:30px;height:30px;background:#10b981" title="Save to Google Sheet" data-action="save-to-sheet" data-idx="${idx}" ${slot.messages.length === 0 ? 'disabled' : ''}>
+                <i data-lucide="download" class="w-3 h-3"></i>
+              </button>
               <button class="chat-send" style="width:30px;height:30px" data-action="send-home" data-idx="${idx}" ${slot.loading?'disabled':''}>
                 <i data-lucide="send" class="w-3 h-3"></i>
               </button>
@@ -1191,6 +1219,9 @@ Search first, then answer. Never skip the search step. Never guess when you can 
                     <i data-lucide="volume-x" class="w-3 h-3 inline mr-1"></i>Stop Speaking
                   </button>
                 ` : ''}
+                <button style="background:transparent;border:1px solid rgba(255,255,255,0.25);color:#10b981;font-size:11px;padding:5px 10px;border-radius:6px;cursor:pointer;font-weight:600" data-action="save-to-sheet" data-idx="${idx}" ${slot.messages.length === 0 ? 'disabled' : ''}>
+                  <i data-lucide="download" class="w-3 h-3 inline mr-1"></i>Save
+                </button>
                 <button style="background:transparent;border:1px solid rgba(255,255,255,0.25);color:rgba(255,255,255,0.7);font-size:11px;padding:5px 10px;border-radius:6px;cursor:pointer;font-weight:600" data-action="clear-chat" data-idx="${idx}">
                   <i data-lucide="trash-2" class="w-3 h-3 inline mr-1"></i>Clear
                 </button>
@@ -1372,6 +1403,7 @@ Search first, then answer. Never skip the search step. Never guess when you can 
             case 'expand-slot': STATE.expandedSlot = idx; render(); scrollChat(); setTimeout(()=>document.getElementById('expanded-input')?.focus(),100); break;
             case 'close-expanded': STATE.expandedSlot = null; render(); break;
             case 'clear-chat': clearChat(idx); break;
+            case 'save-to-sheet': saveToSheet(idx); break;
             case 'copy-key': {
               const keys = {
                 agent: 'sk-ant-api03-CSSZg-24BJtdvaN7HBOXhCYEdFMFUyZk66jPs2T_Tvr5rHNGScUtEwdnpA516',
