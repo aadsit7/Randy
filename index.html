@@ -342,7 +342,7 @@ Search first, then answer. Never skip the search step. Never guess when you can 
           });
         } catch {}
         const savedGsheet = localStorage.getItem('recast_gsheet_url');
-        if (savedGsheet !== null) GSHEET_WEBHOOK = savedGsheet;
+        if (savedGsheet) GSHEET_WEBHOOK = savedGsheet;
       }
 
       loadSettings();
@@ -871,6 +871,7 @@ Search first, then answer. Never skip the search step. Never guess when you can 
 
       /* ========== API ========== */
       async function saveToSheet(question, answerHtml) {
+        console.log('saveToSheet called, webhook:', GSHEET_WEBHOOK ? 'set' : 'empty');
         if (!GSHEET_WEBHOOK) return;
         try {
           const div = document.createElement('div');
@@ -937,7 +938,8 @@ Search first, then answer. Never skip the search step. Never guess when you can 
           slot.messages.push({ role: 'assistant', content: reply });
           const assistantMsgIdx = slot.messages.length - 1;
           const lastUserMsg = slot.messages.filter(m => m.role === 'user').pop();
-          saveToSheet(lastUserMsg?.content || '', reply);
+          console.log('Saving to sheet:', GSHEET_WEBHOOK, lastUserMsg?.content?.substring(0, 50));
+          saveToSheet(lastUserMsg?.content || '', slot.messages[slot.messages.length - 1].content);
           if (viaVoice) {
             // Speak only the summary card text (all assistants output structured HTML)
             speakText(extractSummary(reply), idx, assistantMsgIdx);
