@@ -372,6 +372,50 @@ Search first, then answer. Never skip the search step. Never guess when you can 
         if (savedGsheet) GSHEET_WEBHOOK = savedGsheet;
       }
 
+      async function loadRemoteConfig() {
+        if (!GSHEET_WEBHOOK) return;
+        try {
+          const resp = await fetch(GSHEET_WEBHOOK);
+          if (!resp.ok) return;
+          const config = await resp.json();
+          if (config.anthropic_api_key) {
+            STATE.slots.forEach(s => { if (!s.apiKey) s.apiKey = config.anthropic_api_key; });
+          }
+          if (config.elevenlabs_api_key) {
+            STATE.slots.forEach(s => { if (!s.elevenlabsApiKey) s.elevenlabsApiKey = config.elevenlabs_api_key; });
+          }
+          if (config.elevenlabs_voice_id) {
+            STATE.slots.forEach(s => { if (!s.elevenlabsVoiceId) s.elevenlabsVoiceId = config.elevenlabs_voice_id; });
+          }
+          render();
+        } catch (err) {
+          console.warn('Failed to load remote config:', err);
+        }
+      }
+
+      async function saveRemoteConfig() {
+        if (!GSHEET_WEBHOOK) return;
+        const slot = STATE.slots[0];
+        try {
+          await fetch(GSHEET_WEBHOOK, {
+            method: 'POST',
+            mode: 'no-cors',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              action: 'save_config',
+              config: {
+                anthropic_api_key: slot.apiKey || '',
+                elevenlabs_api_key: slot.elevenlabsApiKey || '',
+                elevenlabs_voice_id: slot.elevenlabsVoiceId || '',
+                gsheet_webhook: GSHEET_WEBHOOK
+              }
+            })
+          });
+        } catch (err) {
+          console.warn('Failed to save remote config:', err);
+        }
+      }
+
       loadSettings();
 
       /* ========== ELEVENLABS TTS ========== */
@@ -1958,6 +2002,7 @@ Search first, then answer. Never skip the search step. Never guess when you can 
               GSHEET_WEBHOOK = document.getElementById('setting-gsheet')?.value?.trim() || '';
               localStorage.setItem('recast_gsheet_url', GSHEET_WEBHOOK);
               saveSettings();
+              saveRemoteConfig();
               render();
               break;
             case 'view-history': {
@@ -2063,6 +2108,7 @@ Search first, then answer. Never skip the search step. Never guess when you can 
       /* ========== BOOT ========== */
       document.addEventListener('DOMContentLoaded', () => {
         render();
+        loadRemoteConfig();
         // Re-render once the browser loads its speech voice list (async in Chrome)
         if (VOICE.ttsSupported && typeof speechSynthesis.onvoiceschanged !== 'undefined') {
           window.speechSynthesis.onvoiceschanged = () => {
