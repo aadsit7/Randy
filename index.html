@@ -226,7 +226,13 @@ Search first, then answer. Never skip the search step. Never guess when you can 
 - Only state facts you confirmed in the documentation. If you searched and found nothing, say "I couldn't find that in the current docs" rather than speculating.
 - Never fabricate features, capabilities, statistics, or URLs.
 - Never pad with generic filler or marketing language.
-- If a question is outside Application Workspace scope, say so in one sentence.`;
+- If a question is outside Application Workspace scope, say so in one sentence.
+
+# Response Format
+- Respond in plain text. No HTML tags, no markdown headers, no bullet points.
+- Use short paragraphs separated by blank lines.
+- Bold nothing. Format nothing. Just clear, readable sentences.
+- Keep answers concise — aim for 2-4 short paragraphs max unless the question genuinely requires more detail.`;
 
       // Paste your Anthropic API key between the quotes to pre-fill every assistant's
       // Settings → API Key field. The key is never sent anywhere except api.anthropic.com
@@ -253,50 +259,6 @@ Search first, then answer. Never skip the search step. Never guess when you can 
       // Google Sheet webhook for saving Q&A results
       let GSHEET_WEBHOOK = 'https://script.google.com/macros/s/AKfycbz0gE7H7Nd6LX9S4JJsWZb4h0W0qf04CDVloFFbfnc_0s80orwybcATHs3L7vicQAbE/exec';
 
-      // Shared output format appended to every assistant's system prompt
-      const HTML_OUTPUT_FORMAT = `
-
-# CRITICAL OUTPUT FORMAT — ALWAYS FOLLOW THIS EXACTLY
-
-You deliver every response as structured, interactive HTML cards. No exceptions. No markdown. Only raw HTML.
-
-## Structure
-
-1. **Summary Card** (ALWAYS first) — a brief 2-3 sentence overview wrapped in:
-<div class="summary-card">
-  <strong>Summary</strong>
-  <p>Your concise overview here.</p>
-</div>
-
-2. **Collapsible Detail Sections** — group ALL detailed content into collapsible sections:
-<div class="section-group">
-  <details>
-    <summary><span class="s-icon" style="background:#dbeafe;color:#2563eb">EMOJI</span> Section Title</summary>
-    <div>
-      <p>Content here with <strong>bold highlights</strong> for key terms.</p>
-      <ul>
-        <li><span class="check">\u2713</span> Completed item</li>
-        <li><span class="pending">\u25CB</span> Pending item</li>
-      </ul>
-    </div>
-  </details>
-</div>
-
-## Rules
-
-- NEVER use markdown. ONLY output raw HTML using the tags above.
-- ALWAYS start with the summary-card div.
-- Group related information into logical collapsible sections (3-7 sections typical).
-- Use descriptive section titles with a relevant emoji in the s-icon span.
-- Use check marks (\u2713) for confirmed/completed items, circles (\u25CB) for pending/unknown.
-- Use <strong> tags for key terms, names, numbers, and important concepts.
-- Use <p>, <ul>, <ol>, <li>, <code> tags inside detail sections. Never use <h1>-<h6> outside summary. Use <h4> sparingly inside sections.
-- Keep each section focused. If a topic is complex, break it into multiple sections.
-- Use these icon background colors to categorize: blue (#dbeafe/#2563eb) for info, green (#dcfce7/#16a34a) for success/done, amber (#fef3c7/#d97706) for warnings/pending, red (#fee2e2/#dc2626) for errors/critical, purple (#f3e8ff/#7c3aed) for technical.
-- Make the content scannable — a user should understand the answer from the summary card alone, then drill into sections for detail.
-- Be thorough in the detail sections but concise in the summary.
-- If the user asks a simple question (yes/no, one fact), still use the format but with fewer sections.`;
-
       function makeSlot(label, prompt) {
         return {
           label, apiKey: DEFAULT_API_KEY, prompt,
@@ -318,7 +280,7 @@ You deliver every response as structured, interactive HTML cards. No exceptions.
         expandedSlot: null,
         editingSlot: 0,
         slots: [
-          makeSlot('Recast SE', ASSISTANT_2_PROMPT + HTML_OUTPUT_FORMAT)
+          makeSlot('Recast SE', ASSISTANT_2_PROMPT)
         ]
       };
 
@@ -1038,17 +1000,13 @@ You deliver every response as structured, interactive HTML cards. No exceptions.
 
       // Render bot message content: sanitized HTML for all assistants
       function renderBotContent(content) {
-        return sanitizeHtml(content);
+        return escHtml(content).replace(/\n/g, '<br>');
       }
 
       // Extract summary text from Assistant 1 HTML for voice reading
       function extractSummary(html) {
-        const div = document.createElement('div');
-        div.innerHTML = html;
-        const card = div.querySelector('.summary-card');
-        if (card) return card.textContent.replace(/\s+/g, ' ').trim();
-        // Fallback: first 200 chars of plain text
-        return div.textContent.replace(/\s+/g, ' ').trim().substring(0, 200);
+        const text = String(html).replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
+        return text.substring(0, 300);
       }
 
       // Render the live interim transcript as a faded bubble aligned right (like a user msg).
@@ -1474,7 +1432,7 @@ You deliver every response as structured, interactive HTML cards. No exceptions.
               break;
             case 'reset-slot': {
               const s = STATE.slots[idx];
-              const DEFAULT_PROMPTS = [ASSISTANT_2_PROMPT + HTML_OUTPUT_FORMAT];
+              const DEFAULT_PROMPTS = [ASSISTANT_2_PROMPT];
               s.apiKey = DEFAULT_API_KEY; s.prompt = DEFAULT_PROMPTS[idx];
               s.label = 'Assistant 2';
               s.voiceName = s.label;
