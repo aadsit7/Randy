@@ -925,7 +925,9 @@ Search first, then answer. Never skip the search step. Never guess when you can 
               max_tokens: 1024,
               system: systemPrompt,
               tools: [{ type: "web_search_20250305", name: "web_search" }],
-              messages: slot.messages.filter(m => m.role === 'user' || m.role === 'assistant')
+              messages: slot.messages
+                .filter(m => m.role === 'user' || m.role === 'assistant')
+                .map(m => ({ role: m.role, content: m.content }))
             })
           });
 
