@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <title>Recast — AI Assistant Dashboard</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -22,11 +22,11 @@
       html, body { background: var(--bg-main); color: #111827; font-family: Inter, system-ui, sans-serif; }
       .card { border-radius: var(--radius); background: rgba(255,255,255,0.88); border: 1px solid rgba(226,232,240,0.70); box-shadow: var(--shadow-card); transition: box-shadow 300ms, transform 300ms; }
       .card:hover { box-shadow: var(--shadow-hover); transform: translateY(-2px); }
-      .btn-primary { background: var(--primary); color: #fff; border: none; border-radius: 8px; padding: 8px 16px; font-weight: 600; font-size: 13px; cursor: pointer; transition: background 0.2s; }
+      .btn-primary { background: var(--primary); color: #fff; border: none; border-radius: 8px; padding: 10px 18px; min-height: 40px; font-weight: 600; font-size: 13px; cursor: pointer; transition: background 0.2s; }
       .btn-primary:hover { background: var(--primary-hover); }
-      .btn-outline { background: transparent; color: var(--navy); border: 2px solid var(--navy); border-radius: 8px; padding: 6px 14px; font-weight: 600; font-size: 13px; cursor: pointer; transition: all 0.2s; }
+      .btn-outline { background: transparent; color: var(--navy); border: 2px solid var(--navy); border-radius: 8px; padding: 8px 16px; min-height: 40px; font-weight: 600; font-size: 13px; cursor: pointer; transition: all 0.2s; }
       .btn-outline:hover { color: var(--primary); border-color: var(--primary); }
-      .btn-danger { background: transparent; color: #ef4444; border: 2px solid #ef4444; border-radius: 8px; padding: 6px 14px; font-weight: 600; font-size: 13px; cursor: pointer; transition: all 0.2s; }
+      .btn-danger { background: transparent; color: #ef4444; border: 2px solid #ef4444; border-radius: 8px; padding: 8px 16px; min-height: 40px; font-weight: 600; font-size: 13px; cursor: pointer; transition: all 0.2s; }
       .btn-danger:hover { background: #ef4444; color: #fff; }
       input[type="text"], input[type="password"], textarea {
         width: 100%; padding: 10px 14px; border: 2px solid #e2e8f0; border-radius: 10px;
@@ -34,7 +34,7 @@
       }
       input:focus, textarea:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(0,112,243,0.1); }
       textarea { resize: vertical; min-height: 80px; }
-      .chat-bubble { padding: 10px 14px; border-radius: 12px; font-size: 14px; line-height: 1.5; max-width: 85%; word-wrap: break-word; white-space: pre-wrap; }
+      .chat-bubble { padding: 10px 14px; border-radius: 12px; font-size: 14px; line-height: 1.5; word-wrap: break-word; white-space: pre-wrap; }
       .chat-user { background: var(--primary); color: #fff; border-radius: 12px 12px 4px 12px; margin-left: auto; }
       .chat-bot { background: #f1f5f9; color: #1e293b; border-radius: 12px 12px 12px 4px; }
 
@@ -75,7 +75,7 @@
       .typing-dot:nth-child(1) { animation-delay: -0.32s; }
       .typing-dot:nth-child(2) { animation-delay: -0.16s; }
       .settings-section { border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; background: #fafbfc; }
-      .tab-btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px; font-size: 14px; font-weight: 600; border-radius: 8px; border: none; cursor: pointer; transition: all 0.2s; }
+      .tab-btn { display: inline-flex; align-items: center; gap: 6px; padding: 10px 16px; min-height: 40px; font-size: 14px; font-weight: 600; border-radius: 8px; border: none; cursor: pointer; transition: all 0.2s; }
       .tab-btn.active { background: var(--primary); color: #fff; }
       .tab-btn:not(.active) { background: transparent; color: var(--navy); }
       .tab-btn:not(.active):hover { background: #f1f5f9; }
@@ -112,20 +112,84 @@
       .voice-switch.on { background: #10b981; }
       .voice-switch::after { content: ''; position: absolute; top: 2px; left: 2px; width: 20px; height: 20px; border-radius: 50%; background: #fff; transition: left 0.2s; box-shadow: 0 1px 3px rgba(15,23,42,0.2); }
       .voice-switch.on::after { left: 22px; }
-      .header-mic { background: transparent; border: none; cursor: pointer; padding: 2px; display: grid; place-items: center; border-radius: 4px; }
+      .header-mic { background: transparent; border: none; cursor: pointer; padding: 6px; min-width: 32px; min-height: 32px; display: grid; place-items: center; border-radius: 4px; }
       .header-mic.on { color: #34d399; }
       .header-mic:not(.on) { color: rgba(255,255,255,0.4); }
       .header-mic:hover { background: rgba(255,255,255,0.08); }
 
       /* ===== TTS speaker button ===== */
-      .msg-wrap { position: relative; display: inline-block; max-width: 95%; }
-      .tts-btn { position: absolute; bottom: 4px; right: 4px; background: transparent; border: none; cursor: pointer; padding: 3px; border-radius: 4px; color: #94a3b8; transition: color 0.15s, background 0.15s; line-height: 0; }
+      .msg-wrap { position: relative; display: inline-block; }
+      .tts-btn { position: absolute; bottom: 4px; right: 4px; background: transparent; border: none; cursor: pointer; padding: 6px; min-width: 28px; min-height: 28px; border-radius: 4px; color: #94a3b8; transition: color 0.15s, background 0.15s; line-height: 0; }
       .tts-btn:hover { color: #475569; background: rgba(148,163,184,0.12); }
       .tts-btn.playing { color: var(--primary); }
 
       @media (prefers-reduced-motion: reduce) {
         .voice-pulse-ring, .record-pulse, .sound-wave-bar, .voice-toast { animation: none !important; }
         .voice-pulse-ring { display: none; }
+      }
+
+      /* ===== Responsive layout ===== */
+      .chat-card-wrap { min-height: calc(100svh - 180px); min-height: calc(100dvh - 180px); }
+      .settings-grid { display: grid; grid-template-columns: 1fr; gap: 16px; }
+      .settings-grid > .full { grid-column: 1 / -1; }
+      .chat-input-row { padding-bottom: max(8px, env(safe-area-inset-bottom)) !important; }
+      .voice-fab, .voice-fab-wrap {
+        bottom: max(24px, env(safe-area-inset-bottom));
+        right:  max(24px, env(safe-area-inset-right));
+      }
+
+      /* Phone (≤480px) */
+      @media (max-width: 480px) {
+        .brand-wrap  { padding-top: 16px; padding-bottom: 8px; }
+        .brand-logo  { font-size: 28px !important; line-height: 1.05; }
+        .tab-btn     { padding: 10px 14px; font-size: 13px; }
+        .chat-bubble { max-width: 92%; font-size: 14px; }
+        .msg-wrap    { max-width: 96%; }
+        .settings-section { padding: 14px; }
+        .voice-fab, .voice-fab-wrap {
+          bottom: calc(72px + env(safe-area-inset-bottom));
+        }
+      }
+
+      /* iPad (481–1024px) */
+      @media (min-width: 481px) {
+        .app-shell       { max-width: 760px; margin-inline: auto; }
+        .chat-card-wrap  { min-height: calc(100dvh - 240px); }
+        .settings-grid   { grid-template-columns: 1fr 1fr; }
+        .chat-bubble     { max-width: 78%; }
+        .msg-wrap        { max-width: 88%; }
+      }
+
+      /* Laptop / desktop (≥1025px) */
+      @media (min-width: 1025px) {
+        .app-shell       { max-width: 880px; }
+        .chat-card-wrap  { min-height: calc(100dvh - 260px); max-height: calc(100dvh - 120px); }
+        .chat-bubble     { max-width: 68%; }
+        .msg-wrap        { max-width: 75%; }
+        .settings-grid   { grid-template-columns: 1fr 1fr; gap: 20px 24px; }
+        .expanded-inner  { max-width: 980px; margin-inline: auto; width: 100%; }
+        .brand-wrap      { padding-top: 32px; }
+      }
+
+      /* Landscape short viewports (iPad landscape, phone landscape) */
+      @media (min-width: 481px) and (orientation: landscape) and (max-height: 640px) {
+        .brand-wrap     { padding-top: 10px; padding-bottom: 4px; }
+        .brand-logo     { font-size: 32px !important; }
+        .chat-card-wrap { min-height: calc(100dvh - 150px); }
+      }
+
+      /* Touch devices: enforce ≥44px hit targets regardless of width */
+      @media (pointer: coarse) {
+        .btn-primary, .btn-outline, .btn-danger { padding: 12px 18px; font-size: 14px; min-height: 44px; }
+        .tab-btn     { padding: 12px 18px; min-height: 44px; }
+        .header-mic  { padding: 10px; min-width: 44px; min-height: 44px; }
+        .header-mic i{ width: 20px; height: 20px; }
+        .tts-btn     { padding: 10px; min-width: 44px; min-height: 44px; bottom: 0; right: 0; }
+        .voice-switch       { width: 52px; height: 30px; }
+        .voice-switch::after{ width: 26px; height: 26px; }
+        .voice-switch.on::after { left: 24px; }
+        .chat-send   { width: 44px; height: 44px; }
+        input[type="text"], input[type="password"], textarea { font-size: 16px; padding: 12px 14px; }
       }
     </style>
   </head>
@@ -849,12 +913,12 @@ You deliver every response as structured, interactive HTML cards. No exceptions.
         const root = document.getElementById('app');
         root.innerHTML = `
           <header>
-            <div class="mx-auto max-w-6xl px-4 pt-8 pb-4">
-              <h1 class="text-[40px] md:text-[52px] font-semibold leading-tight">
+            <div class="brand-wrap app-shell mx-auto px-4 pt-8 pb-4">
+              <h1 class="brand-logo text-[40px] md:text-[52px] font-semibold leading-tight">
                 <span style="color:#000">Re</span><span style="color:#CC0000">cast Software</span>
               </h1>
             </div>
-            <div class="mx-auto max-w-6xl px-4 pb-2">
+            <div class="app-shell mx-auto px-4 pb-2">
               <div class="flex gap-2 bg-white/60 backdrop-blur-lg p-1 rounded-lg ring-1 ring-slate-200 inline-flex">
                 <button class="tab-btn ${STATE.activeTab==='home'?'active':''}" data-action="switch-tab" data-tab="home">
                   <i data-lucide="home" class="w-4 h-4"></i> Home
@@ -865,7 +929,7 @@ You deliver every response as structured, interactive HTML cards. No exceptions.
               </div>
             </div>
           </header>
-          <main class="mx-auto max-w-6xl px-4 pb-16 mt-4">
+          <main class="app-shell mx-auto px-4 pb-16 mt-4">
             ${STATE.activeTab === 'home' ? renderHome() : renderSettings()}
           </main>
           ${renderExpanded()}
@@ -877,7 +941,7 @@ You deliver every response as structured, interactive HTML cards. No exceptions.
 
       /* ========== HOME ========== */
       function renderHome() {
-        return `<div class="flex flex-col" style="min-height:calc(100vh - 220px)">
+        return `<div class="chat-card-wrap flex flex-col">
           ${renderCard(STATE.slots[0], 0)}
         </div>`;
       }
@@ -913,13 +977,13 @@ You deliver every response as structured, interactive HTML cards. No exceptions.
               ` : msgs.map((m, mi) => `
                 <div class="flex ${m.role==='user'?'justify-end':'justify-start'}">
                   ${m.role==='user'
-                    ? `<div class="chat-user" style="font-size:11px;padding:6px 10px;max-width:85%;word-wrap:break-word;white-space:pre-wrap">${escHtml(m.content)}</div>`
-                    : `<div class="msg-wrap"><div class="chat-bot chat-html" style="font-size:11px;padding:6px 10px;padding-right:22px;max-width:95%;word-wrap:break-word;white-space:normal">${renderBotContent(m.content)}</div>${speakerBtnHtml(idx, mi)}</div>`}
+                    ? `<div class="chat-bubble chat-user" style="font-size:11px;padding:6px 10px">${escHtml(m.content)}</div>`
+                    : `<div class="msg-wrap"><div class="chat-bubble chat-bot chat-html" style="font-size:11px;padding:6px 10px;padding-right:22px;white-space:normal">${renderBotContent(m.content)}</div>${speakerBtnHtml(idx, mi)}</div>`}
                 </div>
               `).join('')}
               ${slot.loading?'<div class="flex justify-start"><div class="chat-bot" style="padding:6px 12px"><span class="typing-dot"></span> <span class="typing-dot"></span> <span class="typing-dot"></span></div></div>':''}
             </div>
-            <div class="flex items-center gap-1.5 px-2 py-2 border-t border-slate-200" style="background:#fff">
+            <div class="chat-input-row flex items-center gap-1.5 px-2 py-2 border-t border-slate-200" style="background:#fff">
               <input type="text" id="home-input-${idx}" placeholder="Type a message..." value="${escAttr(slot.inputText)}" ${slot.loading?'disabled':''} style="flex:1;padding:6px 12px;border:1.5px solid #e2e8f0;border-radius:9999px;font-size:12px;outline:none;color:var(--navy);min-width:0" />
               <button class="chat-send" style="width:30px;height:30px" data-action="send-home" data-idx="${idx}" ${slot.loading?'disabled':''}>
                 <i data-lucide="send" class="w-3 h-3"></i>
@@ -980,6 +1044,7 @@ You deliver every response as structured, interactive HTML cards. No exceptions.
         const color = SLOT_COLORS[idx];
         return `
           <div class="fixed inset-0 z-50 flex flex-col" style="background:#fff">
+           <div class="expanded-inner flex flex-col" style="flex:1;min-height:0;width:100%">
             <div class="flex items-center justify-between px-4 py-3 flex-shrink-0" style="background:var(--navy);color:#fff">
               <div class="flex items-center gap-3">
                 <div class="w-9 h-9 rounded-full grid place-items-center text-white font-bold" style="background:${color}">${slot.label.charAt(0)}</div>
@@ -1018,7 +1083,7 @@ You deliver every response as structured, interactive HTML cards. No exceptions.
                   ${m.role==='assistant'?'<div class="w-7 h-7 rounded-full grid place-items-center text-white text-xs font-bold flex-shrink-0 mr-2 mt-1" style="background:'+color+'">'+slot.label.charAt(0)+'</div>':''}
                   ${m.role==='user'
                     ? `<div class="chat-bubble chat-user">${escHtml(m.content)}</div>`
-                    : `<div class="msg-wrap"><div class="chat-bubble chat-bot chat-html" style="white-space:normal;max-width:95%;padding-right:26px">${renderBotContent(m.content)}</div>${speakerBtnHtml(idx, mi)}</div>`}
+                    : `<div class="msg-wrap"><div class="chat-bubble chat-bot chat-html" style="white-space:normal;padding-right:26px">${renderBotContent(m.content)}</div>${speakerBtnHtml(idx, mi)}</div>`}
                 </div>
               `).join('')}
               ${slot.loading?`<div class="flex justify-start"><div class="w-7 h-7 rounded-full grid place-items-center text-white text-xs font-bold flex-shrink-0 mr-2 mt-1" style="background:${color}">${slot.label.charAt(0)}</div><div class="chat-bubble chat-bot"><span class="typing-dot"></span> <span class="typing-dot"></span> <span class="typing-dot"></span></div></div>`:''}
@@ -1029,6 +1094,7 @@ You deliver every response as structured, interactive HTML cards. No exceptions.
                 <i data-lucide="send" class="w-4 h-4"></i>
               </button>
             </div>
+           </div>
             ${renderVoiceFab(slot, idx, color)}
           </div>`;
       }
@@ -1040,8 +1106,8 @@ You deliver every response as structured, interactive HTML cards. No exceptions.
         const color = SLOT_COLORS[es];
         return `
           <div class="space-y-4">
-            <div class="settings-section space-y-5">
-              <div class="flex items-center gap-3">
+            <div class="settings-section settings-grid">
+              <div class="full flex items-center gap-3">
                 <div class="w-9 h-9 rounded-full grid place-items-center text-white font-bold" style="background:${color}">${slot.label.charAt(0)}</div>
                 <h3 class="text-lg font-semibold" style="color:var(--navy)">${escHtml(slot.label)} — Configuration</h3>
               </div>
@@ -1059,7 +1125,7 @@ You deliver every response as structured, interactive HTML cards. No exceptions.
                 <p class="text-[11px] text-slate-400 mt-1">Get a key at console.anthropic.com → Settings → API Keys.</p>
               </div>
 
-              <div>
+              <div class="full">
                 <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1.5">
                   <i data-lucide="file-text" class="w-3 h-3 inline mr-1"></i>System Prompt Instructions
                 </label>
@@ -1067,7 +1133,7 @@ You deliver every response as structured, interactive HTML cards. No exceptions.
                 <p class="text-[11px] text-slate-400 mt-1">These instructions define how this assistant behaves. Changes are saved to cache.</p>
               </div>
 
-              <div style="border-top:1px dashed #e2e8f0;padding-top:16px">
+              <div class="full" style="border-top:1px dashed #e2e8f0;padding-top:16px">
                 <div class="flex items-center justify-between mb-3">
                   <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide">
                     <i data-lucide="mic" class="w-3 h-3 inline mr-1"></i>Voice Assistant
@@ -1099,7 +1165,7 @@ You deliver every response as structured, interactive HTML cards. No exceptions.
                 ` : ''}
               </div>
 
-              <div style="border-top:1px dashed #e2e8f0;padding-top:16px">
+              <div class="full" style="border-top:1px dashed #e2e8f0;padding-top:16px">
                 <div class="flex items-center justify-between mb-3">
                   <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide">
                     <i data-lucide="volume-2" class="w-3 h-3 inline mr-1"></i>ElevenLabs TTS (High-Quality Voice)
@@ -1126,7 +1192,7 @@ You deliver every response as structured, interactive HTML cards. No exceptions.
                 </button>
               </div>
 
-              <div class="flex flex-wrap gap-2 pt-1">
+              <div class="full flex flex-wrap gap-2 pt-1">
                 <button class="btn-primary" data-action="save-settings">
                   <i data-lucide="save" class="w-4 h-4 inline mr-1"></i> Save Configuration
                 </button>
