@@ -710,7 +710,7 @@ Search first, then answer. Never skip the search step. Never guess when you can 
           playBeep();
 
           // If the user spoke the wake word AND the question in one breath
-          // (e.g. "Hey Assistant 2 what is application workspace"), handle it now.
+          // (e.g. "Hey Randy what is application workspace"), handle it now.
           const after = text.slice(match.index + match[0].length).trim();
           if (after.length >= 2) {
             VOICE.activeSlot = i;
@@ -1434,10 +1434,10 @@ Search first, then answer. Never skip the search step. Never guess when you can 
               const s = STATE.slots[idx];
               const DEFAULT_PROMPTS = [ASSISTANT_2_PROMPT];
               s.apiKey = DEFAULT_API_KEY; s.prompt = DEFAULT_PROMPTS[idx];
-              s.label = 'Assistant 2';
-              s.voiceName = s.label;
+              s.label = 'Recast SE';
+              s.voiceName = 'Randy';
               s.voicePersonality = DEFAULT_VOICE_PERSONALITY;
-              s.voiceEnabled = false;
+              s.voiceEnabled = true;
               s.elevenlabsEnabled = true;
               s.elevenlabsApiKey = DEFAULT_ELEVENLABS_API_KEY;
               s.elevenlabsVoiceId = DEFAULT_ELEVENLABS_VOICE_ID;
