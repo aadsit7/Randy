@@ -292,7 +292,9 @@ Search first, then answer. Never skip the search step. Never guess when you can 
           isSpeaking: false,
           elevenlabsApiKey: DEFAULT_ELEVENLABS_API_KEY,
           elevenlabsVoiceId: DEFAULT_ELEVENLABS_VOICE_ID,
-          elevenlabsEnabled: true
+          elevenlabsEnabled: true,
+          abortController: null, // abort the in-flight Anthropic/ElevenLabs fetches
+          ttsQueue: null         // FIFO of sentence TTS streams so we speak in order
         };
       }
 
@@ -317,7 +319,8 @@ Search first, then answer. Never skip the search step. Never guess when you can 
         audioCtx: null,          // lazy AudioContext for beep
         activeSlot: null,        // slot index currently handling a voice command (post wake-word)
         awaitingCommand: false,  // wake word heard, waiting for the actual question
-        wakeTimeoutId: null,     // 30s timeout to drop back to passive listening
+        conversationMode: false, // once wake word is heard, keep accepting commands without re-arming
+        wakeTimeoutId: null,     // 30s timeout to drop back to passive listening (first arm only)
         permissionDenied: false,
         toastTimeoutId: null,
         toastMessage: '',
@@ -541,6 +544,190 @@ Search first, then answer. Never skip the search step. Never guess when you can 
         }
       }
 
+      /* ========== STREAMING TTS QUEUE ==========
+       * Voice turns stream the Anthropic response sentence-by-sentence and pipe each sentence
+       * through ElevenLabs' /stream endpoint with eleven_flash_v2_5. Each sentence becomes a
+       * small MP3 blob which plays on a dedicated <audio> (separate from EL_AUDIO so the
+       * message-replay flow keeps working). All blobs are collected and concatenated into a
+       * single cached audioUrl on the assistant message once the stream finishes, so replay
+       * via the speaker button is instant and free. */
+
+      function initTtsQueue(idx, signal, msgIdx) {
+        const slot = STATE.slots[idx];
+        teardownTtsQueue(idx);
+        slot.ttsQueue = {
+          sentences: [],    // pending sentences waiting for playback
+          processing: false,
+          signal,           // abort signal from sendMessage's controller
+          msgIdx,           // target assistant message (for caching + playingMsg highlight)
+          audio: null,      // dedicated <audio> element owned by this queue
+          blobs: [],        // MP3 blobs collected for final concatenation into msg.audioUrl
+          done: false,      // Anthropic stream finished — once drained we can cache
+          activeUrl: null   // current object URL (revoke on pause/end)
+        };
+      }
+
+      function teardownTtsQueue(idx) {
+        const slot = STATE.slots[idx];
+        const q = slot && slot.ttsQueue;
+        if (!q) return;
+        try {
+          if (q.audio) {
+            q.audio.pause();
+            q.audio.removeAttribute('src');
+          }
+        } catch {}
+        if (q.activeUrl) { try { URL.revokeObjectURL(q.activeUrl); } catch {} q.activeUrl = null; }
+        slot.ttsQueue = null;
+        if (EL_AUDIO.speakingSlot === idx) EL_AUDIO.speakingSlot = null;
+        slot.isSpeaking = false;
+        VOICE.playingMsg = null;
+      }
+
+      function enqueueTtsSentence(idx, text) {
+        const slot = STATE.slots[idx];
+        const q = slot && slot.ttsQueue;
+        if (!q) return;
+        if (q.signal && q.signal.aborted) return;
+        q.sentences.push(text);
+        processTtsQueue(idx);
+      }
+
+      async function processTtsQueue(idx) {
+        const slot = STATE.slots[idx];
+        const q = slot && slot.ttsQueue;
+        if (!q || q.processing) return;
+        q.processing = true;
+        try {
+          while (slot.ttsQueue === q && q.sentences.length > 0 && !(q.signal && q.signal.aborted)) {
+            const text = q.sentences.shift();
+            await playTtsChunk(idx, q, text);
+          }
+          // Stream finished + queue drained: concat all sentence blobs and cache for replay.
+          if (slot.ttsQueue === q && q.done && q.sentences.length === 0 && q.blobs.length) {
+            const msg = slot.messages[q.msgIdx];
+            if (msg && msg.role === 'assistant') {
+              if (msg.audioUrl) { try { URL.revokeObjectURL(msg.audioUrl); } catch {} }
+              msg.audioUrl = URL.createObjectURL(new Blob(q.blobs, { type: 'audio/mpeg' }));
+              msg.audioSource = 'elevenlabs';
+            }
+          }
+        } catch (err) {
+          if (err && err.name !== 'AbortError') console.warn('TTS queue error:', err);
+        } finally {
+          q.processing = false;
+          // If Anthropic is done and we've drained everything, release the speaking state.
+          if (slot.ttsQueue === q && q.done && q.sentences.length === 0) {
+            slot.isSpeaking = false;
+            if (EL_AUDIO.speakingSlot === idx) EL_AUDIO.speakingSlot = null;
+            VOICE.playingMsg = null;
+            render();
+          }
+        }
+      }
+
+      async function playTtsChunk(idx, q, text) {
+        const slot = STATE.slots[idx];
+        const clean = stripMarkdown(text);
+        if (!clean) return;
+
+        // Fallback to browser TTS if ElevenLabs isn't configured.
+        if (!slot.elevenlabsEnabled || !slot.elevenlabsApiKey) {
+          return playBrowserTtsChunk(idx, q, clean);
+        }
+
+        const voiceId = slot.elevenlabsVoiceId || DEFAULT_ELEVENLABS_VOICE_ID;
+        let resp;
+        try {
+          resp = await fetch(
+            `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}/stream?output_format=mp3_44100_128`,
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'xi-api-key': slot.elevenlabsApiKey },
+              body: JSON.stringify({
+                text: clean,
+                // flash_v2_5 has the lowest TTFB of any ElevenLabs model.
+                model_id: 'eleven_flash_v2_5',
+                voice_settings: { stability: 0.5, similarity_boost: 0.75 }
+              }),
+              signal: q.signal
+            }
+          );
+        } catch (err) {
+          if (err && err.name === 'AbortError') return;
+          return playBrowserTtsChunk(idx, q, clean);
+        }
+        if (!resp.ok) {
+          console.warn('ElevenLabs stream', resp.status);
+          return playBrowserTtsChunk(idx, q, clean);
+        }
+
+        const blob = await resp.blob();
+        if (q.signal && q.signal.aborted) return;
+        q.blobs.push(blob);
+        const url = URL.createObjectURL(blob);
+        q.activeUrl = url;
+
+        if (!q.audio) {
+          q.audio = new Audio();
+          q.audio.preload = 'auto';
+        }
+        slot.isSpeaking = true;
+        EL_AUDIO.speakingSlot = idx;
+        VOICE.playingMsg = { slot: idx, msg: q.msgIdx };
+        render();
+
+        const audio = q.audio;
+        await new Promise((resolve) => {
+          let finished = false;
+          const finish = () => {
+            if (finished) return;
+            finished = true;
+            audio.onended = null;
+            audio.onerror = null;
+            try { URL.revokeObjectURL(url); } catch {}
+            if (q.activeUrl === url) q.activeUrl = null;
+            resolve();
+          };
+          audio.onended = finish;
+          audio.onerror = finish;
+          audio.src = url;
+          const p = audio.play();
+          if (p && p.catch) p.catch(() => finish());
+          if (q.signal) {
+            q.signal.addEventListener('abort', () => {
+              try { audio.pause(); } catch {}
+              finish();
+            }, { once: true });
+          }
+        });
+      }
+
+      function playBrowserTtsChunk(idx, q, clean) {
+        if (!VOICE.ttsSupported) return Promise.resolve();
+        return new Promise((resolve) => {
+          if (q.signal && q.signal.aborted) return resolve();
+          const u = new SpeechSynthesisUtterance(clean);
+          const v = pickDeepVoice();
+          if (v) u.voice = v;
+          u.pitch = 0.85;
+          u.rate = 0.95;
+          const slot = STATE.slots[idx];
+          slot.isSpeaking = true;
+          EL_AUDIO.speakingSlot = idx;
+          VOICE.playingMsg = { slot: idx, msg: q.msgIdx };
+          render();
+          const done = () => resolve();
+          u.onend = done;
+          u.onerror = done;
+          if (q.signal) q.signal.addEventListener('abort', () => {
+            try { window.speechSynthesis.cancel(); } catch {}
+            done();
+          }, { once: true });
+          try { window.speechSynthesis.speak(u); } catch { done(); }
+        });
+      }
+
       /* ========== VOICE HELPERS ========== */
       function showToast(msg) {
         VOICE.toastMessage = msg;
@@ -649,6 +836,8 @@ Search first, then answer. Never skip the search step. Never guess when you can 
 
       function stopSpeaking() {
         stopElAudio();
+        // Tear down any streaming-TTS queues so queued sentences don't keep playing.
+        STATE.slots.forEach((_, i) => teardownTtsQueue(i));
         if (VOICE.ttsSupported) {
           try { window.speechSynthesis.cancel(); } catch {}
         }
@@ -669,6 +858,40 @@ Search first, then answer. Never skip the search step. Never guess when you can 
         return new RegExp('\\b(?:hey|hi|ok|okay|yo)\\s+' + n + '\\b[\\s,.!?:;-]*', 'i');
       }
 
+      // Phrases that let the user exit conversation mode or cancel the pending send.
+      const EXIT_CONVERSATION_RE = /^(stop|cancel|never mind|nevermind|that'?s all|exit|goodbye|good ?bye|end (?:conversation|chat)|quiet|shut up)\b/i;
+
+      // Exit continuous conversation mode: aborts any in-flight request, stops TTS, clears
+      // interim transcript, returns to passive wake-word listening. Called from the Stop
+      // button and from spoken exit phrases.
+      function exitConversationMode() {
+        // Abort whatever's in flight (Anthropic stream + ElevenLabs stream).
+        STATE.slots.forEach((s, i) => {
+          if (s.abortController) { try { s.abortController.abort(); } catch {} s.abortController = null; }
+          teardownTtsQueue(i);
+          s.loading = false;
+          s.isListening = false;
+        });
+        stopSpeaking();
+        clearInterim();
+        if (VOICE.wakeTimeoutId) { clearTimeout(VOICE.wakeTimeoutId); VOICE.wakeTimeoutId = null; }
+        VOICE.activeSlot = null;
+        VOICE.awaitingCommand = false;
+        VOICE.conversationMode = false;
+        render();
+      }
+
+      // Cancel the interim utterance about to be sent. Keep conversation mode on so the
+      // user can retry. Does nothing if there's nothing queued.
+      function cancelPendingUtterance() {
+        const idx = VOICE.interimSlot;
+        if (idx !== null && STATE.slots[idx]) {
+          STATE.slots[idx].inputText = '';
+        }
+        clearInterim();
+        render();
+      }
+
       function handleVoiceTranscript(raw) {
         const text = String(raw).trim();
         if (!text) return;
@@ -681,34 +904,55 @@ Search first, then answer. Never skip the search step. Never guess when you can 
           return;
         }
 
-        // If we are already waiting for the command following a wake word, treat this
-        // utterance as the command.
+        // Continuous conversation mode: after the first wake word we accept each
+        // utterance as a command without requiring "Hey Randy" again. The user exits
+        // by saying a cancel phrase or clicking the Stop button.
+        if (VOICE.conversationMode && VOICE.activeSlot !== null) {
+          const slot = STATE.slots[VOICE.activeSlot];
+          if (!slot || !slot.voiceEnabled) {
+            exitConversationMode();
+            return;
+          }
+          // Skip additional utterances while a reply is still being generated — the
+          // model is mid-stream and this is likely echo or the user thinking out loud.
+          if (slot.loading) return;
+          // Strip a leading wake phrase if the user repeated it.
+          const wakeP = buildWakePattern(slot.voiceName || slot.label);
+          const cleaned = text.replace(wakeP, '').trim();
+          if (EXIT_CONVERSATION_RE.test(cleaned)) {
+            exitConversationMode();
+            return;
+          }
+          if (cleaned.length < 2) return;
+          if (VOICE.wakeTimeoutId) { clearTimeout(VOICE.wakeTimeoutId); VOICE.wakeTimeoutId = null; }
+          VOICE.awaitingCommand = false;
+          const idx = VOICE.activeSlot;
+          STATE.slots[idx].isListening = false;
+          STATE.slots[idx].inputText = cleaned;
+          sendMessage(idx, true);
+          return;
+        }
+
+        // Legacy armed-command path (first wake without a command in the same breath).
         if (VOICE.activeSlot !== null && VOICE.awaitingCommand) {
           const slot = STATE.slots[VOICE.activeSlot];
-          // Bail if the slot was disabled between wake word and command.
           if (!slot || !slot.voiceEnabled) {
             if (VOICE.wakeTimeoutId) { clearTimeout(VOICE.wakeTimeoutId); VOICE.wakeTimeoutId = null; }
             VOICE.activeSlot = null;
             VOICE.awaitingCommand = false;
             return;
           }
-          // Strip a leading wake phrase if the user repeated it
           let cleaned = text;
           const p = buildWakePattern(slot.voiceName || slot.label);
           cleaned = text.replace(p, '').trim();
-          const lower = cleaned.toLowerCase();
-          if (lower === 'stop' || lower === 'cancel' || lower === 'never mind') {
-            stopSpeaking();
-            VOICE.activeSlot = null;
-            VOICE.awaitingCommand = false;
-            if (VOICE.wakeTimeoutId) { clearTimeout(VOICE.wakeTimeoutId); VOICE.wakeTimeoutId = null; }
-            STATE.slots.forEach(s => { s.isListening = false; });
-            render();
+          if (EXIT_CONVERSATION_RE.test(cleaned)) {
+            exitConversationMode();
             return;
           }
-          if (cleaned.length < 2) return; // ignore stray noise
+          if (cleaned.length < 2) return;
           if (VOICE.wakeTimeoutId) { clearTimeout(VOICE.wakeTimeoutId); VOICE.wakeTimeoutId = null; }
           VOICE.awaitingCommand = false;
+          VOICE.conversationMode = true; // entering conversation for follow-ups
           const idx = VOICE.activeSlot;
           STATE.slots[idx].isListening = false;
           STATE.slots[idx].inputText = cleaned;
@@ -739,23 +983,28 @@ Search first, then answer. Never skip the search step. Never guess when you can 
           if (after.length >= 2) {
             VOICE.activeSlot = i;
             VOICE.awaitingCommand = false;
+            VOICE.conversationMode = true;
             slot.isListening = false;
             slot.inputText = after;
             sendMessage(i, true);
             return;
           }
 
-          // Otherwise arm: wait for the next utterance as the command.
+          // Otherwise arm: wait for the next utterance as the command. Only the first
+          // arming uses the 30s fallback; once conversationMode is on we stay listening
+          // until the user explicitly exits.
           VOICE.activeSlot = i;
           VOICE.awaitingCommand = true;
           slot.isListening = true;
           if (VOICE.wakeTimeoutId) clearTimeout(VOICE.wakeTimeoutId);
           VOICE.wakeTimeoutId = setTimeout(() => {
-            VOICE.activeSlot = null;
-            VOICE.awaitingCommand = false;
-            slot.isListening = false;
-            VOICE.wakeTimeoutId = null;
-            render();
+            if (!VOICE.conversationMode) {
+              VOICE.activeSlot = null;
+              VOICE.awaitingCommand = false;
+              slot.isListening = false;
+              VOICE.wakeTimeoutId = null;
+              render();
+            }
           }, 30000);
           render();
           return;
@@ -867,6 +1116,7 @@ Search first, then answer. Never skip the search step. Never guess when you can 
         if (VOICE.wakeTimeoutId) { clearTimeout(VOICE.wakeTimeoutId); VOICE.wakeTimeoutId = null; }
         VOICE.activeSlot = null;
         VOICE.awaitingCommand = false;
+        VOICE.conversationMode = false;
         VOICE.interimText = '';
         VOICE.interimSlot = null;
         STATE.slots.forEach(s => { s.isListening = false; });
@@ -885,6 +1135,10 @@ Search first, then answer. Never skip the search step. Never guess when you can 
             if (VOICE.wakeTimeoutId) { clearTimeout(VOICE.wakeTimeoutId); VOICE.wakeTimeoutId = null; }
             VOICE.activeSlot = null;
             VOICE.awaitingCommand = false;
+            VOICE.conversationMode = false;
+            if (slot.abortController) { try { slot.abortController.abort(); } catch {} slot.abortController = null; }
+            slot.ttsQueue = null;
+            slot.loading = false;
           }
           slot.isListening = false;
           if (slot.isSpeaking) stopSpeaking();
@@ -957,6 +1211,11 @@ Search first, then answer. Never skip the search step. Never guess when you can 
         render();
       }
 
+      // Web-search heuristic: only attach the (slow) web_search tool when the prompt
+      // clearly benefits from live data. Voice turns otherwise skip it entirely to cut
+      // ~2-5 seconds off the round trip.
+      const WEB_SEARCH_HINT_RE = /\b(search|look ?up|latest|news|today|right now|current|price of|weather|stock|score|who won|breaking)\b/i;
+
       async function sendMessage(idx, viaVoice = false) {
         const slot = STATE.slots[idx];
         const text = slot.inputText.trim();
@@ -965,6 +1224,19 @@ Search first, then answer. Never skip the search step. Never guess when you can 
         slot.messages.push({ role: 'user', content: text });
         slot.inputText = '';
         slot.loading = true;
+
+        // Abort controller so Stop/Cancel can tear down the in-flight request.
+        const controller = new AbortController();
+        slot.abortController = controller;
+
+        // Pre-insert the assistant message so streaming deltas can mutate it in place.
+        slot.messages.push({ role: 'assistant', content: '' });
+        const assistantMsgIdx = slot.messages.length - 1;
+
+        // Voice turns stream TTS sentence-by-sentence. Initialize the queue before the fetch
+        // so first-audio latency is bounded only by the model's first-token time.
+        if (viaVoice) initTtsQueue(idx, controller.signal, assistantMsgIdx);
+
         render();
         scrollChat();
 
@@ -980,38 +1252,119 @@ Search first, then answer. Never skip the search step. Never guess when you can 
             ? slot.prompt + '\n\n' + slot.voicePersonality
             : slot.prompt;
 
+          const needsSearch = !viaVoice || WEB_SEARCH_HINT_RE.test(text);
+
+          const body = {
+            // Haiku for voice (fastest first-token latency + cheap), Sonnet for typed chat.
+            model: viaVoice ? 'claude-haiku-4-5-20251001' : 'claude-sonnet-4-20250514',
+            max_tokens: viaVoice ? 256 : 1024,
+            stream: true,
+            system: systemPrompt,
+            messages: slot.messages
+              .slice(0, -1) // drop the empty placeholder we just pushed
+              .filter(m => m.role === 'user' || m.role === 'assistant')
+              .map(m => ({ role: m.role, content: m.content }))
+          };
+          if (needsSearch) body.tools = [{ type: "web_search_20250305", name: "web_search" }];
+
           const resp = await fetch("https://api.anthropic.com/v1/messages", {
             method: "POST",
             headers,
-            body: JSON.stringify({
-              model: "claude-sonnet-4-20250514",
-              max_tokens: 1024,
-              system: systemPrompt,
-              tools: [{ type: "web_search_20250305", name: "web_search" }],
-              messages: slot.messages
-                .filter(m => m.role === 'user' || m.role === 'assistant')
-                .map(m => ({ role: m.role, content: m.content }))
-            })
+            body: JSON.stringify(body),
+            signal: controller.signal
           });
 
-          const data = await resp.json();
-          if (data.error) throw new Error(data.error.message || 'API error');
-          const reply = data.content?.filter(c => c.type === 'text').map(c => c.text).join('') || 'No response.';
-          slot.messages.push({ role: 'assistant', content: reply });
-          const assistantMsgIdx = slot.messages.length - 1;
-          if (viaVoice) {
-            // Speak only the summary card text (all assistants output structured HTML)
-            speakText(extractSummary(reply), idx, assistantMsgIdx);
+          if (!resp.ok) {
+            const errText = await resp.text().catch(() => '');
+            let msg = `API error ${resp.status}`;
+            try { const j = JSON.parse(errText); if (j.error && j.error.message) msg = j.error.message; } catch {}
+            throw new Error(msg);
+          }
+
+          const reader = resp.body.getReader();
+          const decoder = new TextDecoder();
+          let sseBuffer = '';
+          let sentenceBuffer = '';
+          let reply = '';
+          let lastRender = 0;
+
+          const sentenceRe = /^[\s\S]*?[.!?](?:\s+|$)/;
+          const flushSentences = () => {
+            if (!viaVoice) return;
+            let m;
+            while ((m = sentenceBuffer.match(sentenceRe)) && m[0].length) {
+              const sent = m[0].trim();
+              sentenceBuffer = sentenceBuffer.slice(m[0].length);
+              if (sent.length >= 2) enqueueTtsSentence(idx, sent);
+            }
+          };
+
+          while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            sseBuffer += decoder.decode(value, { stream: true });
+
+            // Anthropic SSE: events separated by blank line; each event has "event:" and "data:" lines.
+            let sepIdx;
+            while ((sepIdx = sseBuffer.indexOf('\n\n')) !== -1) {
+              const frame = sseBuffer.slice(0, sepIdx);
+              sseBuffer = sseBuffer.slice(sepIdx + 2);
+              for (const line of frame.split('\n')) {
+                if (!line.startsWith('data:')) continue;
+                const dataStr = line.slice(5).trim();
+                if (!dataStr || dataStr === '[DONE]') continue;
+                let ev;
+                try { ev = JSON.parse(dataStr); } catch { continue; }
+                if (ev.type === 'content_block_delta' && ev.delta && ev.delta.type === 'text_delta' && typeof ev.delta.text === 'string') {
+                  reply += ev.delta.text;
+                  sentenceBuffer += ev.delta.text;
+                  slot.messages[assistantMsgIdx].content = reply;
+                  flushSentences();
+                  const now = Date.now();
+                  if (now - lastRender > 80) { lastRender = now; render(); scrollChat(); }
+                } else if (ev.type === 'message_stop') {
+                  // nothing — handled below
+                } else if (ev.type === 'error' && ev.error) {
+                  throw new Error(ev.error.message || 'API stream error');
+                }
+              }
+            }
+          }
+
+          // Flush any trailing partial sentence as one final chunk.
+          const tail = sentenceBuffer.trim();
+          if (tail && viaVoice) enqueueTtsSentence(idx, tail);
+          if (viaVoice && slot.ttsQueue) {
+            slot.ttsQueue.done = true;
+            // Kick the queue in case no sentences were ever enqueued (e.g., empty reply).
+            processTtsQueue(idx);
+          }
+          if (!reply && slot.messages[assistantMsgIdx]) {
+            slot.messages[assistantMsgIdx].content = 'No response.';
           }
         } catch (err) {
-          slot.messages.push({ role: 'assistant', content: '\u26a0\ufe0f ' + (err.message || 'Connection failed. Check your API key in Settings.') });
-          if (viaVoice) {
-            VOICE.activeSlot = null;
-            VOICE.awaitingCommand = false;
+          if (err && err.name === 'AbortError') {
+            // User hit Stop/Cancel — drop the empty placeholder and stay quiet.
+            const placeholder = slot.messages[assistantMsgIdx];
+            if (placeholder && placeholder.role === 'assistant' && !placeholder.content) {
+              slot.messages.splice(assistantMsgIdx, 1);
+            }
+          } else {
+            const placeholder = slot.messages[assistantMsgIdx];
+            const errMsg = '\u26a0\ufe0f ' + (err.message || 'Connection failed. Check your API key in Settings.');
+            if (placeholder && placeholder.role === 'assistant') placeholder.content = errMsg;
+            else slot.messages.push({ role: 'assistant', content: errMsg });
+            if (viaVoice) {
+              VOICE.activeSlot = null;
+              VOICE.awaitingCommand = false;
+              VOICE.conversationMode = false;
+              teardownTtsQueue(idx);
+            }
           }
         }
 
         slot.loading = false;
+        if (slot.abortController === controller) slot.abortController = null;
         render();
         scrollChat();
       }
@@ -1079,9 +1432,14 @@ Search first, then answer. Never skip the search step. Never guess when you can 
         if (!VOICE.wantRunning || !VOICE.interimText) return '';
         if (VOICE.interimSlot !== slotIdx) return '';
         const fontSize = expanded ? '' : 'font-size:11px;padding:6px 10px;';
+        const cancelSize = expanded ? 'font-size:11px;padding:4px 10px;' : 'font-size:10px;padding:3px 8px;';
         return `
-          <div class="flex justify-end" id="interim-bubble-${slotIdx}">
-            <div class="chat-bubble chat-user interim-bubble" style="${fontSize}max-width:88%">
+          <div class="flex justify-end items-center gap-2" id="interim-bubble-${slotIdx}">
+            <button title="Cancel — don't send this" data-action="cancel-pending" data-idx="${slotIdx}"
+              style="background:rgba(239,68,68,0.08);color:#ef4444;border:1px solid rgba(239,68,68,0.35);border-radius:9999px;${cancelSize}cursor:pointer;font-weight:600;line-height:1">
+              Cancel
+            </button>
+            <div class="chat-bubble chat-user interim-bubble" style="${fontSize}max-width:70%">
               <span class="interim-text">${escHtml(VOICE.interimText)}</span><span class="interim-caret">\u258A</span>
             </div>
           </div>`;
@@ -1250,6 +1608,10 @@ Search first, then answer. Never skip the search step. Never guess when you can 
         const isActiveCommand = VOICE.activeSlot === idx && VOICE.awaitingCommand;
         const isSpeaking = slot.isSpeaking;
         const enabled = slot.voiceEnabled;
+        const inConversation = VOICE.conversationMode && VOICE.activeSlot === idx;
+        // Show the dedicated Stop button whenever the system is "busy" — speaking, loading,
+        // armed for a command, or in continuous conversation. Click exits conversation mode.
+        const showStopBtn = enabled && (inConversation || isSpeaking || isActiveCommand || slot.loading);
 
         let inner, bg, title, extraClass = '';
         if (!enabled) {
@@ -1260,10 +1622,10 @@ Search first, then answer. Never skip the search step. Never guess when you can 
           inner = '<span class="sound-wave"><span class="sound-wave-bar"></span><span class="sound-wave-bar"></span><span class="sound-wave-bar"></span></span>';
           bg = color;
           title = 'Speaking — click to stop';
-        } else if (isActiveCommand) {
+        } else if (isActiveCommand || inConversation) {
           inner = '<span style="width:16px;height:16px;border-radius:50%;background:#fff;display:inline-block"></span>';
           bg = '#ef4444';
-          title = 'Listening for your command';
+          title = inConversation ? 'Conversation on — click to end' : 'Listening for your command';
           extraClass = 'record-pulse';
         } else {
           inner = '<i data-lucide="mic" class="w-6 h-6"></i>';
@@ -1271,8 +1633,9 @@ Search first, then answer. Never skip the search step. Never guess when you can 
           title = 'Listening for wake word — click to disable';
         }
 
-        const action = isSpeaking ? 'stop-speaking' : 'toggle-voice';
-        const showRings = enabled && !isSpeaking && !isActiveCommand;
+        // Clicking the FAB while busy exits conversation mode; otherwise toggles voice.
+        const action = showStopBtn ? 'exit-conversation' : 'toggle-voice';
+        const showRings = enabled && !isSpeaking && !isActiveCommand && !inConversation;
 
         return `
           <div class="voice-fab-wrap" style="color:${bg}">
@@ -1306,9 +1669,9 @@ Search first, then answer. Never skip the search step. Never guess when you can 
                 </div>
               </div>
               <div class="flex items-center gap-2">
-                ${slot.isSpeaking ? `
-                  <button style="background:transparent;border:1px solid rgba(255,255,255,0.25);color:#fca5a5;font-size:11px;padding:5px 10px;border-radius:6px;cursor:pointer;font-weight:600" data-action="stop-speaking" data-idx="${idx}">
-                    <i data-lucide="volume-x" class="w-3 h-3 inline mr-1"></i>Stop Speaking
+                ${(VOICE.conversationMode && VOICE.activeSlot === idx) || slot.isSpeaking || slot.loading ? `
+                  <button style="background:rgba(239,68,68,0.15);border:1px solid rgba(239,68,68,0.5);color:#fca5a5;font-size:11px;padding:5px 10px;border-radius:6px;cursor:pointer;font-weight:600" data-action="exit-conversation" data-idx="${idx}">
+                    <i data-lucide="square" class="w-3 h-3 inline mr-1"></i>Stop
                   </button>
                 ` : ''}
                 <button style="background:transparent;border:1px solid rgba(255,255,255,0.25);color:#10b981;font-size:11px;padding:5px 10px;border-radius:6px;cursor:pointer;font-weight:600" data-action="save-to-sheet" data-idx="${idx}" ${slot.messages.length === 0 ? 'disabled' : ''}>
@@ -1540,6 +1903,14 @@ Search first, then answer. Never skip the search step. Never guess when you can 
             }
             case 'stop-speaking': {
               stopSpeaking();
+              break;
+            }
+            case 'exit-conversation': {
+              exitConversationMode();
+              break;
+            }
+            case 'cancel-pending': {
+              cancelPendingUtterance();
               break;
             }
             case 'tts-speak': {
