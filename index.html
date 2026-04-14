@@ -341,6 +341,9 @@ Web search is invisible to the user. Never mention that you are searching, looki
       // ElevenLabs TTS configuration
       const DEFAULT_ELEVENLABS_API_KEY = '';
       const DEFAULT_ELEVENLABS_VOICE_ID = 'JBFqnCBsd6RMkjVDRZzb'; // George
+      // Fallback list shown before the user's ElevenLabs library is fetched (or if the
+      // fetch fails — e.g. missing/invalid key, offline). Once the live list loads,
+      // EL_VOICES_CACHE.list takes precedence so the dropdown reflects My Voices.
       const ELEVENLABS_VOICES = [
         { id: 'JBFqnCBsd6RMkjVDRZzb', name: 'George', desc: 'Warm British male' },
         { id: '21m00Tcm4TlvDq8ikWAM', name: 'Rachel', desc: 'Calm female' },
@@ -351,6 +354,65 @@ Web search is invisible to the user. Never mention that you are searching, looki
         { id: 'AZnzlk1XvdvUeBnXmlld', name: 'Domi', desc: 'Strong female' },
         { id: 'MF3mGyEYCl7XYWbV9V6O', name: 'Elli', desc: 'Young female' },
       ];
+
+      // Runtime cache for the voices fetched from the user's ElevenLabs account via
+      // GET /v1/voices. Populated on first Settings render (and on refresh/key change).
+      const EL_VOICES_CACHE = {
+        list: null,      // array of { id, name, desc, category } once fetched, else null
+        loading: false,  // fetch in flight?
+        error: null,     // last fetch error message, if any
+        keyUsed: null    // api key that produced the current list — refetch when it changes
+      };
+
+      // Fetch the caller's voice library from ElevenLabs. Idempotent: returns early if
+      // the same key is already loaded or a fetch is in flight for it. Populates
+      // EL_VOICES_CACHE and triggers a re-render so the Settings dropdown updates.
+      async function fetchElevenLabsVoices(apiKey, { force = false } = {}) {
+        const key = (apiKey || '').trim();
+        if (!key) return;
+        if (!force && EL_VOICES_CACHE.keyUsed === key && Array.isArray(EL_VOICES_CACHE.list)) return;
+        if (EL_VOICES_CACHE.loading && EL_VOICES_CACHE.keyUsed === key) return;
+        EL_VOICES_CACHE.loading = true;
+        EL_VOICES_CACHE.error = null;
+        EL_VOICES_CACHE.keyUsed = key;
+        render();
+        try {
+          const resp = await fetch('https://api.elevenlabs.io/v1/voices', {
+            headers: { 'xi-api-key': key, 'Accept': 'application/json' }
+          });
+          if (!resp.ok) {
+            let msg = 'HTTP ' + resp.status;
+            try { const j = await resp.json(); if (j && j.detail && j.detail.message) msg = j.detail.message; } catch {}
+            throw new Error(msg);
+          }
+          const data = await resp.json();
+          const voices = Array.isArray(data.voices) ? data.voices : [];
+          // Sort: user's own voices (cloned/professional/generated) first, then premade.
+          const priority = { cloned: 0, professional: 1, generated: 2, premade: 3 };
+          voices.sort((a, b) => {
+            const pa = priority[a.category] ?? 4;
+            const pb = priority[b.category] ?? 4;
+            if (pa !== pb) return pa - pb;
+            return String(a.name || '').localeCompare(String(b.name || ''));
+          });
+          EL_VOICES_CACHE.list = voices.map(v => {
+            const labels = v.labels || {};
+            const desc = v.description
+              || labels.description
+              || labels.descriptive
+              || [labels.accent, labels.gender, labels.age].filter(Boolean).join(' ')
+              || v.category
+              || '';
+            return { id: v.voice_id, name: v.name || v.voice_id, desc, category: v.category || '' };
+          });
+        } catch (err) {
+          EL_VOICES_CACHE.error = err && err.message ? err.message : 'Failed to load voices';
+          console.warn('fetchElevenLabsVoices failed:', err);
+        } finally {
+          EL_VOICES_CACHE.loading = false;
+          render();
+        }
+      }
 
       // Google Sheet webhook for saving Q&A results
       let GSHEET_WEBHOOK = 'https://script.google.com/macros/s/AKfycbz0gE7H7Nd6LX9S4JJsWZb4h0W0qf04CDVloFFbfnc_0s80orwybcATHs3L7vicQAbE/exec';
@@ -2052,6 +2114,10 @@ Web search is invisible to the user. Never mention that you are searching, looki
         const es = STATE.editingSlot;
         const slot = STATE.slots[es];
         const color = SLOT_COLORS[es];
+        // Kick off the My Voices fetch on first settings paint (and whenever the key changes).
+        // fetchElevenLabsVoices is idempotent and no-ops when cache is fresh, so this is safe
+        // to call on every render.
+        if (slot.elevenlabsApiKey) fetchElevenLabsVoices(slot.elevenlabsApiKey);
         return `
           <div class="space-y-4">
             <div class="settings-section settings-grid">
@@ -2136,11 +2202,37 @@ Web search is invisible to the user. Never mention that you are searching, looki
                 </div>
 
                 <div class="mb-3">
-                  <label class="block text-[11px] font-semibold text-slate-500 uppercase tracking-wide mb-1">Voice</label>
+                  <div class="flex items-center justify-between mb-1">
+                    <label class="block text-[11px] font-semibold text-slate-500 uppercase tracking-wide">Voice</label>
+                    <button type="button" data-action="refresh-voices" style="font-size:11px;color:#0070F3;background:transparent;border:none;cursor:pointer;padding:0" ${EL_VOICES_CACHE.loading ? 'disabled' : ''}>
+                      ${EL_VOICES_CACHE.loading ? 'Loading…' : 'Refresh my voices'}
+                    </button>
+                  </div>
                   <select id="setting-el-voice" style="width:100%;padding:8px 12px;border:2px solid #e2e8f0;border-radius:10px;font-size:13px;color:var(--navy);background:#fff">
-                    ${ELEVENLABS_VOICES.map(v => `<option value="${v.id}" ${slot.elevenlabsVoiceId===v.id?'selected':''}>${escHtml(v.name)} \u2014 ${escHtml(v.desc)}</option>`).join('')}
+                    ${(() => {
+                      const live = Array.isArray(EL_VOICES_CACHE.list) && EL_VOICES_CACHE.list.length ? EL_VOICES_CACHE.list : null;
+                      const list = live || ELEVENLABS_VOICES;
+                      // If the stored voice isn't in the live list, surface it as a "(missing)" option
+                      // so the user can see why their selection appears off and pick a replacement.
+                      const hasCurrent = list.some(v => v.id === slot.elevenlabsVoiceId);
+                      const missing = !hasCurrent && slot.elevenlabsVoiceId
+                        ? `<option value="${escAttr(slot.elevenlabsVoiceId)}" selected>${escHtml(slot.elevenlabsVoiceId)} — (not in your library)</option>`
+                        : '';
+                      return missing + list.map(v => {
+                        const label = v.desc ? `${escHtml(v.name)} \u2014 ${escHtml(v.desc)}` : escHtml(v.name);
+                        return `<option value="${escAttr(v.id)}" ${slot.elevenlabsVoiceId===v.id?'selected':''}>${label}</option>`;
+                      }).join('');
+                    })()}
                   </select>
-                  <p class="text-[11px] text-slate-400 mt-1">Natural-sounding voices from ElevenLabs. Falls back to browser voice if unavailable.</p>
+                  <p class="text-[11px] text-slate-400 mt-1">
+                    ${EL_VOICES_CACHE.error
+                      ? `<span style="color:#dc2626">Couldn't load your voices: ${escHtml(EL_VOICES_CACHE.error)}. Showing default list.</span>`
+                      : Array.isArray(EL_VOICES_CACHE.list) && EL_VOICES_CACHE.list.length
+                        ? `Showing ${EL_VOICES_CACHE.list.length} voices from your ElevenLabs library. Falls back to browser voice if unavailable.`
+                        : slot.elevenlabsApiKey
+                          ? 'Loading your ElevenLabs voices… a default list is shown until they arrive.'
+                          : 'Add your ElevenLabs API key above to load your My Voices list.'}
+                  </p>
                 </div>
 
                 <button class="btn-outline" style="font-size:11px;padding:5px 12px" data-action="preview-voice" data-idx="${es}">
@@ -2306,14 +2398,25 @@ Web search is invisible to the user. Never mention that you are searching, looki
               }
               break;
             }
-            case 'save-settings':
+            case 'refresh-voices': {
+              if (STATE.activeTab === 'settings') readFields();
+              const sl = STATE.slots[STATE.editingSlot];
+              if (sl && sl.elevenlabsApiKey) fetchElevenLabsVoices(sl.elevenlabsApiKey, { force: true });
+              else showToast('Add your ElevenLabs API key first');
+              break;
+            }
+            case 'save-settings': {
               readFields();
               GSHEET_WEBHOOK = document.getElementById('setting-gsheet')?.value?.trim() || '';
               localStorage.setItem('recast_gsheet_url', GSHEET_WEBHOOK);
               saveSettings();
               saveRemoteConfig();
+              // If the user just entered/updated their ElevenLabs key, refresh the voice list.
+              const newKey = STATE.slots[STATE.editingSlot]?.elevenlabsApiKey;
+              if (newKey && newKey !== EL_VOICES_CACHE.keyUsed) fetchElevenLabsVoices(newKey);
               render();
               break;
+            }
             case 'view-history': {
               HISTORY_VIEW.open = act.dataset.id;
               render();
