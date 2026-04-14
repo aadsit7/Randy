@@ -123,6 +123,12 @@
       .tts-btn:hover { color: #475569; background: rgba(148,163,184,0.12); }
       .tts-btn.playing { color: var(--primary); }
 
+      /* ===== Live interim transcript bubble ===== */
+      .interim-bubble { opacity: 0.6; font-style: italic; border: 1px dashed rgba(37,99,235,0.4); background: rgba(37,99,235,0.06) !important; color: #334155 !important; }
+      .interim-caret { display: inline-block; width: 6px; margin-left: 2px; animation: interim-blink 1s steps(2,end) infinite; color: #2563eb; }
+      @keyframes interim-blink { 50% { opacity: 0; } }
+      @media (prefers-reduced-motion: reduce) { .interim-caret { animation: none; } }
+
       @media (prefers-reduced-motion: reduce) {
         .voice-pulse-ring, .record-pulse, .sound-wave-bar, .voice-toast { animation: none !important; }
         .voice-pulse-ring { display: none; }
@@ -339,7 +345,10 @@ You deliver every response as structured, interactive HTML cards. No exceptions.
         wakeTimeoutId: null,     // 30s timeout to drop back to passive listening
         permissionDenied: false,
         toastTimeoutId: null,
-        toastMessage: ''
+        toastMessage: '',
+        playingMsg: null,        // { slot, msg } of the specific assistant message currently being spoken
+        interimText: '',         // live partial transcript from SpeechRecognition
+        interimSlot: null        // slot idx the interim transcript belongs to
       };
 
       const SLOT_COLORS = ['#10b981'];
@@ -388,7 +397,10 @@ You deliver every response as structured, interactive HTML cards. No exceptions.
       loadSettings();
 
       /* ========== ELEVENLABS TTS ========== */
-      const EL_AUDIO = { el: null, blobUrl: null, speakingSlot: null };
+      // blobUrl: currently bound <audio> src. owned=true means we also own the URL's lifetime
+      // (revoke on cleanup); owned=false means the URL lives on a message's audioUrl cache and
+      // must NOT be revoked here — the message owns it.
+      const EL_AUDIO = { el: null, blobUrl: null, owned: false, speakingSlot: null };
 
       function getElAudio() {
         if (!EL_AUDIO.el) {
@@ -401,6 +413,7 @@ You deliver every response as structured, interactive HTML cards. No exceptions.
               VOICE.awaitingCommand = false;
             }
             EL_AUDIO.speakingSlot = null;
+            VOICE.playingMsg = null;
             render();
           });
           a.addEventListener('error', () => {
@@ -409,6 +422,7 @@ You deliver every response as structured, interactive HTML cards. No exceptions.
               STATE.slots[EL_AUDIO.speakingSlot].isSpeaking = false;
             }
             EL_AUDIO.speakingSlot = null;
+            VOICE.playingMsg = null;
             render();
           });
           document.body.appendChild(a);
@@ -418,10 +432,11 @@ You deliver every response as structured, interactive HTML cards. No exceptions.
       }
 
       function cleanupElAudio() {
-        if (EL_AUDIO.blobUrl) {
+        if (EL_AUDIO.blobUrl && EL_AUDIO.owned) {
           URL.revokeObjectURL(EL_AUDIO.blobUrl);
-          EL_AUDIO.blobUrl = null;
         }
+        EL_AUDIO.blobUrl = null;
+        EL_AUDIO.owned = false;
       }
 
       function stopElAudio() {
@@ -436,9 +451,37 @@ You deliver every response as structured, interactive HTML cards. No exceptions.
           STATE.slots[EL_AUDIO.speakingSlot].isSpeaking = false;
         }
         EL_AUDIO.speakingSlot = null;
+        VOICE.playingMsg = null;
       }
 
-      async function elevenLabsSpeak(text, idx) {
+      // Play a cached ElevenLabs blob URL that lives on a message (no re-fetch).
+      async function playCachedAudio(audioUrl, slotIdx, msgIdx) {
+        const slot = STATE.slots[slotIdx];
+        if (!slot || !audioUrl) return false;
+        stopElAudio();
+        try { window.speechSynthesis.cancel(); } catch {}
+        slot.isSpeaking = true;
+        EL_AUDIO.speakingSlot = slotIdx;
+        EL_AUDIO.blobUrl = audioUrl;
+        EL_AUDIO.owned = false; // message owns this URL; don't revoke
+        VOICE.playingMsg = { slot: slotIdx, msg: msgIdx };
+        render();
+        try {
+          const audio = getElAudio();
+          audio.src = audioUrl;
+          await audio.play();
+          return true;
+        } catch (err) {
+          console.warn('Cached audio replay failed:', err);
+          slot.isSpeaking = false;
+          EL_AUDIO.speakingSlot = null;
+          VOICE.playingMsg = null;
+          render();
+          return false;
+        }
+      }
+
+      async function elevenLabsSpeak(text, idx, msgIdx) {
         const slot = STATE.slots[idx];
         if (!slot.elevenlabsEnabled) return false;
         if (!slot.elevenlabsApiKey) {
@@ -454,6 +497,7 @@ You deliver every response as structured, interactive HTML cards. No exceptions.
 
         slot.isSpeaking = true;
         EL_AUDIO.speakingSlot = idx;
+        if (typeof msgIdx === 'number') VOICE.playingMsg = { slot: idx, msg: msgIdx };
         render();
 
         try {
@@ -493,6 +537,19 @@ You deliver every response as structured, interactive HTML cards. No exceptions.
           cleanupElAudio();
           EL_AUDIO.blobUrl = url;
 
+          // Cache on the message so replay is instant and free.
+          const msg = typeof msgIdx === 'number' ? slot.messages[msgIdx] : null;
+          if (msg && msg.role === 'assistant') {
+            if (msg.audioUrl && msg.audioUrl !== url) {
+              try { URL.revokeObjectURL(msg.audioUrl); } catch {}
+            }
+            msg.audioUrl = url;
+            msg.audioSource = 'elevenlabs';
+            EL_AUDIO.owned = false; // ownership transferred to message
+          } else {
+            EL_AUDIO.owned = true;  // no message to hand off to; we own it
+          }
+
           const audio = getElAudio();
           audio.src = url;
           await audio.play();
@@ -503,6 +560,7 @@ You deliver every response as structured, interactive HTML cards. No exceptions.
           showToast(msg);
           slot.isSpeaking = false;
           EL_AUDIO.speakingSlot = null;
+          VOICE.playingMsg = null;
           render();
           return false;
         }
@@ -572,35 +630,46 @@ You deliver every response as structured, interactive HTML cards. No exceptions.
             || pool[0];
       }
 
-      async function speakText(text, idx) {
+      async function speakText(text, idx, msgIdx) {
         const slot = STATE.slots[idx];
 
         // Try ElevenLabs first if configured
         if (slot.elevenlabsEnabled && slot.elevenlabsApiKey) {
-          const ok = await elevenLabsSpeak(text, idx);
+          const ok = await elevenLabsSpeak(text, idx, msgIdx);
           if (ok) return;
         }
 
-        // Fallback: browser Web Speech API
+        // Fallback: browser Web Speech API (cannot cache; mark source accordingly)
         if (!VOICE.ttsSupported) return;
         const clean = stripMarkdown(text);
         if (!clean) return;
         try { window.speechSynthesis.cancel(); } catch {}
+        const msg = typeof msgIdx === 'number' ? slot.messages[msgIdx] : null;
+        if (msg && msg.role === 'assistant' && !msg.audioSource) msg.audioSource = 'browser';
         const u = new SpeechSynthesisUtterance(clean);
         const v = pickDeepVoice();
         if (v) u.voice = v;
         u.pitch = 0.85;
         u.rate = 0.95;
-        u.onstart = () => { STATE.slots[idx].isSpeaking = true; render(); };
+        u.onstart = () => {
+          STATE.slots[idx].isSpeaking = true;
+          if (typeof msgIdx === 'number') VOICE.playingMsg = { slot: idx, msg: msgIdx };
+          render();
+        };
         u.onend = () => {
           STATE.slots[idx].isSpeaking = false;
           VOICE.activeSlot = null;
           VOICE.awaitingCommand = false;
+          VOICE.playingMsg = null;
           render();
         };
         u.onerror = u.onend;
         try { window.speechSynthesis.speak(u); }
-        catch { STATE.slots[idx].isSpeaking = false; render(); }
+        catch {
+          STATE.slots[idx].isSpeaking = false;
+          VOICE.playingMsg = null;
+          render();
+        }
       }
 
       function stopSpeaking() {
@@ -609,6 +678,7 @@ You deliver every response as structured, interactive HTML cards. No exceptions.
           try { window.speechSynthesis.cancel(); } catch {}
         }
         STATE.slots.forEach(s => { s.isSpeaking = false; });
+        VOICE.playingMsg = null;
         render();
       }
 
@@ -717,6 +787,49 @@ You deliver every response as structured, interactive HTML cards. No exceptions.
         }
       }
 
+      // Pick the slot the interim transcript belongs to: the active command slot if one
+      // is armed, otherwise the first voice-enabled slot (typically index 0).
+      function interimTargetSlot() {
+        if (VOICE.activeSlot !== null && VOICE.awaitingCommand) return VOICE.activeSlot;
+        for (let i = 0; i < STATE.slots.length; i++) {
+          if (STATE.slots[i].voiceEnabled) return i;
+        }
+        return null;
+      }
+
+      // Update the interim transcript in place without re-rendering the whole tree.
+      // This is called on every SpeechRecognition tick (~100-300ms), so it must be cheap.
+      function updateInterim(text) {
+        // Echo guard: suppress interim while Randy is speaking so his own voice
+        // being re-transcribed doesn't flash onscreen.
+        if (STATE.slots.some(s => s.isSpeaking)) { clearInterim(); return; }
+        const trimmed = String(text || '').trim();
+        if (trimmed.length < 2) { clearInterim(); return; }
+        const target = interimTargetSlot();
+        if (target === null) { clearInterim(); return; }
+
+        const prevText = VOICE.interimText;
+        const prevSlot = VOICE.interimSlot;
+        VOICE.interimText = trimmed;
+        VOICE.interimSlot = target;
+
+        // Try the cheap path: just update the existing node's text.
+        const existing = document.getElementById('interim-bubble-' + target);
+        if (existing && prevSlot === target) {
+          const span = existing.querySelector('.interim-text');
+          if (span) { span.textContent = trimmed; return; }
+        }
+        // Otherwise do one render to mount the node.
+        if (prevText !== trimmed || prevSlot !== target) render();
+      }
+
+      function clearInterim() {
+        if (!VOICE.interimText && VOICE.interimSlot === null) return;
+        VOICE.interimText = '';
+        VOICE.interimSlot = null;
+        render();
+      }
+
       function ensureRecognition() {
         if (!VOICE.srSupported) return null;
         if (VOICE.recognition) return VOICE.recognition;
@@ -726,11 +839,19 @@ You deliver every response as structured, interactive HTML cards. No exceptions.
         r.interimResults = true;
         r.lang = 'en-US';
         r.onresult = (e) => {
+          let interim = '';
+          let finalChunk = '';
           for (let i = e.resultIndex; i < e.results.length; i++) {
             const res = e.results[i];
-            if (res.isFinal) {
-              handleVoiceTranscript(res[0].transcript);
-            }
+            const t = res[0] && res[0].transcript ? res[0].transcript : '';
+            if (res.isFinal) finalChunk += t + ' ';
+            else interim += t;
+          }
+          if (finalChunk) {
+            clearInterim();
+            handleVoiceTranscript(finalChunk);
+          } else if (interim) {
+            updateInterim(interim);
           }
         };
         r.onerror = (e) => {
@@ -771,6 +892,8 @@ You deliver every response as structured, interactive HTML cards. No exceptions.
         if (VOICE.wakeTimeoutId) { clearTimeout(VOICE.wakeTimeoutId); VOICE.wakeTimeoutId = null; }
         VOICE.activeSlot = null;
         VOICE.awaitingCommand = false;
+        VOICE.interimText = '';
+        VOICE.interimSlot = null;
         STATE.slots.forEach(s => { s.isListening = false; });
       }
 
@@ -858,11 +981,12 @@ You deliver every response as structured, interactive HTML cards. No exceptions.
           if (data.error) throw new Error(data.error.message || 'API error');
           const reply = data.content?.map(c => c.text || '').join('') || 'No response.';
           slot.messages.push({ role: 'assistant', content: reply });
+          const assistantMsgIdx = slot.messages.length - 1;
           const lastUserMsg = slot.messages.filter(m => m.role === 'user').pop();
           saveToSheet(lastUserMsg?.content || '', reply);
           if (viaVoice) {
             // Speak only the summary card text (all assistants output structured HTML)
-            speakText(extractSummary(reply), idx);
+            speakText(extractSummary(reply), idx, assistantMsgIdx);
           }
         } catch (err) {
           slot.messages.push({ role: 'assistant', content: '\u26a0\ufe0f ' + (err.message || 'Connection failed. Check your API key in Settings.') });
@@ -889,6 +1013,14 @@ You deliver every response as structured, interactive HTML cards. No exceptions.
       }
 
       function clearChat(idx) {
+        // Stop any active playback whose source message is about to be wiped.
+        if (VOICE.playingMsg && VOICE.playingMsg.slot === idx) stopSpeaking();
+        // Release cached TTS blob URLs so they don't leak.
+        STATE.slots[idx].messages.forEach(m => {
+          if (m && m.audioUrl) {
+            try { URL.revokeObjectURL(m.audioUrl); } catch {}
+          }
+        });
         STATE.slots[idx].messages = [];
         STATE.slots[idx].inputText = '';
         STATE.slots[idx].loading = false;
@@ -930,13 +1062,29 @@ You deliver every response as structured, interactive HTML cards. No exceptions.
         return div.textContent.replace(/\s+/g, ' ').trim().substring(0, 200);
       }
 
+      // Render the live interim transcript as a faded bubble aligned right (like a user msg).
+      // Returns empty string unless recognition is active and an interim string is pending for this slot.
+      function interimBubbleHtml(slotIdx, expanded) {
+        if (!VOICE.wantRunning || !VOICE.interimText) return '';
+        if (VOICE.interimSlot !== slotIdx) return '';
+        const fontSize = expanded ? '' : 'font-size:11px;padding:6px 10px;';
+        return `
+          <div class="flex justify-end" id="interim-bubble-${slotIdx}">
+            <div class="chat-bubble chat-user interim-bubble" style="${fontSize}max-width:88%">
+              <span class="interim-text">${escHtml(VOICE.interimText)}</span><span class="interim-caret">\u258A</span>
+            </div>
+          </div>`;
+      }
+
       function speakerBtnHtml(slotIdx, msgIdx) {
         const slot = STATE.slots[slotIdx];
         if (!slot.elevenlabsEnabled && !VOICE.ttsSupported) return '';
-        const isPlaying = slot.isSpeaking;
-        const icon = isPlaying ? 'volume-x' : 'volume-2';
-        const title = isPlaying ? 'Stop' : 'Speak';
-        return `<button class="tts-btn ${isPlaying ? 'playing' : ''}" title="${title}" data-action="tts-speak" data-slot="${slotIdx}" data-msg="${msgIdx}"><i data-lucide="${icon}" class="w-3 h-3"></i></button>`;
+        const isPlayingThis = !!(VOICE.playingMsg && VOICE.playingMsg.slot === slotIdx && VOICE.playingMsg.msg === msgIdx);
+        const msg = slot.messages[msgIdx];
+        const hasCached = !!(msg && msg.audioUrl);
+        const icon = isPlayingThis ? 'volume-x' : (hasCached ? 'rotate-ccw' : 'volume-2');
+        const title = isPlayingThis ? 'Stop' : (hasCached ? 'Play again' : 'Speak');
+        return `<button class="tts-btn ${isPlayingThis ? 'playing' : ''}" title="${title}" aria-label="${title}" data-action="tts-speak" data-slot="${slotIdx}" data-msg="${msgIdx}"><i data-lucide="${icon}" class="w-3 h-3"></i></button>`;
       }
 
       /* ========== RENDER ========== */
@@ -1012,6 +1160,7 @@ You deliver every response as structured, interactive HTML cards. No exceptions.
                     : `<div class="msg-wrap"><div class="chat-bubble chat-bot chat-html" style="font-size:11px;padding:6px 10px;padding-right:22px;white-space:normal">${renderBotContent(m.content)}</div>${speakerBtnHtml(idx, mi)}</div>`}
                 </div>
               `).join('')}
+              ${interimBubbleHtml(idx, false)}
               ${slot.loading?'<div class="flex justify-start"><div class="chat-bot" style="padding:6px 12px"><span class="typing-dot"></span> <span class="typing-dot"></span> <span class="typing-dot"></span></div></div>':''}
             </div>
             <div class="chat-input-row flex items-center gap-1.5 px-2 py-2 border-t border-slate-200" style="background:#fff">
@@ -1117,6 +1266,7 @@ You deliver every response as structured, interactive HTML cards. No exceptions.
                     : `<div class="msg-wrap"><div class="chat-bubble chat-bot chat-html" style="white-space:normal;padding-right:26px">${renderBotContent(m.content)}</div>${speakerBtnHtml(idx, mi)}</div>`}
                 </div>
               `).join('')}
+              ${interimBubbleHtml(idx, true)}
               ${slot.loading?`<div class="flex justify-start"><div class="w-7 h-7 rounded-full grid place-items-center text-white text-xs font-bold flex-shrink-0 mr-2 mt-1" style="background:${color}">${slot.label.charAt(0)}</div><div class="chat-bubble chat-bot"><span class="typing-dot"></span> <span class="typing-dot"></span> <span class="typing-dot"></span></div></div>`:''}
             </div>
             <div class="chat-input-row flex-shrink-0">
@@ -1291,10 +1441,20 @@ You deliver every response as structured, interactive HTML cards. No exceptions.
               const mi = parseInt(act.dataset.msg, 10);
               const sl = STATE.slots[si];
               if (!sl) break;
-              if (sl.isSpeaking) { stopSpeaking(); break; }
+              // If this exact message is currently playing, stop it.
+              if (VOICE.playingMsg && VOICE.playingMsg.slot === si && VOICE.playingMsg.msg === mi) {
+                stopSpeaking();
+                break;
+              }
+              // If another message is playing, stop it first so replay is responsive.
+              if (sl.isSpeaking) stopSpeaking();
               const msg = sl.messages[mi];
-              if (msg && msg.role === 'assistant') {
-                speakText(extractSummary(msg.content), si);
+              if (!msg || msg.role !== 'assistant') break;
+              // Instant replay from cached blob — no API call, no token cost.
+              if (msg.audioUrl) {
+                playCachedAudio(msg.audioUrl, si, mi);
+              } else {
+                speakText(extractSummary(msg.content), si, mi);
               }
               break;
             }
