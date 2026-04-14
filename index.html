@@ -303,8 +303,8 @@ You deliver every response as structured, interactive HTML cards. No exceptions.
         return {
           label, apiKey: DEFAULT_API_KEY, prompt,
           messages: [], inputText: '', loading: false,
-          voiceEnabled: false,
-          voiceName: label,
+          voiceEnabled: true,
+          voiceName: 'Randy',
           voicePersonality: DEFAULT_VOICE_PERSONALITY,
           isListening: false,
           isSpeaking: false,
@@ -320,7 +320,7 @@ You deliver every response as structured, interactive HTML cards. No exceptions.
         expandedSlot: null,
         editingSlot: 0,
         slots: [
-          makeSlot('Assistant 2', ASSISTANT_2_PROMPT + HTML_OUTPUT_FORMAT)
+          makeSlot('Recast SE', ASSISTANT_2_PROMPT + HTML_OUTPUT_FORMAT)
         ]
       };
 
