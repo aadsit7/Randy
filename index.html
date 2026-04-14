@@ -383,6 +383,8 @@ Search first, then answer. Never skip the search step. Never guess when you can 
             if (config.elevenlabs_api_key) s.elevenlabsApiKey = config.elevenlabs_api_key;
             if (config.elevenlabs_voice_id) s.elevenlabsVoiceId = config.elevenlabs_voice_id;
           });
+          // Persist so the keys survive refresh even before the next remote fetch completes.
+          saveSettings();
           render();
         } catch (err) {
           console.warn('Failed to load remote config:', err);
@@ -674,29 +676,47 @@ Search first, then answer. Never skip the search step. Never guess when you can 
         }
 
         const voiceId = slot.elevenlabsVoiceId || DEFAULT_ELEVENLABS_VOICE_ID;
+        const callElevenLabs = (url, modelId) => fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'xi-api-key': slot.elevenlabsApiKey },
+          body: JSON.stringify({
+            text: clean,
+            model_id: modelId,
+            voice_settings: { stability: 0.5, similarity_boost: 0.75 }
+          }),
+          signal: q.signal
+        });
+
+        // Try the low-latency streaming endpoint first (flash_v2_5 has the lowest TTFB).
+        // If it fails (e.g. the key/tier lacks permission for the stream endpoint or flash
+        // model), retry with the same non-streaming call the Settings → Preview Voice
+        // button uses — that path is known-good for this key — before giving up to browser TTS.
         let resp;
         try {
-          resp = await fetch(
+          resp = await callElevenLabs(
             `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}/stream?output_format=mp3_44100_128`,
-            {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json', 'xi-api-key': slot.elevenlabsApiKey },
-              body: JSON.stringify({
-                text: clean,
-                // flash_v2_5 has the lowest TTFB of any ElevenLabs model.
-                model_id: 'eleven_flash_v2_5',
-                voice_settings: { stability: 0.5, similarity_boost: 0.75 }
-              }),
-              signal: q.signal
-            }
+            'eleven_flash_v2_5'
           );
         } catch (err) {
           if (err && err.name === 'AbortError') return;
-          return playBrowserTtsChunk(idx, q, clean);
+          resp = null;
         }
-        if (!resp.ok) {
-          console.warn('ElevenLabs stream', resp.status);
-          return playBrowserTtsChunk(idx, q, clean);
+        if (!resp || !resp.ok) {
+          if (resp) console.warn('ElevenLabs stream', resp.status);
+          try {
+            resp = await callElevenLabs(
+              `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=mp3_44100_128`,
+              'eleven_multilingual_v2'
+            );
+          } catch (err) {
+            if (err && err.name === 'AbortError') return;
+            return playBrowserTtsChunk(idx, q, clean);
+          }
+          if (!resp.ok) {
+            console.warn('ElevenLabs non-stream', resp.status);
+            showToast(`ElevenLabs error ${resp.status} \u2014 using browser voice`);
+            return playBrowserTtsChunk(idx, q, clean);
+          }
         }
 
         const blob = await resp.blob();
