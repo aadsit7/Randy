@@ -598,8 +598,12 @@ Web search is invisible to the user. Never mention that you are searching, looki
             cleanupElAudio();
             if (EL_AUDIO.speakingSlot !== null && STATE.slots[EL_AUDIO.speakingSlot]) {
               STATE.slots[EL_AUDIO.speakingSlot].isSpeaking = false;
-              VOICE.activeSlot = null;
-              VOICE.awaitingCommand = false;
+              // Preserve activeSlot/awaitingCommand while in conversation mode so the
+              // next utterance is routed to the same slot without re-saying the wake word.
+              if (!VOICE.conversationMode) {
+                VOICE.activeSlot = null;
+                VOICE.awaitingCommand = false;
+              }
             }
             EL_AUDIO.speakingSlot = null;
             VOICE.playingMsg = null;
@@ -1060,8 +1064,12 @@ Web search is invisible to the user. Never mention that you are searching, looki
         };
         u.onend = () => {
           STATE.slots[idx].isSpeaking = false;
-          VOICE.activeSlot = null;
-          VOICE.awaitingCommand = false;
+          // Preserve activeSlot/awaitingCommand while in conversation mode so the
+          // next utterance is routed to the same slot without re-saying the wake word.
+          if (!VOICE.conversationMode) {
+            VOICE.activeSlot = null;
+            VOICE.awaitingCommand = false;
+          }
           VOICE.playingMsg = null;
           render();
         };
@@ -1283,15 +1291,28 @@ Web search is invisible to the user. Never mention that you are searching, looki
           const span = existing.querySelector('.interim-text');
           if (span) { span.textContent = trimmed; return; }
         }
-        // Otherwise do one render to mount the node.
-        if (prevText !== trimmed || prevSlot !== target) render();
+        // Otherwise do one render to mount the node — but not while the user is typing
+        // in a composer field, because render() blows away the entire DOM and would
+        // destroy the focused <input>/<textarea>, losing focus and cursor position.
+        // The bubble will mount on the next natural render after focus leaves the composer.
+        if (prevText !== trimmed || prevSlot !== target) {
+          if (!isComposerFocused()) render();
+        }
+      }
+
+      // True when the user's focus is inside one of the chat composer inputs.
+      // Used to suppress full re-renders that would yank the caret out of the field.
+      function isComposerFocused() {
+        const el = document.activeElement;
+        if (!el || !el.id) return false;
+        return el.id === 'expanded-input' || el.id.startsWith('home-input-');
       }
 
       function clearInterim() {
         if (!VOICE.interimText && VOICE.interimSlot === null) return;
         VOICE.interimText = '';
         VOICE.interimSlot = null;
-        render();
+        if (!isComposerFocused()) render();
       }
 
       function ensureRecognition() {
