@@ -671,21 +671,32 @@ Web search is invisible to the user. Never mention that you are searching, looki
 
         try {
           const voiceId = slot.elevenlabsVoiceId || DEFAULT_ELEVENLABS_VOICE_ID;
-          const resp = await fetch(
-            `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=mp3_44100_128`,
-            {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'xi-api-key': slot.elevenlabsApiKey
-              },
-              body: JSON.stringify({
-                text: clean,
-                model_id: 'eleven_multilingual_v2',
-                voice_settings: { stability: 0.5, similarity_boost: 0.75 }
-              })
-            }
-          );
+          const callEl = (url, modelId) => fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'xi-api-key': slot.elevenlabsApiKey },
+            body: JSON.stringify({
+              text: clean,
+              model_id: modelId,
+              voice_settings: { stability: 0.5, similarity_boost: 0.75 }
+            })
+          });
+
+          // Fast path: flash_v2_5 on /stream has the lowest TTFB. If the key/tier can't use
+          // it, fall back to the multilingual_v2 non-stream call that's known-good everywhere.
+          let resp;
+          try {
+            resp = await callEl(
+              `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}/stream?output_format=mp3_44100_128`,
+              'eleven_flash_v2_5'
+            );
+          } catch { resp = null; }
+          if (!resp || !resp.ok) {
+            if (resp) console.warn('ElevenLabs flash stream', resp.status);
+            resp = await callEl(
+              `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=mp3_44100_128`,
+              'eleven_multilingual_v2'
+            );
+          }
 
           if (!resp.ok) {
             const errBody = await resp.text().catch(() => '');
@@ -1466,8 +1477,8 @@ Web search is invisible to the user. Never mention that you are searching, looki
           const needsSearch = !viaVoice || WEB_SEARCH_HINT_RE.test(text);
 
           const body = {
-            // Haiku for voice (fastest first-token latency + cheap), Sonnet for typed chat.
-            model: viaVoice ? 'claude-haiku-4-5-20251001' : 'claude-sonnet-4-20250514',
+            // Haiku for voice (fastest first-token latency + cheap), Sonnet 4.5 for typed chat.
+            model: viaVoice ? 'claude-haiku-4-5-20251001' : 'claude-sonnet-4-5',
             max_tokens: viaVoice ? 256 : 1024,
             stream: true,
             system: systemPrompt,
