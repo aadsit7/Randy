@@ -82,6 +82,67 @@
       @keyframes railSpin { to { transform: rotate(360deg); } }
       .rail-spin { animation: railSpin 0.9s linear infinite; transform-origin: center; }
       @media (prefers-reduced-motion: reduce) { .rail-spin { animation: none; } }
+
+      /* ===== Modern chat card: avatar, status, action bar ===== */
+      .chat-avatar { position: relative; width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; color: #fff; font-weight: 700; font-size: 14px; flex-shrink: 0; box-shadow: 0 2px 6px rgba(15,23,42,0.12); }
+      .chat-avatar .status-dot { position: absolute; bottom: 0; right: 0; width: 12px; height: 12px; border-radius: 50%; background: #10b981; border: 2px solid #fff; box-shadow: 0 0 0 0 rgba(16,185,129,0.55); animation: statusPulse 2.2s ease-out infinite; }
+      .chat-avatar.muted .status-dot { background: #94a3b8; animation: none; }
+      @keyframes statusPulse {
+        0%   { box-shadow: 0 0 0 0 rgba(16,185,129,0.55); }
+        70%  { box-shadow: 0 0 0 8px rgba(16,185,129,0); }
+        100% { box-shadow: 0 0 0 0 rgba(16,185,129,0); }
+      }
+      @media (prefers-reduced-motion: reduce) { .chat-avatar .status-dot { animation: none; } }
+      .chat-identity { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+      .chat-identity .name { font-size: 15px; font-weight: 700; color: var(--navy); line-height: 1.15; }
+      .chat-identity .sub  { font-size: 11px; color: #64748b; line-height: 1.1; }
+      .chat-identity .sub .pip { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #10b981; margin-right: 4px; vertical-align: middle; }
+      .chat-identity .sub.muted .pip { background: #94a3b8; }
+
+      .overflow-btn { background: transparent; border: none; cursor: pointer; padding: 8px; min-width: 40px; min-height: 40px; display: grid; place-items: center; border-radius: 10px; color: #475569; transition: background 0.15s, color 0.15s; }
+      .overflow-btn:hover { background: #f1f5f9; color: var(--navy); }
+      .overflow-menu { position: absolute; top: 56px; right: 12px; z-index: 30; background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; box-shadow: 0 16px 40px rgba(15,23,42,0.16); min-width: 200px; padding: 6px; overflow: hidden; animation: menuIn 0.15s ease-out; }
+      @keyframes menuIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
+      .overflow-menu button { width: 100%; text-align: left; background: transparent; border: none; padding: 10px 12px; font-size: 14px; color: var(--navy); display: flex; align-items: center; gap: 10px; border-radius: 8px; cursor: pointer; transition: background 0.12s; font-weight: 500; }
+      .overflow-menu button:hover:not(:disabled) { background: #f1f5f9; }
+      .overflow-menu button:disabled { opacity: 0.4; cursor: not-allowed; }
+      .overflow-menu button i { color: #64748b; }
+      .overflow-menu hr { border: none; border-top: 1px solid #f1f5f9; margin: 4px 0; }
+      .overflow-menu .danger { color: #dc2626; }
+      .overflow-menu .danger i { color: #dc2626; }
+
+      .action-bar { display: flex; align-items: flex-end; gap: 8px; padding: 12px; border-top: 1px solid #e2e8f0; background: #fff; }
+      .action-bar .composer-field { flex: 1; position: relative; min-width: 0; }
+      .action-bar textarea.composer-input,
+      .action-bar input.composer-input {
+        width: 100%; padding: 12px 16px; border: 1.5px solid #e2e8f0; border-radius: 22px; font-size: 15px; outline: none; color: var(--navy); background: #f8fafc; transition: border-color 0.15s, background 0.15s, box-shadow 0.15s; font-family: inherit; line-height: 1.35; resize: none;
+      }
+      .action-bar .composer-input:focus { border-color: var(--primary); background: #fff; box-shadow: 0 0 0 3px rgba(0,112,243,0.1); }
+      .action-bar .composer-input:disabled { opacity: 0.6; }
+      .composer-expanded .action-bar textarea.composer-input { border-radius: 16px; min-height: 96px; max-height: 200px; padding: 12px 16px; }
+
+      .action-btn { width: 44px; height: 44px; border-radius: 50%; border: none; cursor: pointer; display: grid; place-items: center; flex-shrink: 0; transition: background 0.15s, transform 0.15s, box-shadow 0.15s, color 0.15s; }
+      .action-btn:disabled { cursor: not-allowed; opacity: 0.5; }
+      .action-btn:not(:disabled):hover { transform: scale(1.06); }
+      .action-btn:not(:disabled):active { transform: scale(0.96); }
+      .action-btn.edit { background: #f1f5f9; color: #475569; }
+      .action-btn.edit:hover:not(:disabled) { background: #e2e8f0; color: var(--navy); }
+      .action-btn.edit.active { background: #dbeafe; color: var(--primary); }
+      .action-btn.mic { width: 56px; height: 56px; background: var(--primary); color: #fff; box-shadow: 0 6px 18px rgba(0,112,243,0.28); }
+      .action-btn.mic:hover:not(:disabled) { box-shadow: 0 8px 22px rgba(0,112,243,0.36); }
+      .action-btn.mic.off { background: #e2e8f0; color: #64748b; box-shadow: 0 2px 6px rgba(15,23,42,0.08); }
+      .action-btn.mic.listening { background: #ef4444; color: #fff; box-shadow: 0 6px 18px rgba(239,68,68,0.35); animation: recordPulse 1.2s ease-in-out infinite; }
+      .action-btn.mic.speaking { background: #10b981; color: #fff; box-shadow: 0 6px 18px rgba(16,185,129,0.35); }
+      .action-btn.send { width: 52px; height: 52px; background: var(--primary); color: #fff; box-shadow: 0 6px 18px rgba(0,112,243,0.28); }
+      .action-btn.send:hover:not(:disabled) { background: var(--primary-hover); box-shadow: 0 8px 22px rgba(0,112,243,0.36); }
+      .action-btn.send:disabled { background: #cbd5e1; color: #fff; box-shadow: none; }
+
+      .mic-pulse-wrap { position: relative; flex-shrink: 0; width: 56px; height: 56px; }
+      .mic-pulse-wrap .action-btn.mic { position: absolute; inset: 0; width: 100%; height: 100%; }
+      .mic-pulse-wrap .mic-ring { position: absolute; inset: 0; border-radius: 50%; pointer-events: none; border: 2px solid currentColor; color: #ef4444; animation: voicePulse 1.8s ease-out infinite; opacity: 0; }
+      .mic-pulse-wrap.active .mic-ring { opacity: 0.6; }
+      .mic-pulse-wrap .mic-ring.delay { animation-delay: 0.9s; }
+      @media (prefers-reduced-motion: reduce) { .mic-pulse-wrap .mic-ring { display: none; } }
       @keyframes dotPulse { 0%,80%,100% { transform: scale(0); } 40% { transform: scale(1); } }
       .typing-dot { width: 8px; height: 8px; border-radius: 50%; background: #94a3b8; display: inline-block; animation: dotPulse 1.4s infinite ease-in-out both; }
       .typing-dot:nth-child(1) { animation-delay: -0.32s; }
@@ -390,6 +451,8 @@ Search first, then answer. Never skip the search step. Never guess when you can 
         expandedSlot: null,
         editingSlot: 0,
         historyOpen: false,
+        composerExpanded: false,
+        cardMenuOpen: false,
         slots: [
           makeSlot('Recast SE', ASSISTANT_2_PROMPT)
         ]
@@ -1721,29 +1784,61 @@ Search first, then answer. Never skip the search step. Never guess when you can 
       function renderCard(slot, idx) {
         const color = SLOT_COLORS[idx];
         const msgs = slot.messages;
+        const composerExpanded = STATE.composerExpanded;
+        const hasText = (slot.inputText || '').trim().length > 0;
+        const voiceOn = !!slot.voiceEnabled;
+        const isSpeaking = !!slot.isSpeaking;
+        const inConversation = VOICE.conversationMode && VOICE.activeSlot === idx;
+        const isListening = voiceOn && (inConversation || (VOICE.activeSlot === idx && VOICE.awaitingCommand));
+
+        // Big mic button state. Four visual modes:
+        //   off (grey)  ·  idle listening (blue, no pulse)  ·  listening/recording (red, pulse)  ·  speaking (green with stop icon)
+        let micClass = 'off', micIcon = 'mic-off', micTitle = 'Enable voice', micAction = 'toggle-voice';
+        if (isSpeaking) {
+          micClass = 'speaking'; micIcon = 'volume-x'; micTitle = 'Mute \u2014 stop Randy speaking'; micAction = 'stop-speaking';
+        } else if (isListening) {
+          micClass = 'listening'; micIcon = 'square'; micTitle = 'Stop listening'; micAction = 'exit-conversation';
+        } else if (voiceOn) {
+          micClass = ''; micIcon = 'mic'; micTitle = 'Voice on \u2014 tap to disable'; micAction = 'toggle-voice';
+        }
+
         return `
-          <div class="card flex flex-col overflow-hidden" style="position:relative;flex:1">
-            <div class="card-header flex items-center gap-2 px-3 py-2 border-b border-slate-200" style="background:#fff">
-              <div class="w-6 h-6 rounded-full grid place-items-center text-white font-bold text-[10px]" style="background:${color}">${slot.label.charAt(0)}</div>
-              <span class="text-xs font-semibold" style="color:var(--navy)">${escHtml(slot.label)}</span>
-              <div class="flex items-center gap-1" style="margin-left:auto">
-                ${VOICE.srSupported ? `
-                  <button title="${slot.voiceEnabled?'Voice on':'Voice off'}" aria-label="${slot.voiceEnabled?'Turn voice off':'Turn voice on'}" class="card-icon-btn ${slot.voiceEnabled?'on':''}" data-action="toggle-voice" data-idx="${idx}">
-                    <i data-lucide="${slot.voiceEnabled?'mic':'mic-off'}" class="w-4 h-4"></i>
-                  </button>
-                ` : ''}
-                <button title="Save conversation" aria-label="Save conversation" class="card-icon-btn" data-action="save-to-sheet" data-idx="${idx}" ${slot.messages.length === 0 ? 'disabled' : ''}>
-                  <i data-lucide="download" class="w-4 h-4"></i>
-                </button>
-                <button title="Expand" aria-label="Expand chat" class="card-icon-btn" data-action="expand-slot" data-idx="${idx}">
-                  <i data-lucide="maximize-2" class="w-4 h-4"></i>
-                </button>
+          <div class="card flex flex-col overflow-hidden ${composerExpanded ? 'composer-expanded' : ''}" style="position:relative;flex:1">
+            <div class="card-header flex items-center gap-3 px-4 py-3 border-b border-slate-200" style="background:#fff">
+              <div class="chat-avatar ${voiceOn ? '' : 'muted'}" style="background:${color}">
+                ${escHtml(slot.label.charAt(0))}
+                <span class="status-dot"></span>
               </div>
+              <div class="chat-identity" style="flex:1">
+                <div class="name">${escHtml(slot.label)}</div>
+                <div class="sub ${voiceOn ? '' : 'muted'}"><span class="pip"></span>${isSpeaking ? 'Speaking\u2026' : isListening ? 'Listening\u2026' : slot.loading ? 'Thinking\u2026' : 'AI Assistant \u00b7 Ready'}</div>
+              </div>
+              <button class="overflow-btn" title="More actions" aria-label="More actions" aria-haspopup="true" aria-expanded="${STATE.cardMenuOpen ? 'true' : 'false'}" data-action="toggle-card-menu" data-idx="${idx}">
+                <i data-lucide="more-vertical" class="w-5 h-5"></i>
+              </button>
+              ${STATE.cardMenuOpen ? `
+                <div class="overflow-menu" data-menu="card">
+                  <button data-action="save-to-sheet" data-idx="${idx}" ${slot.messages.length === 0 ? 'disabled' : ''}>
+                    <i data-lucide="download" class="w-4 h-4"></i> Save conversation
+                  </button>
+                  <button data-action="expand-slot" data-idx="${idx}">
+                    <i data-lucide="maximize-2" class="w-4 h-4"></i> Open fullscreen
+                  </button>
+                  <hr>
+                  <button class="danger" data-action="clear-chat" data-idx="${idx}" ${slot.messages.length === 0 ? 'disabled' : ''}>
+                    <i data-lucide="trash-2" class="w-4 h-4"></i> Clear chat
+                  </button>
+                </div>
+              ` : ''}
             </div>
-            <div id="home-scroll-${idx}" class="flex-1 overflow-y-auto px-4 py-3 flex flex-col gap-2" style="background:#fafbfc;min-height:0">
+            <div id="home-scroll-${idx}" class="flex-1 overflow-y-auto px-4 py-4 flex flex-col gap-2" style="background:#fafbfc;min-height:0">
               ${msgs.length === 0 ? `
                 <div class="flex-1 flex items-center justify-center">
-                  <div class="text-center" style="color:#94a3b8;font-size:13px">Ask ${escHtml(slot.label)} anything about Recast Software.</div>
+                  <div class="text-center" style="max-width:320px">
+                    <div class="chat-avatar" style="background:${color};width:64px;height:64px;font-size:24px;margin:0 auto 14px"><span style="position:relative;z-index:1">${escHtml(slot.label.charAt(0))}</span></div>
+                    <div style="font-size:17px;font-weight:600;color:var(--navy);margin-bottom:4px">${escHtml(slot.label)}</div>
+                    <div style="font-size:13px;color:#64748b;line-height:1.5">Ask me anything about Recast Software \u2014 type below or tap the mic to talk.</div>
+                  </div>
                 </div>
               ` : msgs.map((m, mi) => `
                 <div class="flex ${m.role==='user'?'justify-end':'justify-start'}">
@@ -1753,12 +1848,30 @@ Search first, then answer. Never skip the search step. Never guess when you can 
                 </div>
               `).join('')}
               ${interimBubbleHtml(idx, false)}
-              ${slot.loading?'<div class="flex justify-start"><div class="chat-bot" style="padding:8px 14px;border-radius:12px"><span class="typing-dot"></span> <span class="typing-dot"></span> <span class="typing-dot"></span></div></div>':''}
+              ${slot.loading?'<div class="flex justify-start"><div class="chat-bot" style="padding:10px 14px;border-radius:14px"><span class="typing-dot"></span> <span class="typing-dot"></span> <span class="typing-dot"></span></div></div>':''}
             </div>
-            <div class="chat-input-row flex items-center gap-2 px-3 py-2 border-t border-slate-200" style="background:#fff">
-              <input type="text" id="home-input-${idx}" placeholder="Message ${escAttr(slot.label)}\u2026" value="${escAttr(slot.inputText)}" ${slot.loading?'disabled':''} style="flex:1;padding:10px 16px;border:1.5px solid #e2e8f0;border-radius:9999px;font-size:14px;outline:none;color:var(--navy);min-width:0" />
-              <button class="chat-send" title="Send" aria-label="Send message" data-action="send-home" data-idx="${idx}" ${slot.loading?'disabled':''}>
-                <i data-lucide="send" class="w-4 h-4"></i>
+            <div class="action-bar">
+              <button class="action-btn edit ${composerExpanded ? 'active' : ''}" title="${composerExpanded ? 'Collapse text editor' : 'Expand text editor'}" aria-label="${composerExpanded ? 'Collapse composer' : 'Expand composer'}" data-action="toggle-composer">
+                <i data-lucide="${composerExpanded ? 'chevron-down' : 'edit-3'}" class="w-5 h-5"></i>
+              </button>
+              <div class="composer-field">
+                ${composerExpanded ? `
+                  <textarea id="home-input-${idx}" class="composer-input" rows="3" placeholder="Message ${escAttr(slot.label)}\u2026" ${slot.loading?'disabled':''}>${escHtml(slot.inputText || '')}</textarea>
+                ` : `
+                  <input type="text" id="home-input-${idx}" class="composer-input" placeholder="Message ${escAttr(slot.label)}\u2026" value="${escAttr(slot.inputText)}" ${slot.loading?'disabled':''} />
+                `}
+              </div>
+              ${VOICE.srSupported ? `
+                <div class="mic-pulse-wrap ${micClass === 'listening' ? 'active' : ''}">
+                  <span class="mic-ring"></span>
+                  <span class="mic-ring delay"></span>
+                  <button class="action-btn mic ${micClass}" title="${micTitle}" aria-label="${micTitle}" data-action="${micAction}" data-idx="${idx}">
+                    <i data-lucide="${micIcon}" class="w-6 h-6"></i>
+                  </button>
+                </div>
+              ` : ''}
+              <button class="action-btn send" title="Send message" aria-label="Send message" data-action="send-home" data-idx="${idx}" ${slot.loading ? 'disabled' : ''}>
+                <i data-lucide="send" class="w-5 h-5"></i>
               </button>
             </div>
           </div>`;
@@ -2011,14 +2124,36 @@ Search first, then answer. Never skip the search step. Never guess when you can 
 
         document.addEventListener('click', e => {
           const act = e.target.closest('[data-action]');
+          // Close the card overflow menu when the user clicks outside it.
+          if (!act && STATE.cardMenuOpen && !e.target.closest('[data-menu="card"]')) {
+            STATE.cardMenuOpen = false;
+            render();
+            return;
+          }
           if (!act) return;
           const action = act.dataset.action;
           const idx = act.dataset.idx !== undefined ? parseInt(act.dataset.idx) : null;
+
+          // Any menu-item click should collapse the overflow menu before executing.
+          if (STATE.cardMenuOpen && action !== 'toggle-card-menu') STATE.cardMenuOpen = false;
 
           switch (action) {
             case 'switch-tab': STATE.activeTab = act.dataset.tab; render(); break;
             case 'toggle-history': STATE.historyOpen = !STATE.historyOpen; render(); break;
             case 'refresh-history': fetchHistoryFromSheet(); break;
+            case 'toggle-composer': {
+              // Preserve whatever the user has typed when swapping single-line \u2194 multi-line.
+              const cur = document.getElementById('home-input-' + (idx !== null ? idx : 0));
+              if (cur && STATE.slots[idx !== null ? idx : 0]) STATE.slots[idx !== null ? idx : 0].inputText = cur.value;
+              STATE.composerExpanded = !STATE.composerExpanded;
+              render();
+              setTimeout(() => {
+                const inp = document.getElementById('home-input-' + (idx !== null ? idx : 0));
+                if (inp) { inp.focus(); const len = inp.value.length; try { inp.setSelectionRange(len, len); } catch {} }
+              }, 40);
+              break;
+            }
+            case 'toggle-card-menu': STATE.cardMenuOpen = !STATE.cardMenuOpen; render(); break;
             case 'expand-slot': STATE.expandedSlot = idx; render(); scrollChat(); setTimeout(()=>document.getElementById('expanded-input')?.focus(),100); break;
             case 'close-expanded': STATE.expandedSlot = null; render(); break;
             case 'clear-chat': clearChat(idx); break;
