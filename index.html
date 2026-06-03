@@ -442,15 +442,17 @@ Web search is invisible to the user. Never mention that you are searching, looki
 - Bold nothing. Format nothing. Just clear, readable sentences.
 - Keep answers concise — aim for 2-4 short paragraphs max unless the question genuinely requires more detail.`;
 
-      // Paste your Anthropic API key between the quotes to pre-fill every assistant's
-      // Settings → API Key field. The key is never sent anywhere except api.anthropic.com
-      // and is cached to the browser's localStorage the first time the user clicks
-      // "Save Configuration". Leave as '' to force manual entry.
+      // Anthropic API key lives in the Apps Script proxy (Config tab or Script
+      // Properties), never in this file or in the browser. See apps-script.gs.
+      // DEFAULT_API_KEY is kept as a no-op fallback so legacy slot shapes still
+      // load cleanly from localStorage; nothing actually uses an API key here.
       const DEFAULT_API_KEY = '';
 
       const DEFAULT_VOICE_PERSONALITY = "Keep all responses to 2-3 short sentences since they will be spoken aloud. Use natural conversational language. Say numbers the way people talk \u2014 like '120 grand' not '$120,000'. Never use markdown, bullet points, or formatting. Be direct and warm.";
 
-      // Google Sheet webhook for saving Q&A results
+      // Apps Script proxy URL. The proxy holds the Anthropic API key, forwards
+      // chat requests to Anthropic, and auto-appends each Q&A to the Randy Tasks
+      // tab. Paste a new /exec URL into Settings if you redeploy the script.
       let GSHEET_WEBHOOK = 'https://script.google.com/macros/s/AKfycbz0gE7H7Nd6LX9S4JJsWZb4h0W0qf04CDVloFFbfnc_0s80orwybcATHs3L7vicQAbE/exec';
       const SESSION_ID = 'S-' + Date.now().toString(36) + Math.random().toString(36).substring(2, 6);
 
@@ -637,38 +639,24 @@ Web search is invisible to the user. Never mention that you are searching, looki
         if (savedGsheet) GSHEET_WEBHOOK = savedGsheet;
       }
 
+      // Ping the proxy to verify it's reachable and that the Apps Script has an
+      // Anthropic API key configured. We do NOT pull the key down to the browser
+      // anymore — it stays server-side in the Apps Script.
+      const PROXY = { ready: false, hasKey: false, error: null };
+
       async function loadRemoteConfig() {
         if (!GSHEET_WEBHOOK) return;
         try {
-          const resp = await fetch(GSHEET_WEBHOOK);
-          if (!resp.ok) return;
-          const config = await resp.json();
-          STATE.slots.forEach(s => {
-            if (config.anthropic_api_key) s.apiKey = config.anthropic_api_key;
-          });
-          // Persist so the key survives refresh even before the next remote fetch completes.
-          saveSettings();
-          render();
+          const resp = await fetch(GSHEET_WEBHOOK + (GSHEET_WEBHOOK.includes('?') ? '&' : '?') + 'action=ping');
+          if (!resp.ok) throw new Error('HTTP ' + resp.status);
+          const info = await resp.json();
+          PROXY.ready = !!info.ok;
+          PROXY.hasKey = !!info.has_api_key;
+          PROXY.error = info.ok ? null : (info.error || 'Proxy returned an error');
         } catch (err) {
-          console.warn('Failed to load remote config:', err);
-        }
-      }
-
-      async function saveRemoteConfig() {
-        if (!GSHEET_WEBHOOK) return;
-        const slot = STATE.slots[0];
-        const configToSave = {};
-        if (slot.apiKey) configToSave.anthropic_api_key = slot.apiKey;
-        if (GSHEET_WEBHOOK) configToSave.gsheet_webhook = GSHEET_WEBHOOK;
-        try {
-          await fetch(GSHEET_WEBHOOK, {
-            method: 'POST',
-            mode: 'no-cors',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action: 'save_config', config: configToSave })
-          });
-        } catch (err) {
-          console.warn('Failed to save remote config:', err);
+          PROXY.ready = false;
+          PROXY.error = err && err.message ? err.message : 'Proxy unreachable';
+          console.warn('Proxy ping failed:', err);
         }
       }
 
@@ -1349,69 +1337,18 @@ Web search is invisible to the user. Never mention that you are searching, looki
       }
 
       /* ========== API ========== */
+      // The Apps Script proxy auto-saves every Q&A as it happens, so the manual
+      // "Save conversation" button just confirms that and refreshes the history
+      // panel. Posting again here would duplicate rows in the sheet.
       async function saveToSheet(slotIdx) {
-        if (!GSHEET_WEBHOOK) {
-          console.warn('No Google Sheet webhook URL configured');
-          return;
-        }
         const slot = STATE.slots[slotIdx];
         if (!slot) return;
-
-        const pairs = [];
-        for (let i = 0; i < slot.messages.length; i++) {
-          if (slot.messages[i].role === 'user' && slot.messages[i + 1]?.role === 'assistant') {
-            pairs.push({
-              question: slot.messages[i].content,
-              answer: slot.messages[i + 1].content
-            });
-          }
-        }
-
-        if (pairs.length === 0) {
-          showToast('No Q&A pairs to save');
-          return;
-        }
-
-        let saved = 0;
-        for (const pair of pairs) {
-          try {
-            const div = document.createElement('div');
-            div.innerHTML = pair.answer;
-            const plainAnswer = div.textContent.replace(/\s+/g, ' ').trim();
-            const links = [];
-            div.querySelectorAll('a[href]').forEach(a => links.push(a.href));
-
-            await fetch(GSHEET_WEBHOOK, {
-              method: 'POST',
-              mode: 'no-cors',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                question: pair.question,
-                answer: plainAnswer.substring(0, 50000),
-                sources: links.join(', '),
-                model: 'claude-sonnet-4-20250514',
-                session_id: SESSION_ID
-              })
-            });
-            saved++;
-          } catch (err) {
-            console.warn('Sheet save failed for pair:', err);
-          }
-        }
-        showToast('Saved ' + saved + ' Q&A pair' + (saved !== 1 ? 's' : '') + ' to Google Sheet');
-
-        const historyEntry = {
-          id: SESSION_ID + '-' + Date.now(),
-          session_id: SESSION_ID,
-          date: new Date().toLocaleDateString('en-US'),
-          timestamp: Date.now(),
-          pairs: pairs.map(p => ({ question: p.question, answer: p.answer })),
-          preview: pairs[0]?.question?.substring(0, 80) || 'No question'
-        };
-        saveHistory(historyEntry);
-        render();
-        // Reconcile with the sheet so the sidebar matches other devices/sessions.
-        setTimeout(() => fetchHistoryFromSheet({ silent: true }), 600);
+        const pairs = slot.messages.filter((m, i) =>
+          m.role === 'user' && slot.messages[i + 1]?.role === 'assistant'
+        ).length;
+        if (pairs === 0) { showToast('No Q&A pairs yet'); return; }
+        showToast('Auto-saved ' + pairs + ' Q&A pair' + (pairs !== 1 ? 's' : '') + ' to the sheet');
+        fetchHistoryFromSheet({ silent: true });
       }
 
       // Web-search heuristic: only attach the (slow) web_search tool when the prompt
@@ -1436,24 +1373,23 @@ Web search is invisible to the user. Never mention that you are searching, looki
         const controller = new AbortController();
         slot.abortController = controller;
 
-        // Pre-insert the assistant message so streaming deltas can mutate it in place.
+        // Pre-insert the empty assistant message so typing dots show while the
+        // proxy round-trips. Apps Script can't stream, so the text appears all
+        // at once when the reply lands.
         slot.messages.push({ role: 'assistant', content: '' });
         const assistantMsgIdx = slot.messages.length - 1;
 
-        // Voice turns stream TTS sentence-by-sentence. Initialize the queue before the fetch
-        // so first-audio latency is bounded only by the model's first-token time.
+        // Voice replies still play sentence-by-sentence — we fill the TTS
+        // queue once the full reply arrives instead of as the model streams.
         if (viaVoice) initTtsQueue(idx, controller.signal, assistantMsgIdx);
 
         render();
         scrollChat();
 
         try {
-          const headers = {
-            "Content-Type": "application/json",
-            "anthropic-version": "2023-06-01",
-            "anthropic-dangerous-direct-browser-access": "true"
-          };
-          if (slot.apiKey) headers["x-api-key"] = slot.apiKey;
+          if (!GSHEET_WEBHOOK) {
+            throw new Error('Apps Script proxy URL not set. Open Settings and paste the /exec URL.');
+          }
 
           const systemPrompt = viaVoice && slot.voicePersonality
             ? slot.prompt + '\n\n' + slot.voicePersonality
@@ -1462,93 +1398,52 @@ Web search is invisible to the user. Never mention that you are searching, looki
           const needsSearch = !viaVoice || WEB_SEARCH_HINT_RE.test(text);
 
           const body = {
-            // Haiku for voice (fastest first-token latency + cheap), Sonnet 4.5 for typed chat.
+            action: 'chat',
+            // Haiku for voice (cheap + fast), Sonnet 4.5 for typed chat.
             model: viaVoice ? 'claude-haiku-4-5-20251001' : 'claude-sonnet-4-5',
             max_tokens: viaVoice ? 256 : 1024,
-            stream: true,
             system: systemPrompt,
             messages: slot.messages
               .slice(0, -1) // drop the empty placeholder we just pushed
               .filter(m => m.role === 'user' || m.role === 'assistant')
-              .map(m => ({ role: m.role, content: m.content }))
+              .map(m => ({ role: m.role, content: m.content })),
+            session_id: SESSION_ID
           };
-          if (needsSearch) body.tools = [{ type: "web_search_20250305", name: "web_search" }];
+          if (needsSearch) body.tools = [{ type: 'web_search_20250305', name: 'web_search' }];
 
-          const resp = await fetch("https://api.anthropic.com/v1/messages", {
-            method: "POST",
-            headers,
+          // text/plain content-type avoids the CORS preflight that Apps Script
+          // can't answer. The Apps Script reads e.postData.contents as a raw
+          // string and JSON.parses it.
+          const resp = await fetch(GSHEET_WEBHOOK, {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
             body: JSON.stringify(body),
             signal: controller.signal
           });
 
-          if (!resp.ok) {
-            const errText = await resp.text().catch(() => '');
-            let msg = `API error ${resp.status}`;
-            try { const j = JSON.parse(errText); if (j.error && j.error.message) msg = j.error.message; } catch {}
-            throw new Error(msg);
+          if (!resp.ok) throw new Error('Proxy HTTP ' + resp.status);
+          const data = await resp.json();
+          if (!data || data.ok === false) {
+            throw new Error((data && data.error) || 'Proxy returned an error');
           }
 
-          const reader = resp.body.getReader();
-          const decoder = new TextDecoder();
-          let sseBuffer = '';
-          let sentenceBuffer = '';
-          let reply = '';
-          let lastRender = 0;
+          const reply = String(data.reply || '');
+          slot.messages[assistantMsgIdx].content = reply || 'No response.';
 
-          const sentenceRe = /^[\s\S]*?[.!?](?:\s+|$)/;
-          const flushSentences = () => {
-            if (!viaVoice) return;
+          if (viaVoice && slot.ttsQueue) {
+            const sentenceRe = /[^.!?]+[.!?]+(?:\s+|$)|[^.!?]+$/g;
             let m;
-            while ((m = sentenceBuffer.match(sentenceRe)) && m[0].length) {
+            while ((m = sentenceRe.exec(reply)) !== null) {
               const sent = m[0].trim();
-              sentenceBuffer = sentenceBuffer.slice(m[0].length);
               if (sent.length >= 2) enqueueTtsSentence(idx, sent);
             }
-          };
-
-          while (true) {
-            const { value, done } = await reader.read();
-            if (done) break;
-            sseBuffer += decoder.decode(value, { stream: true });
-
-            // Anthropic SSE: events separated by blank line; each event has "event:" and "data:" lines.
-            let sepIdx;
-            while ((sepIdx = sseBuffer.indexOf('\n\n')) !== -1) {
-              const frame = sseBuffer.slice(0, sepIdx);
-              sseBuffer = sseBuffer.slice(sepIdx + 2);
-              for (const line of frame.split('\n')) {
-                if (!line.startsWith('data:')) continue;
-                const dataStr = line.slice(5).trim();
-                if (!dataStr || dataStr === '[DONE]') continue;
-                let ev;
-                try { ev = JSON.parse(dataStr); } catch { continue; }
-                if (ev.type === 'content_block_delta' && ev.delta && ev.delta.type === 'text_delta' && typeof ev.delta.text === 'string') {
-                  reply += ev.delta.text;
-                  sentenceBuffer += ev.delta.text;
-                  slot.messages[assistantMsgIdx].content = reply;
-                  flushSentences();
-                  const now = Date.now();
-                  if (now - lastRender > 80) { lastRender = now; render(); scrollChat(); }
-                } else if (ev.type === 'message_stop') {
-                  // nothing — handled below
-                } else if (ev.type === 'error' && ev.error) {
-                  throw new Error(ev.error.message || 'API stream error');
-                }
-              }
-            }
-          }
-
-          // Flush any trailing partial sentence as one final chunk.
-          const tail = sentenceBuffer.trim();
-          if (tail && viaVoice) enqueueTtsSentence(idx, tail);
-          if (viaVoice && slot.ttsQueue) {
             slot.ttsQueue.done = true;
-            // Kick the queue in case no sentences were ever enqueued (e.g., empty reply).
             processTtsQueue(idx);
           }
-          if (!reply && slot.messages[assistantMsgIdx]) {
-            slot.messages[assistantMsgIdx].content = 'No response.';
-          }
+
+          // The proxy already appended this Q&A to the Randy Tasks sheet.
+          // Refresh the sidebar so the new entry shows up.
+          setTimeout(() => fetchHistoryFromSheet({ silent: true }), 600);
         } catch (err) {
           if (err && err.name === 'AbortError') {
             // User hit Stop/Cancel — drop the empty placeholder and stay quiet.
@@ -1558,7 +1453,7 @@ Web search is invisible to the user. Never mention that you are searching, looki
             }
           } else {
             const placeholder = slot.messages[assistantMsgIdx];
-            const errMsg = '\u26a0\ufe0f ' + (err.message || 'Connection failed. Check your API key in Settings.');
+            const errMsg = '\u26a0\ufe0f ' + (err.message || 'Connection failed. Check the proxy URL in Settings.');
             if (placeholder && placeholder.role === 'assistant') placeholder.content = errMsg;
             else slot.messages.push({ role: 'assistant', content: errMsg });
             // Keep the user in conversation mode so they can just try again —
@@ -2077,20 +1972,21 @@ Web search is invisible to the user. Never mention that you are searching, looki
                 <input type="text" id="setting-label" value="${escAttr(slot.label)}" placeholder="Assistant name..." />
               </div>
 
-              <div>
+              <div class="full">
                 <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1.5">
-                  <i data-lucide="key" class="w-3 h-3 inline mr-1"></i>Anthropic API Key
+                  <i data-lucide="table" class="w-3 h-3 inline mr-1"></i>Apps Script Proxy URL
                 </label>
-                <input type="password" id="setting-apikey" value="${escAttr(slot.apiKey)}" placeholder="sk-ant-api03-..." />
-                <p class="text-[11px] text-slate-400 mt-1">Get a key at console.anthropic.com → Settings → API Keys.</p>
-              </div>
-
-              <div>
-                <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1.5">
-                  <i data-lucide="table" class="w-3 h-3 inline mr-1"></i>Google Sheet Webhook URL
-                </label>
-                <input type="text" id="setting-gsheet" value="${escAttr(GSHEET_WEBHOOK)}" placeholder="https://script.google.com/macros/s/..." />
-                <p class="text-[11px] text-slate-400 mt-1">Apps Script web app URL. Q&A pairs save automatically to your Google Sheet.</p>
+                <input type="text" id="setting-gsheet" value="${escAttr(GSHEET_WEBHOOK)}" placeholder="https://script.google.com/macros/s/.../exec" />
+                <p class="text-[11px] text-slate-400 mt-1">
+                  The Apps Script holds the Anthropic API key, forwards chats to Anthropic, and auto-saves every Q&A to the Randy Tasks tab. Setup steps live in <code>apps-script.gs</code> in the repo.
+                </p>
+                <div class="mt-2 flex items-center gap-2 text-[11px] font-medium">
+                  ${PROXY.ready
+                    ? (PROXY.hasKey
+                        ? `<span style="color:#0F7A3F"><i data-lucide="check-circle-2" class="w-3 h-3 inline mr-1"></i>Proxy connected · Anthropic key configured</span>`
+                        : `<span style="color:#b45309"><i data-lucide="alert-triangle" class="w-3 h-3 inline mr-1"></i>Proxy reachable but no Anthropic key — add it to the Config tab</span>`)
+                    : `<span style="color:#dc2626"><i data-lucide="x-circle" class="w-3 h-3 inline mr-1"></i>Proxy not reachable${PROXY.error ? ' (' + escHtml(PROXY.error) + ')' : ''}</span>`}
+                </div>
               </div>
 
               <div class="full">
@@ -2146,9 +2042,6 @@ Web search is invisible to the user. Never mention that you are searching, looki
                 <button class="btn-danger" data-action="clear-chat" data-idx="${es}">
                   <i data-lucide="trash-2" class="w-4 h-4 inline mr-1"></i> Clear Chat History
                 </button>
-                <button class="btn-outline" style="font-size:11px;padding:5px 12px" data-action="copy-key" data-key="agent">
-                  <i data-lucide="copy" class="w-3 h-3 inline mr-1"></i> Agent
-                </button>
               </div>
             </div>
           </div>`;
@@ -2197,29 +2090,6 @@ Web search is invisible to the user. Never mention that you are searching, looki
             case 'close-expanded': STATE.expandedSlot = null; render(); break;
             case 'clear-chat': clearChat(idx); break;
             case 'save-to-sheet': saveToSheet(idx); break;
-            case 'copy-key': {
-              const keys = {
-                agent: 'sk-ant-api03-CSSZg-24BJtdvaN7HBOXhCYEdFMFUyZk66jPs2T_Tvr5rHNGScUtEwdnpA516'
-              };
-              const which = act.dataset.key;
-              const val = keys[which];
-              if (!val) break;
-              const done = () => showToast('Agent key copied');
-              if (navigator.clipboard && navigator.clipboard.writeText) {
-                navigator.clipboard.writeText(val).then(done).catch(() => {
-                  const ta = document.createElement('textarea');
-                  ta.value = val; document.body.appendChild(ta);
-                  ta.select(); document.execCommand('copy');
-                  document.body.removeChild(ta); done();
-                });
-              } else {
-                const ta = document.createElement('textarea');
-                ta.value = val; document.body.appendChild(ta);
-                ta.select(); document.execCommand('copy');
-                document.body.removeChild(ta); done();
-              }
-              break;
-            }
             case 'select-editing-slot': readFields(); STATE.editingSlot = idx; render(); break;
             case 'send-expanded': {
               const inp = document.getElementById('expanded-input');
@@ -2274,10 +2144,16 @@ Web search is invisible to the user. Never mention that you are searching, looki
             }
             case 'save-settings': {
               readFields();
-              GSHEET_WEBHOOK = document.getElementById('setting-gsheet')?.value?.trim() || '';
+              const newWebhook = document.getElementById('setting-gsheet')?.value?.trim() || '';
+              const webhookChanged = newWebhook !== GSHEET_WEBHOOK;
+              GSHEET_WEBHOOK = newWebhook;
               localStorage.setItem('recast_gsheet_url', GSHEET_WEBHOOK);
               saveSettings();
-              saveRemoteConfig();
+              if (webhookChanged) {
+                PROXY.ready = false; PROXY.hasKey = false; PROXY.error = null;
+                loadRemoteConfig().then(render);
+              }
+              showToast('Settings saved');
               render();
               break;
             }
@@ -2377,12 +2253,10 @@ Web search is invisible to the user. Never mention that you are searching, looki
         const i = STATE.editingSlot;
         const s = STATE.slots[i];
         const l = document.getElementById('setting-label');
-        const k = document.getElementById('setting-apikey');
         const p = document.getElementById('setting-prompt');
         const vn = document.getElementById('setting-voicename');
         const vp = document.getElementById('setting-voicepersonality');
         if (l) s.label = l.value.trim() || s.label;
-        if (k) s.apiKey = k.value.trim();
         if (p) s.prompt = p.value.trim() || s.prompt;
         if (vn) s.voiceName = vn.value.trim() || s.label;
         if (vp) s.voicePersonality = vp.value.trim() || DEFAULT_VOICE_PERSONALITY;
@@ -2391,7 +2265,7 @@ Web search is invisible to the user. Never mention that you are searching, looki
       /* ========== BOOT ========== */
       document.addEventListener('DOMContentLoaded', () => {
         render();
-        loadRemoteConfig();
+        loadRemoteConfig().then(render);
         fetchHistoryFromSheet();
         // Re-render once the browser loads its speech voice list (async in Chrome)
         if (VOICE.ttsSupported && typeof speechSynthesis.onvoiceschanged !== 'undefined') {
