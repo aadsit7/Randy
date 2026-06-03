@@ -11,17 +11,30 @@
     <script src="https://unpkg.com/lucide@latest"></script>
     <style>
       :root {
-        --bg-main: #ffffff;
-        --primary: #0070F3;
-        --primary-hover: #005AD0;
-        --navy: #0A1C60;
-        --radius: 1rem;
-        --shadow-card: 0 2px 10px rgba(15,23,42,0.06), 0 1px 3px rgba(15,23,42,0.04);
-        --shadow-hover: 0 14px 36px rgba(15,23,42,0.10), 0 4px 12px rgba(15,23,42,0.06);
+        --bg-main: #F7F8FC;
+        --primary: #0000CC;          /* Recast primary blue */
+        --primary-hover: #00009E;
+        --navy: #141B4D;             /* deep navy for headings */
+        --cyan: #00BFFF;             /* Recast accent cyan */
+        --cyan-hi: #33CCFF;
+        --decorator: #2222DD;        /* "+" texture on blue */
+        --dark: #1A1A2E;
+        --gray: #4A4A5A;
+        --muted-blue: #AABBEE;
+        --light: #F0F0F6;
+        --row: #FAFAFE;
+        --quote: #F6F8FF;
+        --divider: #DDDDEE;
+        --brand-green: #0F7A3F;
+        --radius: 14px;
+        --radius-sm: 8px;
+        --shadow-card: 0 1px 2px rgba(26,26,46,0.05), 0 1px 3px rgba(26,26,46,0.05);
+        --shadow-hover: 0 12px 32px rgba(26,26,46,0.12), 0 3px 10px rgba(26,26,46,0.06);
+        --shadow-brand: 0 16px 40px rgba(0,0,204,0.20);
       }
-      html, body { background: var(--bg-main); color: #111827; font-family: Inter, system-ui, sans-serif; }
-      .card { border-radius: var(--radius); background: rgba(255,255,255,0.88); border: 1px solid rgba(226,232,240,0.70); box-shadow: var(--shadow-card); transition: box-shadow 300ms, transform 300ms; }
-      .card:hover { box-shadow: var(--shadow-hover); transform: translateY(-2px); }
+      html, body { background: var(--bg-main); color: var(--dark); font-family: Inter, system-ui, sans-serif; }
+      .card { border-radius: var(--radius); background: #fff; border: 1px solid var(--divider); box-shadow: var(--shadow-card); transition: box-shadow 220ms var(--ease,cubic-bezier(.2,.8,.2,1)), transform 220ms var(--ease,cubic-bezier(.2,.8,.2,1)); }
+      .card.lift:hover { box-shadow: var(--shadow-hover); transform: translateY(-2px); border-color: #c9d2ee; }
       .btn-primary { background: var(--primary); color: #fff; border: none; border-radius: 8px; padding: 10px 18px; min-height: 40px; font-weight: 600; font-size: 13px; cursor: pointer; transition: background 0.2s; }
       .btn-primary:hover { background: var(--primary-hover); }
       .btn-outline { background: transparent; color: var(--navy); border: 2px solid var(--navy); border-radius: 8px; padding: 8px 16px; min-height: 40px; font-weight: 600; font-size: 13px; cursor: pointer; transition: all 0.2s; }
@@ -35,19 +48,19 @@
       input:focus, textarea:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(0,112,243,0.1); }
       textarea { resize: vertical; min-height: 80px; }
       .chat-bubble { padding: 10px 14px; border-radius: 12px; font-size: 14px; line-height: 1.5; word-wrap: break-word; white-space: pre-wrap; }
-      .chat-user { background: var(--primary); color: #fff; border-radius: 12px 12px 4px 12px; margin-left: auto; }
-      .chat-bot { background: #f1f5f9; color: #1e293b; border-radius: 12px 12px 12px 4px; }
+      .chat-user { background: var(--primary); color: #fff; border-radius: 14px 14px 4px 14px; margin-left: auto; box-shadow: var(--shadow-brand); }
+      .chat-bot { background: #fff; color: var(--dark); border: 1px solid var(--divider); border-radius: 4px 14px 14px 14px; box-shadow: var(--shadow-card); }
 
       /* ===== Assistant 1 structured HTML cards ===== */
       .chat-html { white-space: normal; }
       .chat-html details { margin: 6px 0; border: 1px solid #e2e8f0; border-radius: 10px; overflow: hidden; background: #fff; transition: box-shadow 0.2s; }
       .chat-html details[open] { box-shadow: 0 2px 8px rgba(15,23,42,0.06); }
-      .chat-html summary { display: flex; align-items: center; gap: 8px; padding: 10px 14px; font-weight: 600; font-size: 13px; color: var(--navy); cursor: pointer; user-select: none; background: linear-gradient(135deg, #f8fafc, #f1f5f9); border-bottom: 1px solid transparent; transition: background 0.15s, border-color 0.15s; list-style: none; }
-      .chat-html details[open] > summary { border-bottom-color: #e2e8f0; background: linear-gradient(135deg, #eef2ff, #e0e7ff); }
+      .chat-html summary { display: flex; align-items: center; gap: 8px; padding: 10px 14px; font-weight: 600; font-size: 13px; color: var(--navy); cursor: pointer; user-select: none; background: var(--light); border-bottom: 1px solid transparent; transition: background 0.15s, border-color 0.15s; list-style: none; }
+      .chat-html details[open] > summary { border-bottom-color: var(--divider); background: var(--quote); }
       .chat-html summary::-webkit-details-marker { display: none; }
       .chat-html summary::before { content: '\25B6'; font-size: 9px; color: #94a3b8; transition: transform 0.2s; flex-shrink: 0; }
       .chat-html details[open] > summary::before { transform: rotate(90deg); color: var(--primary); }
-      .chat-html summary:hover { background: linear-gradient(135deg, #eef2ff, #dbeafe); }
+      .chat-html summary:hover { background: var(--quote); }
       .chat-html summary .s-icon { width: 22px; height: 22px; border-radius: 6px; display: grid; place-items: center; font-size: 12px; flex-shrink: 0; }
       .chat-html details > div { padding: 12px 14px; font-size: 13px; line-height: 1.65; color: #334155; }
       .chat-html details > div p { margin: 0 0 8px; }
@@ -56,7 +69,7 @@
       .chat-html details > div li { margin-bottom: 4px; }
       .chat-html details > div strong { color: var(--navy); }
       .chat-html details > div code { background: #f1f5f9; padding: 2px 5px; border-radius: 4px; font-size: 12px; }
-      .chat-html .summary-card { background: linear-gradient(135deg, #0070F3, #005AD0); color: #fff; border-radius: 10px; padding: 14px 16px; margin-bottom: 8px; font-size: 13px; line-height: 1.6; }
+      .chat-html .summary-card { background: var(--primary); color: #fff; border-radius: 10px; padding: 14px 16px; margin-bottom: 8px; font-size: 13px; line-height: 1.6; }
       .chat-html .summary-card strong { color: #fff; }
       .chat-html .summary-card p { margin: 0 0 6px; }
       .chat-html .summary-card p:last-child { margin-bottom: 0; }
@@ -74,7 +87,7 @@
       .card-icon-btn:hover { color: var(--navy); background: #f1f5f9; }
       .card-icon-btn:disabled { color: #cbd5e1; cursor: not-allowed; background: transparent; }
       .card-icon-btn.on { color: #10b981; }
-      .app-bar { position: sticky; top: 0; z-index: 20; background: rgba(255,255,255,0.85); backdrop-filter: blur(12px); border-bottom: 1px solid rgba(226,232,240,0.7); }
+      .app-bar { position: sticky; top: 0; z-index: 20; background: rgba(255,255,255,0.94); backdrop-filter: blur(12px); border-bottom: 1px solid var(--divider); }
       .history-rail { width: 44px; flex-shrink: 0; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; padding: 12px 0; gap: 6px; background: rgba(255,255,255,0.7); border: 1px solid rgba(226,232,240,0.7); border-radius: 12px; color: #64748b; cursor: pointer; transition: background 0.15s, color 0.15s; position: relative; }
       .history-rail:hover, .history-rail:focus-visible { background: #fff; color: var(--navy); outline: none; }
       .history-rail-badge { position: absolute; top: 6px; right: 4px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9999px; background: var(--primary); color: #fff; font-size: 10px; font-weight: 700; display: grid; place-items: center; line-height: 1; }
@@ -270,6 +283,99 @@
       }
       @media (max-width: 768px) {
         .history-rail, .history-panel-open { display: none; }
+      }
+
+      /* ============================================================
+         REDESIGN — Recast voice-first layout
+         ============================================================ */
+      :root { --ease: cubic-bezier(.2,.8,.2,1); }
+
+      /* Brand wordmark */
+      .brand-mark { display:flex; align-items:center; gap:11px; }
+      .brand-mark .re { font-weight:800; font-size:22px; letter-spacing:-0.025em; line-height:1; }
+      .brand-mark .re .b1 { color: var(--primary); }
+      .brand-mark .re .b2 { color: var(--navy); }
+      .brand-mark .re .pl { color: var(--cyan); font-weight:800; }
+      .brand-tag { font-size:11px; font-weight:600; color: var(--gray); letter-spacing:0.04em; text-transform:uppercase; padding-left:11px; border-left:1px solid var(--divider); }
+
+      /* 3-zone home layout */
+      .home-grid { display:flex; gap:16px; align-items:stretch; }
+      .chat-panel { flex:1; min-width:0; display:flex; flex-direction:column; overflow:hidden; background:#fff; border:1px solid var(--divider); border-radius: var(--radius); box-shadow: var(--shadow-card); }
+
+      /* ===== Voice stage (the hero) ===== */
+      .voice-stage { width:326px; flex-shrink:0; background: var(--primary); border-radius: var(--radius); padding:26px 24px 24px; display:flex; flex-direction:column; align-items:center; position:relative; overflow:hidden; color:#fff; box-shadow: var(--shadow-brand); }
+      .voice-stage .plus { position:absolute; color: var(--decorator); font-weight:400; pointer-events:none; user-select:none; line-height:1; z-index:0; }
+      .voice-stage > * { position:relative; z-index:1; }
+      .stage-eyebrow { font-size:11px; font-weight:700; letter-spacing:0.14em; text-transform:uppercase; color: var(--cyan); align-self:flex-start; margin-bottom:18px; }
+
+      .orb-wrap { position:relative; width:150px; height:150px; margin:4px 0 18px; display:grid; place-items:center; }
+      .orb-wrap .orb-ring { position:absolute; inset:0; border-radius:50%; border:2px solid var(--cyan); opacity:0; pointer-events:none; }
+      .orb-wrap.live .orb-ring { animation: orbPulse 1.9s ease-out infinite; opacity:.5; }
+      .orb-wrap.live .orb-ring.d { animation-delay:.95s; }
+      @keyframes orbPulse { 0%{transform:scale(1);opacity:.55} 100%{transform:scale(1.55);opacity:0} }
+
+      .voice-orb { position:relative; z-index:1; width:124px; height:124px; border-radius:50%; border:none; cursor:pointer; display:grid; place-items:center; color:#fff; background: var(--cyan); box-shadow: 0 10px 30px rgba(0,191,255,.42), inset 0 0 0 6px rgba(255,255,255,.14); transition: transform .18s var(--ease), background .2s, box-shadow .2s, color .2s; }
+      .voice-orb:hover { transform: scale(1.04); }
+      .voice-orb:active { transform: scale(.97); }
+      .voice-orb.ready { animation: orbBreathe 3.6s ease-in-out infinite; }
+      @keyframes orbBreathe { 0%,100%{box-shadow:0 10px 30px rgba(0,191,255,.38), inset 0 0 0 6px rgba(255,255,255,.12)} 50%{box-shadow:0 16px 42px rgba(0,191,255,.62), inset 0 0 0 6px rgba(255,255,255,.20)} }
+      .voice-orb.off { background: rgba(255,255,255,.10); box-shadow: inset 0 0 0 2px rgba(255,255,255,.22); color: var(--muted-blue); animation:none; }
+      .voice-orb.listening { background:#fff; color: var(--primary); box-shadow: 0 0 0 7px rgba(0,191,255,.28), 0 14px 40px rgba(0,191,255,.5); animation:none; }
+      .voice-orb.speaking { background: var(--cyan); color:#fff; box-shadow: 0 14px 42px rgba(0,191,255,.6); animation:none; }
+      .voice-orb.thinking { background: rgba(255,255,255,.15); color:#fff; box-shadow: inset 0 0 0 2px rgba(255,255,255,.25); animation:none; }
+      .voice-orb .sound-wave { height:30px; gap:4px; }
+      .voice-orb .sound-wave-bar { width:5px; border-radius:3px; }
+      .voice-orb .orb-dots { display:inline-flex; gap:6px; }
+      .voice-orb .orb-dots .typing-dot { background:#fff; width:9px; height:9px; }
+
+      .stage-name { font-size:27px; font-weight:800; letter-spacing:-0.02em; line-height:1; margin-bottom:6px; }
+      .stage-role { font-size:12.5px; color: var(--muted-blue); text-align:center; line-height:1.45; max-width:240px; margin-bottom:16px; }
+      .stage-status { display:inline-flex; align-items:center; gap:8px; font-size:13px; font-weight:600; color:#fff; background: rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.18); padding:7px 15px; border-radius:999px; }
+      .stage-status .st-dot { width:8px; height:8px; border-radius:50%; background: var(--cyan); flex-shrink:0; }
+      .stage-status.listening .st-dot { background:#fff; animation: statusPulse 1.6s ease-out infinite; }
+      .stage-status.speaking .st-dot { background:#9BE7FF; }
+      .stage-status.off .st-dot { background: var(--muted-blue); }
+
+      .wake-hint { margin-top:auto; width:100%; background: rgba(255,255,255,.07); border:1px solid rgba(255,255,255,.14); border-radius:10px; padding:11px 14px; text-align:center; }
+      .wake-hint .wh-label { font-size:10px; letter-spacing:0.12em; text-transform:uppercase; color: var(--muted-blue); font-weight:700; margin-bottom:5px; }
+      .wake-hint .wh-phrase { font-size:14px; font-weight:600; color:#fff; }
+      .wake-hint .wh-phrase b { color: var(--cyan); font-weight:700; }
+      .stage-hintbtn { background:transparent; border:none; color: var(--muted-blue); font-size:11px; font-weight:600; cursor:pointer; margin-top:12px; transition: color .15s; }
+      .stage-hintbtn:hover { color:#fff; }
+
+      /* Slimmer chat header + cleaner action bar */
+      .conv-header { display:flex; align-items:center; gap:12px; padding:14px 16px; border-bottom:1px solid var(--divider); background:#fff; }
+      .conv-title { font-size:15px; font-weight:700; color: var(--navy); letter-spacing:-0.01em; }
+      .conv-sub { font-size:11.5px; color: var(--gray); }
+      .action-bar { border-top:1px solid var(--divider); }
+      .action-bar textarea.composer-input, .action-bar input.composer-input { background:#fff; border:1.5px solid var(--divider); }
+      .action-bar .composer-input:focus { border-color: var(--cyan); box-shadow:0 0 0 3px rgba(0,191,255,.16); }
+      .action-btn.send { background: var(--primary); box-shadow: 0 6px 18px rgba(0,0,204,.25); }
+      .action-btn.send:hover:not(:disabled) { background: var(--primary-hover); box-shadow: 0 8px 22px rgba(0,0,204,.34); }
+
+      /* Quick-prompt chips on empty state */
+      .qp-row { display:flex; flex-wrap:wrap; gap:8px; justify-content:center; max-width:380px; margin:14px auto 0; }
+      .qp-chip { font-size:12.5px; font-weight:500; color: var(--navy); background:#fff; border:1px solid var(--divider); border-radius:999px; padding:8px 14px; cursor:pointer; transition: all .15s var(--ease); }
+      .qp-chip:hover { border-color: var(--cyan); color: var(--primary); background: var(--quote); }
+
+      /* Saved-conversation rail/panel polish */
+      .saved-head { font-size:13px; font-weight:700; color: var(--navy); margin:0; letter-spacing:-0.01em; }
+
+      @media (min-width: 1025px) {
+        .app-shell { max-width: 1232px; }
+        .expanded-inner { max-width: 1100px; }
+      }
+      @media (max-width: 900px) {
+        .home-grid { flex-direction: column; }
+        .voice-stage { width:100%; flex-direction:row; flex-wrap:wrap; align-items:center; padding:18px 20px; gap:0 22px; }
+        .voice-stage .stage-eyebrow { width:100%; margin-bottom:10px; }
+        .orb-wrap { width:104px; height:104px; margin:0; }
+        .voice-orb { width:84px; height:84px; }
+        .stage-name { font-size:22px; margin-bottom:2px; }
+        .stage-role { display:none; }
+        .stage-status { margin-left:auto; }
+        .wake-hint { margin-top:14px; }
+        .chat-card-wrap { min-height: 60vh; }
       }
     </style>
   </head>
@@ -488,7 +594,7 @@ Web search is invisible to the user. Never mention that you are searching, looki
         recentTtsText: ''        // normalized rolling buffer of recently-spoken TTS text for echo matching
       };
 
-      const SLOT_COLORS = ['#10b981'];
+      const SLOT_COLORS = ['#0000CC'];
 
       /* ========== LOCAL STORAGE ========== */
       const SETTINGS_KEY = 'recast_chatbot_settings';
@@ -1554,13 +1660,16 @@ Web search is invisible to the user. Never mention that you are searching, looki
         const root = document.getElementById('app');
         root.innerHTML = `
           <header class="app-bar">
-            <div class="app-shell mx-auto px-4 flex items-center justify-between gap-3" style="height:56px">
-              <h1 class="brand-logo font-semibold leading-none" style="font-size:22px;margin:0">
-                <span style="color:#000">Re</span><span style="color:#CC0000">cast Software</span>
-              </h1>
-              <div class="flex gap-1 p-1 rounded-lg ring-1 ring-slate-200 bg-white/70 backdrop-blur-lg">
+            <div class="app-shell mx-auto px-4 flex items-center justify-between gap-3" style="height:60px">
+              <div class="flex items-center gap-3">
+                <div class="brand-mark">
+                  <span class="re"><span class="b1">Re</span><span class="b2">cast</span><span class="pl">+</span></span>
+                </div>
+                <span class="brand-tag">Assistant</span>
+              </div>
+              <div class="flex gap-1 p-1 rounded-lg ring-1 ring-slate-200 bg-white/70">
                 <button class="tab-btn ${STATE.activeTab==='home'?'active':''}" data-action="switch-tab" data-tab="home">
-                  <i data-lucide="home" class="w-4 h-4"></i> Home
+                  <i data-lucide="messages-square" class="w-4 h-4"></i> Chat
                 </button>
                 <button class="tab-btn ${STATE.activeTab==='settings'?'active':''}" data-action="switch-tab" data-tab="settings">
                   <i data-lucide="settings" class="w-4 h-4"></i> Settings
@@ -1578,19 +1687,86 @@ Web search is invisible to the user. Never mention that you are searching, looki
         bindEvents();
       }
 
+      /* ========== VOICE STAGE (hero) ========== */
+      function renderVoiceStage(slot, idx) {
+        const name = escHtml(slot.voiceName || slot.label);
+        const voiceOn = !!slot.voiceEnabled;
+        const isSpeaking = !!slot.isSpeaking;
+        const loading = !!slot.loading;
+        const sr = VOICE.srSupported;
+        const inConversation = VOICE.conversationMode && VOICE.activeSlot === idx;
+        const isListening = voiceOn && !loading && !isSpeaking &&
+          (inConversation || (VOICE.activeSlot === idx && VOICE.awaitingCommand));
+
+        let orbClass, orbInner, action, title, statusText, statusClass, live = false;
+        if (!sr) {
+          orbClass = 'off'; orbInner = '<i data-lucide="mic-off" class="w-9 h-9"></i>';
+          action = 'noop'; title = 'Voice needs Chrome or Edge';
+          statusText = 'Voice unavailable'; statusClass = 'off';
+        } else if (isSpeaking) {
+          orbClass = 'speaking';
+          orbInner = '<span class="sound-wave"><span class="sound-wave-bar"></span><span class="sound-wave-bar"></span><span class="sound-wave-bar"></span></span>';
+          action = 'stop-speaking'; title = 'Stop speaking';
+          statusText = 'Speaking\u2026'; statusClass = 'speaking';
+        } else if (loading) {
+          orbClass = 'thinking';
+          orbInner = '<span class="orb-dots"><span class="typing-dot"></span><span class="typing-dot"></span><span class="typing-dot"></span></span>';
+          action = 'exit-conversation'; title = 'Stop';
+          statusText = 'Thinking\u2026'; statusClass = '';
+        } else if (isListening) {
+          orbClass = 'listening'; orbInner = '<i data-lucide="mic" class="w-9 h-9"></i>';
+          action = 'exit-conversation'; title = 'Tap to stop listening';
+          statusText = 'Listening\u2026'; statusClass = 'listening'; live = true;
+        } else if (voiceOn) {
+          orbClass = 'ready'; orbInner = '<i data-lucide="mic" class="w-9 h-9"></i>';
+          action = 'toggle-voice'; title = 'Voice on \u2014 tap to mute';
+          statusText = 'Ready to talk'; statusClass = '';
+        } else {
+          orbClass = 'off'; orbInner = '<i data-lucide="mic-off" class="w-9 h-9"></i>';
+          action = 'toggle-voice'; title = 'Tap to enable voice';
+          statusText = 'Voice off'; statusClass = 'off';
+        }
+
+        const wake = !sr
+          ? '<div class="wh-label">Voice</div><div class="wh-phrase">Use <b>Chrome</b> or <b>Edge</b> to talk</div>'
+          : voiceOn
+            ? '<div class="wh-label">Wake word</div><div class="wh-phrase">Say <b>\u201cHey ' + name + '\u201d</b></div>'
+            : '<div class="wh-label">Voice</div><div class="wh-phrase">Tap the orb to start talking</div>';
+
+        const disabled = action === 'noop' ? 'disabled' : '';
+
+        return `
+          <div class="voice-stage">
+            <span class="plus" style="top:16px;right:26px;font-size:20px">+</span>
+            <span class="plus" style="top:120px;right:38px;font-size:13px">+</span>
+            <span class="plus" style="bottom:92px;left:22px;font-size:16px">+</span>
+            <div class="stage-eyebrow">Voice Assistant</div>
+            <div class="orb-wrap ${live ? 'live' : ''}">
+              <span class="orb-ring"></span>
+              <span class="orb-ring d"></span>
+              <button class="voice-orb ${orbClass}" title="${title}" aria-label="${title}" data-action="${action}" data-idx="${idx}" ${disabled}>
+                ${orbInner}
+              </button>
+            </div>
+            <div class="stage-name">${name}</div>
+            <div class="stage-role">Your Recast Application Workspace expert</div>
+            <div class="stage-status ${statusClass}"><span class="st-dot"></span>${statusText}</div>
+            <div class="wake-hint">${wake}</div>
+          </div>`;
+      }
+
       /* ========== HOME ========== */
       function renderHome() {
         const history = getHistory();
         const open = STATE.historyOpen;
         return `
-          <div class="flex gap-3 home-grid">
-            <div class="flex-1 flex flex-col chat-card-wrap" style="min-width:0">
-              ${renderCard(STATE.slots[0], 0)}
-            </div>
+          <div class="home-grid chat-card-wrap">
+            ${renderVoiceStage(STATE.slots[0], 0)}
+            ${renderCard(STATE.slots[0], 0)}
             ${open ? `
               <div class="history-panel history-panel-open">
                 <div class="flex items-center justify-between" style="margin-bottom:4px">
-                  <h3 style="font-size:13px;font-weight:700;color:var(--navy);margin:0">Saved Conversations${HISTORY_CACHE.loading ? ' <span style=\"font-weight:400;color:#94a3b8\">\u00b7 loading\u2026</span>' : ''}</h3>
+                  <h3 class="saved-head">Saved Conversations${HISTORY_CACHE.loading ? ' <span style=\"font-weight:400;color:#94a3b8\">\u00b7 loading\u2026</span>' : ''}</h3>
                   <div class="flex items-center gap-1">
                     <button class="card-icon-btn" title="Refresh" aria-label="Refresh saved conversations" data-action="refresh-history" ${HISTORY_CACHE.loading ? 'disabled' : ''}>
                       <i data-lucide="refresh-cw" class="w-4 h-4"></i>
@@ -1609,7 +1785,7 @@ Web search is invisible to the user. Never mention that you are searching, looki
                 ` : history.length === 0 ? `
                   <div style="text-align:center;padding:32px 12px;color:#94a3b8;font-size:12px">${HISTORY_CACHE.loading ? 'Loading from Google Sheet\u2026' : 'No saved conversations yet.<br>Use the save button in the chat header.'}</div>
                 ` : history.map(h => `
-                  <div class="card" style="padding:10px 12px;cursor:pointer;border-radius:10px" data-action="view-history" data-id="${escAttr(h.id)}">
+                  <div class="card lift" style="padding:11px 13px;cursor:pointer;border-radius:10px" data-action="view-history" data-id="${escAttr(h.id)}">
                     <div style="font-size:11px;color:#94a3b8;margin-bottom:4px">${escHtml(h.date)} &middot; ${h.pairs.length} Q&A</div>
                     <div style="font-size:12px;font-weight:500;color:var(--navy);line-height:1.4;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">${escHtml(h.preview)}</div>
                   </div>
@@ -1690,15 +1866,15 @@ Web search is invisible to the user. Never mention that you are searching, looki
         }
 
         return `
-          <div class="card flex flex-col overflow-hidden ${composerExpanded ? 'composer-expanded' : ''}" style="position:relative;flex:1">
-            <div class="card-header flex items-center gap-3 px-4 py-3 border-b border-slate-200" style="background:#fff">
-              <div class="chat-avatar ${voiceOn ? '' : 'muted'}" style="background:${color}">
+          <div class="chat-panel ${composerExpanded ? 'composer-expanded' : ''}" style="position:relative">
+            <div class="conv-header">
+              <div class="chat-avatar ${voiceOn ? '' : 'muted'}" style="background:${color};width:34px;height:34px;font-size:13px">
                 ${escHtml(slot.label.charAt(0))}
                 <span class="status-dot"></span>
               </div>
-              <div class="chat-identity" style="flex:1">
-                <div class="name">${escHtml(slot.label)}</div>
-                <div class="sub ${voiceOn ? '' : 'muted'}"><span class="pip"></span>${isSpeaking ? 'Speaking\u2026' : isListening ? 'Listening\u2026' : slot.loading ? 'Thinking\u2026' : 'AI Assistant \u00b7 Ready'}</div>
+              <div style="flex:1;min-width:0">
+                <div class="conv-title">${escHtml(slot.label)}</div>
+                <div class="conv-sub">${isSpeaking ? 'Speaking\u2026' : isListening ? 'Listening\u2026' : slot.loading ? 'Thinking\u2026' : 'Online \u00b7 Ready to help'}</div>
               </div>
               <button class="overflow-btn" title="More actions" aria-label="More actions" aria-haspopup="true" aria-expanded="${STATE.cardMenuOpen ? 'true' : 'false'}" data-action="toggle-card-menu" data-idx="${idx}">
                 <i data-lucide="more-vertical" class="w-5 h-5"></i>
@@ -1718,13 +1894,12 @@ Web search is invisible to the user. Never mention that you are searching, looki
                 </div>
               ` : ''}
             </div>
-            <div id="home-scroll-${idx}" class="flex-1 overflow-y-auto px-4 py-4 flex flex-col gap-2" style="background:#fafbfc;min-height:0">
+            <div id="home-scroll-${idx}" class="flex-1 overflow-y-auto px-4 py-4 flex flex-col gap-3" style="background:var(--row);min-height:0">
               ${msgs.length === 0 ? `
                 <div class="flex-1 flex items-center justify-center">
-                  <div class="text-center" style="max-width:320px">
-                    <div class="chat-avatar" style="background:${color};width:64px;height:64px;font-size:24px;margin:0 auto 14px"><span style="position:relative;z-index:1">${escHtml(slot.label.charAt(0))}</span></div>
-                    <div style="font-size:17px;font-weight:600;color:var(--navy);margin-bottom:4px">${escHtml(slot.label)}</div>
-                    <div style="font-size:13px;color:#64748b;line-height:1.5">Ask me anything about Recast Software \u2014 type below or tap the mic to talk.</div>
+                  <div class="text-center" style="max-width:300px">
+                    <div style="width:46px;height:46px;border-radius:12px;background:var(--quote);display:grid;place-items:center;margin:0 auto 14px"><i data-lucide="message-square-text" class="w-5 h-5" style="color:var(--primary)"></i></div>
+                    <div style="font-size:13.5px;color:var(--gray);line-height:1.6">Ask about Application Workspace \u2014 type below, or say <b style="color:var(--navy)">\u201cHey ${escHtml(slot.voiceName || slot.label)}\u201d</b> to talk.</div>
                   </div>
                 </div>
               ` : msgs.map((m, mi) => `
@@ -1748,15 +1923,6 @@ Web search is invisible to the user. Never mention that you are searching, looki
                   <input type="text" id="home-input-${idx}" class="composer-input" placeholder="Message ${escAttr(slot.label)}\u2026" value="${escAttr(slot.inputText)}" ${slot.loading?'disabled':''} />
                 `}
               </div>
-              ${VOICE.srSupported ? `
-                <div class="mic-pulse-wrap ${micClass === 'listening' ? 'active' : ''}">
-                  <span class="mic-ring"></span>
-                  <span class="mic-ring delay"></span>
-                  <button class="action-btn mic ${micClass}" title="${micTitle}" aria-label="${micTitle}" data-action="${micAction}" data-idx="${idx}">
-                    <i data-lucide="${micIcon}" class="w-6 h-6"></i>
-                  </button>
-                </div>
-              ` : ''}
               <button class="action-btn send" title="Send message" aria-label="Send message" data-action="send-home" data-idx="${idx}" ${(slot.loading || !hasText) ? 'disabled' : ''}>
                 <i data-lucide="send" class="w-5 h-5"></i>
               </button>
