@@ -846,17 +846,43 @@ Web search is invisible to the user. Never mention that you are searching, looki
         render();
       }
 
+      // Cancel an in-flight Anthropic stream + TTS so a fresh user utterance can
+      // take over the slot. Drops the placeholder assistant bubble if no content
+      // was streamed yet; the still-running sendMessage will exit via the
+      // AbortError catch and skip its own cleanup (see the controller check at
+      // the bottom of sendMessage).
+      function interruptCurrentReply(idx) {
+        const slot = STATE.slots[idx];
+        if (!slot) return;
+        if (slot.abortController) {
+          try { slot.abortController.abort(); } catch {}
+          slot.abortController = null;
+        }
+        teardownTtsQueue(idx);
+        const last = slot.messages[slot.messages.length - 1];
+        if (last && last.role === 'assistant' && !last.content) {
+          slot.messages.pop();
+        }
+        slot.loading = false;
+      }
+
       function handleVoiceTranscript(raw) {
         const text = String(raw).trim();
         if (!text) return;
 
         // Echo guard: while TTS is speaking (or within the post-playback tail
-        // window) only accept short stop commands, so Randy's own voice isn't
-        // re-transcribed as user input.
+        // window) mic input is usually Randy's own voice. Drop short fragments,
+        // but treat a substantial utterance as the user trying to interrupt —
+        // stop TTS so the new turn can be answered.
         if (ttsEchoActive()) {
           const t = text.toLowerCase();
-          if (/^(stop|cancel|quiet|shut up|never mind)\b/.test(t)) stopSpeaking();
-          return;
+          if (/^(stop|cancel|quiet|shut up|never mind)\b/.test(t)) {
+            stopSpeaking();
+            return;
+          }
+          if (text.length < 15) return;
+          stopSpeaking();
+          // Fall through to normal handling.
         }
 
         // Continuous conversation mode: after the first wake word we accept each
@@ -868,9 +894,6 @@ Web search is invisible to the user. Never mention that you are searching, looki
             exitConversationMode();
             return;
           }
-          // Skip additional utterances while a reply is still being generated — the
-          // model is mid-stream and this is likely echo or the user thinking out loud.
-          if (slot.loading) return;
           // Strip a leading wake phrase if the user repeated it.
           const wakeP = buildWakePattern(slot.voiceName || slot.label);
           const cleaned = text.replace(wakeP, '').trim();
@@ -879,6 +902,10 @@ Web search is invisible to the user. Never mention that you are searching, looki
             return;
           }
           if (cleaned.length < 2) return;
+          // If Randy is still finishing the previous reply, treat the new
+          // utterance as an interrupt: abort the in-flight request so the fresh
+          // question gets processed instead of being silently dropped.
+          if (slot.loading) interruptCurrentReply(VOICE.activeSlot);
           if (VOICE.wakeTimeoutId) { clearTimeout(VOICE.wakeTimeoutId); VOICE.wakeTimeoutId = null; }
           VOICE.awaitingCommand = false;
           const idx = VOICE.activeSlot;
@@ -905,6 +932,7 @@ Web search is invisible to the user. Never mention that you are searching, looki
             return;
           }
           if (cleaned.length < 2) return;
+          if (slot.loading) interruptCurrentReply(VOICE.activeSlot);
           if (VOICE.wakeTimeoutId) { clearTimeout(VOICE.wakeTimeoutId); VOICE.wakeTimeoutId = null; }
           VOICE.awaitingCommand = false;
           VOICE.conversationMode = true; // entering conversation for follow-ups
@@ -922,10 +950,6 @@ Web search is invisible to the user. Never mention that you are searching, looki
           return;
         }
 
-        // Any remaining utterance that lands inside the TTS tail window is
-        // almost certainly Randy's own voice — drop it.
-        if (ttsEchoActive()) return;
-
         // Otherwise scan for a wake word across enabled slots
         for (let i = 0; i < STATE.slots.length; i++) {
           const slot = STATE.slots[i];
@@ -934,10 +958,9 @@ Web search is invisible to the user. Never mention that you are searching, looki
           const match = text.match(pattern);
           if (!match) continue;
 
-          // Don't accept a new wake-word while a previous turn is still
-          // streaming a response — that utterance is likely echo, and we
-          // don't want two concurrent sendMessage calls for the same slot.
-          if (slot.loading) return;
+          // If a previous turn is still streaming, treat the new wake-word as
+          // an interrupt rather than dropping it.
+          if (slot.loading) interruptCurrentReply(i);
 
           playBeep();
 
@@ -1355,8 +1378,13 @@ Web search is invisible to the user. Never mention that you are searching, looki
           }
         }
 
-        slot.loading = false;
-        if (slot.abortController === controller) slot.abortController = null;
+        // Only clean up shared slot state if this turn is still the active one.
+        // If interruptCurrentReply() has already aborted us and a new sendMessage
+        // has installed its own controller, leave its loading=true alone.
+        if (slot.abortController === controller) {
+          slot.loading = false;
+          slot.abortController = null;
+        }
         render();
         scrollChat();
       }
