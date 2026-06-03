@@ -338,82 +338,6 @@ Web search is invisible to the user. Never mention that you are searching, looki
 
       const DEFAULT_VOICE_PERSONALITY = "Keep all responses to 2-3 short sentences since they will be spoken aloud. Use natural conversational language. Say numbers the way people talk \u2014 like '120 grand' not '$120,000'. Never use markdown, bullet points, or formatting. Be direct and warm.";
 
-      // ElevenLabs TTS configuration
-      const DEFAULT_ELEVENLABS_API_KEY = '';
-      const DEFAULT_ELEVENLABS_VOICE_ID = 'JBFqnCBsd6RMkjVDRZzb'; // George
-      // Fallback list shown before the user's ElevenLabs library is fetched (or if the
-      // fetch fails — e.g. missing/invalid key, offline). Once the live list loads,
-      // EL_VOICES_CACHE.list takes precedence so the dropdown reflects My Voices.
-      const ELEVENLABS_VOICES = [
-        { id: 'JBFqnCBsd6RMkjVDRZzb', name: 'George', desc: 'Warm British male' },
-        { id: '21m00Tcm4TlvDq8ikWAM', name: 'Rachel', desc: 'Calm female' },
-        { id: 'pNInz6obpgDQGcFmaJgB', name: 'Adam', desc: 'Deep American male' },
-        { id: 'ErXwobaYiN019PkySvjV', name: 'Antoni', desc: 'Well-rounded male' },
-        { id: 'EXAVITQu4vr4xnSDxMaL', name: 'Bella', desc: 'Soft female' },
-        { id: 'TxGEqnHWrfWFTfGW9XjX', name: 'Josh', desc: 'Young American male' },
-        { id: 'AZnzlk1XvdvUeBnXmlld', name: 'Domi', desc: 'Strong female' },
-        { id: 'MF3mGyEYCl7XYWbV9V6O', name: 'Elli', desc: 'Young female' },
-      ];
-
-      // Runtime cache for the voices fetched from the user's ElevenLabs account via
-      // GET /v1/voices. Populated on first Settings render (and on refresh/key change).
-      const EL_VOICES_CACHE = {
-        list: null,      // array of { id, name, desc, category } once fetched, else null
-        loading: false,  // fetch in flight?
-        error: null,     // last fetch error message, if any
-        keyUsed: null    // api key that produced the current list — refetch when it changes
-      };
-
-      // Fetch the caller's voice library from ElevenLabs. Idempotent: returns early if
-      // the same key is already loaded or a fetch is in flight for it. Populates
-      // EL_VOICES_CACHE and triggers a re-render so the Settings dropdown updates.
-      async function fetchElevenLabsVoices(apiKey, { force = false } = {}) {
-        const key = (apiKey || '').trim();
-        if (!key) return;
-        if (!force && EL_VOICES_CACHE.keyUsed === key && Array.isArray(EL_VOICES_CACHE.list)) return;
-        if (EL_VOICES_CACHE.loading && EL_VOICES_CACHE.keyUsed === key) return;
-        EL_VOICES_CACHE.loading = true;
-        EL_VOICES_CACHE.error = null;
-        EL_VOICES_CACHE.keyUsed = key;
-        render();
-        try {
-          const resp = await fetch('https://api.elevenlabs.io/v1/voices', {
-            headers: { 'xi-api-key': key, 'Accept': 'application/json' }
-          });
-          if (!resp.ok) {
-            let msg = 'HTTP ' + resp.status;
-            try { const j = await resp.json(); if (j && j.detail && j.detail.message) msg = j.detail.message; } catch {}
-            throw new Error(msg);
-          }
-          const data = await resp.json();
-          const voices = Array.isArray(data.voices) ? data.voices : [];
-          // Sort: user's own voices (cloned/professional/generated) first, then premade.
-          const priority = { cloned: 0, professional: 1, generated: 2, premade: 3 };
-          voices.sort((a, b) => {
-            const pa = priority[a.category] ?? 4;
-            const pb = priority[b.category] ?? 4;
-            if (pa !== pb) return pa - pb;
-            return String(a.name || '').localeCompare(String(b.name || ''));
-          });
-          EL_VOICES_CACHE.list = voices.map(v => {
-            const labels = v.labels || {};
-            const desc = v.description
-              || labels.description
-              || labels.descriptive
-              || [labels.accent, labels.gender, labels.age].filter(Boolean).join(' ')
-              || v.category
-              || '';
-            return { id: v.voice_id, name: v.name || v.voice_id, desc, category: v.category || '' };
-          });
-        } catch (err) {
-          EL_VOICES_CACHE.error = err && err.message ? err.message : 'Failed to load voices';
-          console.warn('fetchElevenLabsVoices failed:', err);
-        } finally {
-          EL_VOICES_CACHE.loading = false;
-          render();
-        }
-      }
-
       // Google Sheet webhook for saving Q&A results
       let GSHEET_WEBHOOK = 'https://script.google.com/macros/s/AKfycbz0gE7H7Nd6LX9S4JJsWZb4h0W0qf04CDVloFFbfnc_0s80orwybcATHs3L7vicQAbE/exec';
       const SESSION_ID = 'S-' + Date.now().toString(36) + Math.random().toString(36).substring(2, 6);
@@ -521,11 +445,8 @@ Web search is invisible to the user. Never mention that you are searching, looki
           voicePersonality: DEFAULT_VOICE_PERSONALITY,
           isListening: false,
           isSpeaking: false,
-          elevenlabsApiKey: DEFAULT_ELEVENLABS_API_KEY,
-          elevenlabsVoiceId: DEFAULT_ELEVENLABS_VOICE_ID,
-          elevenlabsEnabled: true,
-          abortController: null, // abort the in-flight Anthropic/ElevenLabs fetches
-          ttsQueue: null         // FIFO of sentence TTS streams so we speak in order
+          abortController: null, // abort the in-flight Anthropic fetch
+          ttsQueue: null         // FIFO of sentence TTS utterances so we speak in order
         };
       }
 
@@ -576,10 +497,7 @@ Web search is invisible to the user. Never mention that you are searching, looki
           prompt: s.prompt,
           voiceEnabled: s.voiceEnabled,
           voiceName: s.voiceName,
-          voicePersonality: s.voicePersonality,
-          elevenlabsEnabled: s.elevenlabsEnabled,
-          elevenlabsApiKey: s.elevenlabsApiKey,
-          elevenlabsVoiceId: s.elevenlabsVoiceId
+          voicePersonality: s.voicePersonality
         }));
         try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(data)); } catch {}
       }
@@ -597,9 +515,6 @@ Web search is invisible to the user. Never mention that you are searching, looki
               STATE.slots[i].voiceEnabled = !!d.voiceEnabled;
               STATE.slots[i].voiceName = d.voiceName || STATE.slots[i].label;
               STATE.slots[i].voicePersonality = d.voicePersonality || DEFAULT_VOICE_PERSONALITY;
-              if (d.elevenlabsEnabled !== undefined) STATE.slots[i].elevenlabsEnabled = !!d.elevenlabsEnabled;
-              if (d.elevenlabsApiKey !== undefined) STATE.slots[i].elevenlabsApiKey = d.elevenlabsApiKey;
-              if (d.elevenlabsVoiceId) STATE.slots[i].elevenlabsVoiceId = d.elevenlabsVoiceId;
             }
           });
         } catch {}
@@ -615,10 +530,8 @@ Web search is invisible to the user. Never mention that you are searching, looki
           const config = await resp.json();
           STATE.slots.forEach(s => {
             if (config.anthropic_api_key) s.apiKey = config.anthropic_api_key;
-            if (config.elevenlabs_api_key) s.elevenlabsApiKey = config.elevenlabs_api_key;
-            if (config.elevenlabs_voice_id) s.elevenlabsVoiceId = config.elevenlabs_voice_id;
           });
-          // Persist so the keys survive refresh even before the next remote fetch completes.
+          // Persist so the key survives refresh even before the next remote fetch completes.
           saveSettings();
           render();
         } catch (err) {
@@ -631,8 +544,6 @@ Web search is invisible to the user. Never mention that you are searching, looki
         const slot = STATE.slots[0];
         const configToSave = {};
         if (slot.apiKey) configToSave.anthropic_api_key = slot.apiKey;
-        if (slot.elevenlabsApiKey) configToSave.elevenlabs_api_key = slot.elevenlabsApiKey;
-        if (slot.elevenlabsVoiceId) configToSave.elevenlabs_voice_id = slot.elevenlabsVoiceId;
         if (GSHEET_WEBHOOK) configToSave.gsheet_webhook = GSHEET_WEBHOOK;
         try {
           await fetch(GSHEET_WEBHOOK, {
@@ -648,203 +559,16 @@ Web search is invisible to the user. Never mention that you are searching, looki
 
       loadSettings();
 
-      /* ========== ELEVENLABS TTS ========== */
-      // blobUrl: currently bound <audio> src. owned=true means we also own the URL's lifetime
-      // (revoke on cleanup); owned=false means the URL lives on a message's audioUrl cache and
-      // must NOT be revoked here — the message owns it.
-      const EL_AUDIO = { el: null, blobUrl: null, owned: false, speakingSlot: null };
-
-      function getElAudio() {
-        if (!EL_AUDIO.el) {
-          const a = document.createElement('audio');
-          a.addEventListener('ended', () => {
-            cleanupElAudio();
-            if (EL_AUDIO.speakingSlot !== null && STATE.slots[EL_AUDIO.speakingSlot]) {
-              STATE.slots[EL_AUDIO.speakingSlot].isSpeaking = false;
-              // Preserve activeSlot/awaitingCommand while in conversation mode so the
-              // next utterance is routed to the same slot without re-saying the wake word.
-              if (!VOICE.conversationMode) {
-                VOICE.activeSlot = null;
-                VOICE.awaitingCommand = false;
-              }
-            }
-            EL_AUDIO.speakingSlot = null;
-            VOICE.playingMsg = null;
-            markTtsEnded();
-            render();
-          });
-          a.addEventListener('error', () => {
-            cleanupElAudio();
-            if (EL_AUDIO.speakingSlot !== null && STATE.slots[EL_AUDIO.speakingSlot]) {
-              STATE.slots[EL_AUDIO.speakingSlot].isSpeaking = false;
-            }
-            EL_AUDIO.speakingSlot = null;
-            VOICE.playingMsg = null;
-            markTtsEnded();
-            render();
-          });
-          document.body.appendChild(a);
-          EL_AUDIO.el = a;
-        }
-        return EL_AUDIO.el;
-      }
-
-      function cleanupElAudio() {
-        if (EL_AUDIO.blobUrl && EL_AUDIO.owned) {
-          URL.revokeObjectURL(EL_AUDIO.blobUrl);
-        }
-        EL_AUDIO.blobUrl = null;
-        EL_AUDIO.owned = false;
-      }
-
-      function stopElAudio() {
-        const a = EL_AUDIO.el;
-        const wasPlaying = !!(a && EL_AUDIO.speakingSlot !== null);
-        if (a) {
-          a.pause();
-          a.removeAttribute('src');
-          a.load();
-        }
-        cleanupElAudio();
-        if (EL_AUDIO.speakingSlot !== null && STATE.slots[EL_AUDIO.speakingSlot]) {
-          STATE.slots[EL_AUDIO.speakingSlot].isSpeaking = false;
-        }
-        EL_AUDIO.speakingSlot = null;
-        VOICE.playingMsg = null;
-        if (wasPlaying) markTtsEnded();
-      }
-
-      // Play a cached ElevenLabs blob URL that lives on a message (no re-fetch).
-      async function playCachedAudio(audioUrl, slotIdx, msgIdx) {
-        const slot = STATE.slots[slotIdx];
-        if (!slot || !audioUrl) return false;
-        stopElAudio();
-        try { window.speechSynthesis.cancel(); } catch {}
-        slot.isSpeaking = true;
-        EL_AUDIO.speakingSlot = slotIdx;
-        EL_AUDIO.blobUrl = audioUrl;
-        EL_AUDIO.owned = false; // message owns this URL; don't revoke
-        VOICE.playingMsg = { slot: slotIdx, msg: msgIdx };
-        render();
-        try {
-          const audio = getElAudio();
-          audio.src = audioUrl;
-          await audio.play();
-          return true;
-        } catch (err) {
-          console.warn('Cached audio replay failed:', err);
-          slot.isSpeaking = false;
-          EL_AUDIO.speakingSlot = null;
-          VOICE.playingMsg = null;
-          render();
-          return false;
-        }
-      }
-
-      async function elevenLabsSpeak(text, idx, msgIdx) {
-        const slot = STATE.slots[idx];
-        if (!slot.elevenlabsEnabled) return false;
-        if (!slot.elevenlabsApiKey) {
-          showToast('No ElevenLabs API key \u2014 add one in Settings or disable ElevenLabs');
-          return false;
-        }
-
-        const clean = stripMarkdown(text);
-        if (!clean) return false;
-
-        stopElAudio();
-        try { window.speechSynthesis.cancel(); } catch {}
-
-        slot.isSpeaking = true;
-        EL_AUDIO.speakingSlot = idx;
-        if (typeof msgIdx === 'number') VOICE.playingMsg = { slot: idx, msg: msgIdx };
-        render();
-
-        try {
-          const voiceId = slot.elevenlabsVoiceId || DEFAULT_ELEVENLABS_VOICE_ID;
-          const callEl = (url, modelId) => fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'xi-api-key': slot.elevenlabsApiKey },
-            body: JSON.stringify({
-              text: clean,
-              model_id: modelId,
-              voice_settings: { stability: 0.5, similarity_boost: 0.75 }
-            })
-          });
-
-          // Fast path: flash_v2_5 on /stream has the lowest TTFB. If the key/tier can't use
-          // it, fall back to the multilingual_v2 non-stream call that's known-good everywhere.
-          let resp;
-          try {
-            resp = await callEl(
-              `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}/stream?output_format=mp3_44100_128`,
-              'eleven_flash_v2_5'
-            );
-          } catch { resp = null; }
-          if (!resp || !resp.ok) {
-            if (resp) console.warn('ElevenLabs flash stream', resp.status);
-            resp = await callEl(
-              `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=mp3_44100_128`,
-              'eleven_multilingual_v2'
-            );
-          }
-
-          if (!resp.ok) {
-            const errBody = await resp.text().catch(() => '');
-            let userMsg;
-            switch (resp.status) {
-              case 401: userMsg = 'Invalid ElevenLabs API key — update in Settings'; break;
-              case 403: userMsg = 'ElevenLabs API key lacks permission — check your plan'; break;
-              case 429: userMsg = 'ElevenLabs rate limit reached — try again shortly'; break;
-              case 400: userMsg = 'ElevenLabs request error — voice or model may be invalid'; break;
-              default:  userMsg = `ElevenLabs error (${resp.status}) — using browser voice`;
-            }
-            console.warn(`ElevenLabs TTS ${resp.status}:`, errBody.substring(0, 200));
-            throw new Error(userMsg);
-          }
-
-          const blob = await resp.blob();
-          const url = URL.createObjectURL(blob);
-          cleanupElAudio();
-          EL_AUDIO.blobUrl = url;
-
-          // Cache on the message so replay is instant and free.
-          const msg = typeof msgIdx === 'number' ? slot.messages[msgIdx] : null;
-          if (msg && msg.role === 'assistant') {
-            if (msg.audioUrl && msg.audioUrl !== url) {
-              try { URL.revokeObjectURL(msg.audioUrl); } catch {}
-            }
-            msg.audioUrl = url;
-            msg.audioSource = 'elevenlabs';
-            EL_AUDIO.owned = false; // ownership transferred to message
-          } else {
-            EL_AUDIO.owned = true;  // no message to hand off to; we own it
-          }
-
-          const audio = getElAudio();
-          audio.src = url;
-          await audio.play();
-          return true;
-        } catch (err) {
-          const msg = err.message || 'ElevenLabs failed';
-          console.warn('ElevenLabs TTS failed, falling back to browser TTS:', msg);
-          showToast(msg);
-          slot.isSpeaking = false;
-          EL_AUDIO.speakingSlot = null;
-          VOICE.playingMsg = null;
-          markTtsEnded();
-          render();
-          return false;
-        }
-      }
+      /* ========== BROWSER TTS ========== */
+      // Track which slot currently owns the active TTS playback so we can stop
+      // it cleanly when a new utterance starts or the user hits the stop button.
+      const TTS_STATE = { speakingSlot: null };
 
       /* ========== STREAMING TTS QUEUE ==========
-       * Voice turns stream the Anthropic response sentence-by-sentence and pipe each sentence
-       * through ElevenLabs' /stream endpoint with eleven_flash_v2_5. Each sentence becomes a
-       * small MP3 blob which plays on a dedicated <audio> (separate from EL_AUDIO so the
-       * message-replay flow keeps working). All blobs are collected and concatenated into a
-       * single cached audioUrl on the assistant message once the stream finishes, so replay
-       * via the speaker button is instant and free. */
+       * Voice turns stream the Anthropic response sentence-by-sentence and queue
+       * each sentence through SpeechSynthesisUtterance. The browser's speech
+       * synthesis serializes utterances internally, so we just push them on as
+       * sentences arrive and they play back in order. */
 
       function initTtsQueue(idx, signal, msgIdx) {
         const slot = STATE.slots[idx];
@@ -853,11 +577,9 @@ Web search is invisible to the user. Never mention that you are searching, looki
           sentences: [],    // pending sentences waiting for playback
           processing: false,
           signal,           // abort signal from sendMessage's controller
-          msgIdx,           // target assistant message (for caching + playingMsg highlight)
-          audio: null,      // dedicated <audio> element owned by this queue
-          blobs: [],        // MP3 blobs collected for final concatenation into msg.audioUrl
-          done: false,      // Anthropic stream finished — once drained we can cache
-          activeUrl: null   // current object URL (revoke on pause/end)
+          msgIdx,           // target assistant message (for playingMsg highlight)
+          done: false,      // Anthropic stream finished
+          currentUtter: null
         };
       }
 
@@ -865,16 +587,14 @@ Web search is invisible to the user. Never mention that you are searching, looki
         const slot = STATE.slots[idx];
         const q = slot && slot.ttsQueue;
         if (!q) return;
-        const wasActive = !!q.audio || q.blobs.length > 0;
+        const wasActive = q.processing || q.sentences.length > 0 || !!q.currentUtter;
         try {
-          if (q.audio) {
-            q.audio.pause();
-            q.audio.removeAttribute('src');
+          if (q.currentUtter && VOICE.ttsSupported) {
+            window.speechSynthesis.cancel();
           }
         } catch {}
-        if (q.activeUrl) { try { URL.revokeObjectURL(q.activeUrl); } catch {} q.activeUrl = null; }
         slot.ttsQueue = null;
-        if (EL_AUDIO.speakingSlot === idx) EL_AUDIO.speakingSlot = null;
+        if (TTS_STATE.speakingSlot === idx) TTS_STATE.speakingSlot = null;
         slot.isSpeaking = false;
         VOICE.playingMsg = null;
         if (wasActive) markTtsEnded();
@@ -899,15 +619,6 @@ Web search is invisible to the user. Never mention that you are searching, looki
             const text = q.sentences.shift();
             await playTtsChunk(idx, q, text);
           }
-          // Stream finished + queue drained: concat all sentence blobs and cache for replay.
-          if (slot.ttsQueue === q && q.done && q.sentences.length === 0 && q.blobs.length) {
-            const msg = slot.messages[q.msgIdx];
-            if (msg && msg.role === 'assistant') {
-              if (msg.audioUrl) { try { URL.revokeObjectURL(msg.audioUrl); } catch {} }
-              msg.audioUrl = URL.createObjectURL(new Blob(q.blobs, { type: 'audio/mpeg' }));
-              msg.audioSource = 'elevenlabs';
-            }
-          }
         } catch (err) {
           if (err && err.name !== 'AbortError') console.warn('TTS queue error:', err);
         } finally {
@@ -915,7 +626,7 @@ Web search is invisible to the user. Never mention that you are searching, looki
           // If Anthropic is done and we've drained everything, release the speaking state.
           if (slot.ttsQueue === q && q.done && q.sentences.length === 0) {
             slot.isSpeaking = false;
-            if (EL_AUDIO.speakingSlot === idx) EL_AUDIO.speakingSlot = null;
+            if (TTS_STATE.speakingSlot === idx) TTS_STATE.speakingSlot = null;
             VOICE.playingMsg = null;
             markTtsEnded();
             render();
@@ -923,116 +634,27 @@ Web search is invisible to the user. Never mention that you are searching, looki
         }
       }
 
-      async function playTtsChunk(idx, q, text) {
-        const slot = STATE.slots[idx];
+      function playTtsChunk(idx, q, text) {
         const clean = stripMarkdown(text);
-        if (!clean) return;
-
-        // Fallback to browser TTS if ElevenLabs isn't configured.
-        if (!slot.elevenlabsEnabled || !slot.elevenlabsApiKey) {
-          return playBrowserTtsChunk(idx, q, clean);
-        }
-
-        const voiceId = slot.elevenlabsVoiceId || DEFAULT_ELEVENLABS_VOICE_ID;
-        const callElevenLabs = (url, modelId) => fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'xi-api-key': slot.elevenlabsApiKey },
-          body: JSON.stringify({
-            text: clean,
-            model_id: modelId,
-            voice_settings: { stability: 0.5, similarity_boost: 0.75 }
-          }),
-          signal: q.signal
-        });
-
-        // Try the low-latency streaming endpoint first (flash_v2_5 has the lowest TTFB).
-        // If it fails (e.g. the key/tier lacks permission for the stream endpoint or flash
-        // model), retry with the same non-streaming call the Settings → Preview Voice
-        // button uses — that path is known-good for this key — before giving up to browser TTS.
-        let resp;
-        try {
-          resp = await callElevenLabs(
-            `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}/stream?output_format=mp3_44100_128`,
-            'eleven_flash_v2_5'
-          );
-        } catch (err) {
-          if (err && err.name === 'AbortError') return;
-          resp = null;
-        }
-        if (!resp || !resp.ok) {
-          if (resp) console.warn('ElevenLabs stream', resp.status);
-          try {
-            resp = await callElevenLabs(
-              `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=mp3_44100_128`,
-              'eleven_multilingual_v2'
-            );
-          } catch (err) {
-            if (err && err.name === 'AbortError') return;
-            return playBrowserTtsChunk(idx, q, clean);
-          }
-          if (!resp.ok) {
-            console.warn('ElevenLabs non-stream', resp.status);
-            showToast(`ElevenLabs error ${resp.status} \u2014 using browser voice`);
-            return playBrowserTtsChunk(idx, q, clean);
-          }
-        }
-
-        const blob = await resp.blob();
-        if (q.signal && q.signal.aborted) return;
-        q.blobs.push(blob);
-        const url = URL.createObjectURL(blob);
-        q.activeUrl = url;
-
-        if (!q.audio) {
-          q.audio = new Audio();
-          q.audio.preload = 'auto';
-        }
-        slot.isSpeaking = true;
-        EL_AUDIO.speakingSlot = idx;
-        VOICE.playingMsg = { slot: idx, msg: q.msgIdx };
-        render();
-
-        const audio = q.audio;
-        await new Promise((resolve) => {
-          let finished = false;
-          const finish = () => {
-            if (finished) return;
-            finished = true;
-            audio.onended = null;
-            audio.onerror = null;
-            try { URL.revokeObjectURL(url); } catch {}
-            if (q.activeUrl === url) q.activeUrl = null;
-            resolve();
-          };
-          audio.onended = finish;
-          audio.onerror = finish;
-          audio.src = url;
-          const p = audio.play();
-          if (p && p.catch) p.catch(() => finish());
-          if (q.signal) {
-            q.signal.addEventListener('abort', () => {
-              try { audio.pause(); } catch {}
-              finish();
-            }, { once: true });
-          }
-        });
-      }
-
-      function playBrowserTtsChunk(idx, q, clean) {
+        if (!clean) return Promise.resolve();
         if (!VOICE.ttsSupported) return Promise.resolve();
         return new Promise((resolve) => {
           if (q.signal && q.signal.aborted) return resolve();
+          const slot = STATE.slots[idx];
           const u = new SpeechSynthesisUtterance(clean);
           const v = pickDeepVoice();
           if (v) u.voice = v;
           u.pitch = 0.85;
           u.rate = 0.95;
-          const slot = STATE.slots[idx];
           slot.isSpeaking = true;
-          EL_AUDIO.speakingSlot = idx;
+          TTS_STATE.speakingSlot = idx;
           VOICE.playingMsg = { slot: idx, msg: q.msgIdx };
+          q.currentUtter = u;
           render();
-          const done = () => resolve();
+          const done = () => {
+            if (q.currentUtter === u) q.currentUtter = null;
+            resolve();
+          };
           u.onend = done;
           u.onerror = done;
           if (q.signal) q.signal.addEventListener('abort', () => {
@@ -1107,22 +729,13 @@ Web search is invisible to the user. Never mention that you are searching, looki
             || pool[0];
       }
 
-      async function speakText(text, idx, msgIdx) {
-        const slot = STATE.slots[idx];
-
-        // Try ElevenLabs first if configured
-        if (slot.elevenlabsEnabled && slot.elevenlabsApiKey) {
-          const ok = await elevenLabsSpeak(text, idx, msgIdx);
-          if (ok) return;
-        }
-
-        // Fallback: browser Web Speech API (cannot cache; mark source accordingly)
+      function speakText(text, idx, msgIdx) {
         if (!VOICE.ttsSupported) return;
         const clean = stripMarkdown(text);
         if (!clean) return;
+        // Stop anything currently playing so the new utterance starts immediately.
+        STATE.slots.forEach((_, i) => teardownTtsQueue(i));
         try { window.speechSynthesis.cancel(); } catch {}
-        const msg = typeof msgIdx === 'number' ? slot.messages[msgIdx] : null;
-        if (msg && msg.role === 'assistant' && !msg.audioSource) msg.audioSource = 'browser';
         const u = new SpeechSynthesisUtterance(clean);
         const v = pickDeepVoice();
         if (v) u.voice = v;
@@ -1130,11 +743,13 @@ Web search is invisible to the user. Never mention that you are searching, looki
         u.rate = 0.95;
         u.onstart = () => {
           STATE.slots[idx].isSpeaking = true;
+          TTS_STATE.speakingSlot = idx;
           if (typeof msgIdx === 'number') VOICE.playingMsg = { slot: idx, msg: msgIdx };
           render();
         };
         u.onend = () => {
           STATE.slots[idx].isSpeaking = false;
+          if (TTS_STATE.speakingSlot === idx) TTS_STATE.speakingSlot = null;
           // Preserve activeSlot/awaitingCommand while in conversation mode so the
           // next utterance is routed to the same slot without re-saying the wake word.
           if (!VOICE.conversationMode) {
@@ -1149,6 +764,7 @@ Web search is invisible to the user. Never mention that you are searching, looki
         try { window.speechSynthesis.speak(u); }
         catch {
           STATE.slots[idx].isSpeaking = false;
+          if (TTS_STATE.speakingSlot === idx) TTS_STATE.speakingSlot = null;
           VOICE.playingMsg = null;
           markTtsEnded();
           render();
@@ -1156,13 +772,13 @@ Web search is invisible to the user. Never mention that you are searching, looki
       }
 
       function stopSpeaking() {
-        stopElAudio();
         // Tear down any streaming-TTS queues so queued sentences don't keep playing.
         STATE.slots.forEach((_, i) => teardownTtsQueue(i));
         if (VOICE.ttsSupported) {
           try { window.speechSynthesis.cancel(); } catch {}
         }
         STATE.slots.forEach(s => { s.isSpeaking = false; });
+        TTS_STATE.speakingSlot = null;
         VOICE.playingMsg = null;
         markTtsEnded();
         render();
@@ -1203,7 +819,7 @@ Web search is invisible to the user. Never mention that you are searching, looki
         if (VOICE.interimSlot !== null && STATE.slots[VOICE.interimSlot]) {
           STATE.slots[VOICE.interimSlot].inputText = '';
         }
-        // Abort whatever's in flight (Anthropic stream + ElevenLabs stream).
+        // Abort whatever's in flight (Anthropic stream).
         STATE.slots.forEach((s, i) => {
           if (s.abortController) { try { s.abortController.abort(); } catch {} s.abortController = null; }
           teardownTtsQueue(i);
@@ -1759,12 +1375,6 @@ Web search is invisible to the user. Never mention that you are searching, looki
       function clearChat(idx) {
         // Stop any active playback whose source message is about to be wiped.
         if (VOICE.playingMsg && VOICE.playingMsg.slot === idx) stopSpeaking();
-        // Release cached TTS blob URLs so they don't leak.
-        STATE.slots[idx].messages.forEach(m => {
-          if (m && m.audioUrl) {
-            try { URL.revokeObjectURL(m.audioUrl); } catch {}
-          }
-        });
         STATE.slots[idx].messages = [];
         STATE.slots[idx].inputText = '';
         STATE.slots[idx].loading = false;
@@ -1827,13 +1437,10 @@ Web search is invisible to the user. Never mention that you are searching, looki
       }
 
       function speakerBtnHtml(slotIdx, msgIdx) {
-        const slot = STATE.slots[slotIdx];
-        if (!slot.elevenlabsEnabled && !VOICE.ttsSupported) return '';
+        if (!VOICE.ttsSupported) return '';
         const isPlayingThis = !!(VOICE.playingMsg && VOICE.playingMsg.slot === slotIdx && VOICE.playingMsg.msg === msgIdx);
-        const msg = slot.messages[msgIdx];
-        const hasCached = !!(msg && msg.audioUrl);
-        const icon = isPlayingThis ? 'volume-x' : (hasCached ? 'rotate-ccw' : 'volume-2');
-        const title = isPlayingThis ? 'Stop' : (hasCached ? 'Play again' : 'Speak');
+        const icon = isPlayingThis ? 'volume-x' : 'volume-2';
+        const title = isPlayingThis ? 'Stop' : 'Speak';
         return `<button class="tts-btn ${isPlayingThis ? 'playing' : ''}" title="${title}" aria-label="${title}" data-action="tts-speak" data-slot="${slotIdx}" data-msg="${msgIdx}"><i data-lucide="${icon}" class="w-3 h-3"></i></button>`;
       }
 
@@ -2180,10 +1787,6 @@ Web search is invisible to the user. Never mention that you are searching, looki
         const es = STATE.editingSlot;
         const slot = STATE.slots[es];
         const color = SLOT_COLORS[es];
-        // Kick off the My Voices fetch on first settings paint (and whenever the key changes).
-        // fetchElevenLabsVoices is idempotent and no-ops when cache is fresh, so this is safe
-        // to call on every render.
-        if (slot.elevenlabsApiKey) fetchElevenLabsVoices(slot.elevenlabsApiKey);
         return `
           <div class="space-y-4">
             <div class="settings-section settings-grid">
@@ -2249,61 +1852,11 @@ Web search is invisible to the user. Never mention that you are searching, looki
                     <select id="setting-voice-list" disabled style="opacity:0.85">
                       ${(window.speechSynthesis.getVoices() || []).filter(v => /^en(-|_|$)/i.test(v.lang)).map(v => `<option>${escHtml(v.name)} \u2014 ${escHtml(v.lang)}</option>`).join('') || '<option>(voices will load after first click)</option>'}
                     </select>
-                  </div>
-                ` : ''}
-              </div>
-
-              <div class="full" style="border-top:1px dashed #e2e8f0;padding-top:16px">
-                <div class="flex items-center justify-between mb-3">
-                  <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide">
-                    <i data-lucide="volume-2" class="w-3 h-3 inline mr-1"></i>ElevenLabs TTS (High-Quality Voice)
-                  </label>
-                  <div class="voice-switch ${slot.elevenlabsEnabled?'on':''}" data-action="toggle-elevenlabs" data-idx="${es}" title="Toggle ElevenLabs TTS"></div>
-                </div>
-
-                <div class="mb-3">
-                  <label class="block text-[11px] font-semibold text-slate-500 uppercase tracking-wide mb-1">ElevenLabs API Key</label>
-                  <input type="password" id="setting-el-apikey" value="${escAttr(slot.elevenlabsApiKey)}" placeholder="sk_..." />
-                  <p class="text-[11px] text-slate-400 mt-1">Get a free key at <a href="https://elevenlabs.io/app/settings/api-keys" target="_blank" rel="noopener" style="color:#0070F3;text-decoration:underline">elevenlabs.io</a>. Each key includes free monthly characters.</p>
-                </div>
-
-                <div class="mb-3">
-                  <div class="flex items-center justify-between mb-1">
-                    <label class="block text-[11px] font-semibold text-slate-500 uppercase tracking-wide">Voice</label>
-                    <button type="button" data-action="refresh-voices" style="font-size:11px;color:#0070F3;background:transparent;border:none;cursor:pointer;padding:0" ${EL_VOICES_CACHE.loading ? 'disabled' : ''}>
-                      ${EL_VOICES_CACHE.loading ? 'Loading…' : 'Refresh my voices'}
+                    <button class="btn-outline" style="font-size:11px;padding:5px 12px;margin-top:8px" data-action="preview-voice" data-idx="${es}">
+                      <i data-lucide="play" class="w-3 h-3 inline mr-1"></i> Preview Voice
                     </button>
                   </div>
-                  <select id="setting-el-voice" style="width:100%;padding:8px 12px;border:2px solid #e2e8f0;border-radius:10px;font-size:13px;color:var(--navy);background:#fff">
-                    ${(() => {
-                      const live = Array.isArray(EL_VOICES_CACHE.list) && EL_VOICES_CACHE.list.length ? EL_VOICES_CACHE.list : null;
-                      const list = live || ELEVENLABS_VOICES;
-                      // If the stored voice isn't in the live list, surface it as a "(missing)" option
-                      // so the user can see why their selection appears off and pick a replacement.
-                      const hasCurrent = list.some(v => v.id === slot.elevenlabsVoiceId);
-                      const missing = !hasCurrent && slot.elevenlabsVoiceId
-                        ? `<option value="${escAttr(slot.elevenlabsVoiceId)}" selected>${escHtml(slot.elevenlabsVoiceId)} — (not in your library)</option>`
-                        : '';
-                      return missing + list.map(v => {
-                        const label = v.desc ? `${escHtml(v.name)} \u2014 ${escHtml(v.desc)}` : escHtml(v.name);
-                        return `<option value="${escAttr(v.id)}" ${slot.elevenlabsVoiceId===v.id?'selected':''}>${label}</option>`;
-                      }).join('');
-                    })()}
-                  </select>
-                  <p class="text-[11px] text-slate-400 mt-1">
-                    ${EL_VOICES_CACHE.error
-                      ? `<span style="color:#dc2626">Couldn't load your voices: ${escHtml(EL_VOICES_CACHE.error)}. Showing default list.</span>`
-                      : Array.isArray(EL_VOICES_CACHE.list) && EL_VOICES_CACHE.list.length
-                        ? `Showing ${EL_VOICES_CACHE.list.length} voices from your ElevenLabs library. Falls back to browser voice if unavailable.`
-                        : slot.elevenlabsApiKey
-                          ? 'Loading your ElevenLabs voices… a default list is shown until they arrive.'
-                          : 'Add your ElevenLabs API key above to load your My Voices list.'}
-                  </p>
-                </div>
-
-                <button class="btn-outline" style="font-size:11px;padding:5px 12px" data-action="preview-voice" data-idx="${es}">
-                  <i data-lucide="play" class="w-3 h-3 inline mr-1"></i> Preview Voice
-                </button>
+                ` : ''}
               </div>
 
               <div class="full flex flex-wrap gap-2 pt-1">
@@ -2318,9 +1871,6 @@ Web search is invisible to the user. Never mention that you are searching, looki
                 </button>
                 <button class="btn-outline" style="font-size:11px;padding:5px 12px" data-action="copy-key" data-key="agent">
                   <i data-lucide="copy" class="w-3 h-3 inline mr-1"></i> Agent
-                </button>
-                <button class="btn-outline" style="font-size:11px;padding:5px 12px" data-action="copy-key" data-key="voice">
-                  <i data-lucide="copy" class="w-3 h-3 inline mr-1"></i> Voice
                 </button>
               </div>
             </div>
@@ -2372,13 +1922,12 @@ Web search is invisible to the user. Never mention that you are searching, looki
             case 'save-to-sheet': saveToSheet(idx); break;
             case 'copy-key': {
               const keys = {
-                agent: 'sk-ant-api03-CSSZg-24BJtdvaN7HBOXhCYEdFMFUyZk66jPs2T_Tvr5rHNGScUtEwdnpA516',
-                voice: 'sk_9add5313a8b57b9fed2f069e878fab1cfede03d04d378135'
+                agent: 'sk-ant-api03-CSSZg-24BJtdvaN7HBOXhCYEdFMFUyZk66jPs2T_Tvr5rHNGScUtEwdnpA516'
               };
               const which = act.dataset.key;
               const val = keys[which];
               if (!val) break;
-              const done = () => showToast((which === 'agent' ? 'Agent' : 'Voice') + ' key copied');
+              const done = () => showToast('Agent key copied');
               if (navigator.clipboard && navigator.clipboard.writeText) {
                 navigator.clipboard.writeText(val).then(done).catch(() => {
                   const ta = document.createElement('textarea');
@@ -2438,37 +1987,12 @@ Web search is invisible to the user. Never mention that you are searching, looki
               if (sl.isSpeaking) stopSpeaking();
               const msg = sl.messages[mi];
               if (!msg || msg.role !== 'assistant') break;
-              // Instant replay from cached blob — no API call, no token cost.
-              if (msg.audioUrl) {
-                playCachedAudio(msg.audioUrl, si, mi);
-              } else {
-                speakText(extractSummary(msg.content), si, mi);
-              }
-              break;
-            }
-            case 'toggle-elevenlabs': {
-              if (STATE.activeTab === 'settings') readFields();
-              const sl = STATE.slots[idx];
-              sl.elevenlabsEnabled = !sl.elevenlabsEnabled;
-              saveSettings();
-              render();
+              speakText(extractSummary(msg.content), si, mi);
               break;
             }
             case 'preview-voice': {
               if (STATE.activeTab === 'settings') readFields();
-              const sl = STATE.slots[idx];
-              if (sl.elevenlabsEnabled && sl.elevenlabsApiKey) {
-                elevenLabsSpeak('Hello! This is how I sound. The first move is what sets everything in motion.', idx);
-              } else {
-                speakText('Hello! This is how I sound.', idx);
-              }
-              break;
-            }
-            case 'refresh-voices': {
-              if (STATE.activeTab === 'settings') readFields();
-              const sl = STATE.slots[STATE.editingSlot];
-              if (sl && sl.elevenlabsApiKey) fetchElevenLabsVoices(sl.elevenlabsApiKey, { force: true });
-              else showToast('Add your ElevenLabs API key first');
+              speakText('Hello! This is how I sound.', idx);
               break;
             }
             case 'save-settings': {
@@ -2477,9 +2001,6 @@ Web search is invisible to the user. Never mention that you are searching, looki
               localStorage.setItem('recast_gsheet_url', GSHEET_WEBHOOK);
               saveSettings();
               saveRemoteConfig();
-              // If the user just entered/updated their ElevenLabs key, refresh the voice list.
-              const newKey = STATE.slots[STATE.editingSlot]?.elevenlabsApiKey;
-              if (newKey && newKey !== EL_VOICES_CACHE.keyUsed) fetchElevenLabsVoices(newKey);
               render();
               break;
             }
@@ -2526,9 +2047,6 @@ Web search is invisible to the user. Never mention that you are searching, looki
               s.voiceName = 'Randy';
               s.voicePersonality = DEFAULT_VOICE_PERSONALITY;
               s.voiceEnabled = true;
-              s.elevenlabsEnabled = true;
-              s.elevenlabsApiKey = DEFAULT_ELEVENLABS_API_KEY;
-              s.elevenlabsVoiceId = DEFAULT_ELEVENLABS_VOICE_ID;
               if (!anyVoiceEnabled()) stopRecognition();
               saveSettings(); render(); break;
             }
@@ -2591,10 +2109,6 @@ Web search is invisible to the user. Never mention that you are searching, looki
         if (p) s.prompt = p.value.trim() || s.prompt;
         if (vn) s.voiceName = vn.value.trim() || s.label;
         if (vp) s.voicePersonality = vp.value.trim() || DEFAULT_VOICE_PERSONALITY;
-        const ek = document.getElementById('setting-el-apikey');
-        const ev = document.getElementById('setting-el-voice');
-        if (ek) s.elevenlabsApiKey = ek.value.trim();
-        if (ev) s.elevenlabsVoiceId = ev.value;
       }
 
       /* ========== BOOT ========== */
