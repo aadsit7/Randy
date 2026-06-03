@@ -482,7 +482,10 @@ Web search is invisible to the user. Never mention that you are searching, looki
         playingMsg: null,        // { slot, msg } of the specific assistant message currently being spoken
         interimText: '',         // live partial transcript from SpeechRecognition
         interimSlot: null,       // slot idx the interim transcript belongs to
-        lastTtsEndAt: 0          // timestamp of last TTS end, for post-playback echo grace window
+        lastTtsEndAt: 0,         // timestamp of last TTS end, for post-playback echo grace window
+        ttsPaused: false,        // recognition is currently paused because TTS is playing
+        resumeRecognitionId: null, // pending setTimeout id for resuming recognition after TTS
+        recentTtsText: ''        // normalized rolling buffer of recently-spoken TTS text for echo matching
       };
 
       const SLOT_COLORS = ['#10b981'];
@@ -597,7 +600,10 @@ Web search is invisible to the user. Never mention that you are searching, looki
         if (TTS_STATE.speakingSlot === idx) TTS_STATE.speakingSlot = null;
         slot.isSpeaking = false;
         VOICE.playingMsg = null;
-        if (wasActive) markTtsEnded();
+        if (wasActive) {
+          markTtsEnded();
+          scheduleRecognitionResume();
+        }
       }
 
       function enqueueTtsSentence(idx, text) {
@@ -629,6 +635,7 @@ Web search is invisible to the user. Never mention that you are searching, looki
             if (TTS_STATE.speakingSlot === idx) TTS_STATE.speakingSlot = null;
             VOICE.playingMsg = null;
             markTtsEnded();
+            scheduleRecognitionResume();
             render();
           }
         }
@@ -646,6 +653,8 @@ Web search is invisible to the user. Never mention that you are searching, looki
           if (v) u.voice = v;
           u.pitch = 0.85;
           u.rate = 0.95;
+          appendRecentTts(clean);
+          pauseRecognitionForTts();
           slot.isSpeaking = true;
           TTS_STATE.speakingSlot = idx;
           VOICE.playingMsg = { slot: idx, msg: q.msgIdx };
@@ -736,6 +745,7 @@ Web search is invisible to the user. Never mention that you are searching, looki
         // Stop anything currently playing so the new utterance starts immediately.
         STATE.slots.forEach((_, i) => teardownTtsQueue(i));
         try { window.speechSynthesis.cancel(); } catch {}
+        appendRecentTts(clean);
         const u = new SpeechSynthesisUtterance(clean);
         const v = pickDeepVoice();
         if (v) u.voice = v;
@@ -745,6 +755,7 @@ Web search is invisible to the user. Never mention that you are searching, looki
           STATE.slots[idx].isSpeaking = true;
           TTS_STATE.speakingSlot = idx;
           if (typeof msgIdx === 'number') VOICE.playingMsg = { slot: idx, msg: msgIdx };
+          pauseRecognitionForTts();
           render();
         };
         u.onend = () => {
@@ -758,15 +769,18 @@ Web search is invisible to the user. Never mention that you are searching, looki
           }
           VOICE.playingMsg = null;
           markTtsEnded();
+          scheduleRecognitionResume();
           render();
         };
         u.onerror = u.onend;
+        pauseRecognitionForTts();
         try { window.speechSynthesis.speak(u); }
         catch {
           STATE.slots[idx].isSpeaking = false;
           if (TTS_STATE.speakingSlot === idx) TTS_STATE.speakingSlot = null;
           VOICE.playingMsg = null;
           markTtsEnded();
+          scheduleRecognitionResume();
           render();
         }
       }
@@ -781,6 +795,7 @@ Web search is invisible to the user. Never mention that you are searching, looki
         TTS_STATE.speakingSlot = null;
         VOICE.playingMsg = null;
         markTtsEnded();
+        scheduleRecognitionResume();
         render();
       }
 
@@ -789,16 +804,80 @@ Web search is invisible to the user. Never mention that you are searching, looki
         return STATE.slots.some(s => s.voiceEnabled);
       }
 
-      // True while Randy is speaking OR within the 700ms tail window after
+      // True while Randy is speaking OR within the 1200ms tail window after
       // speech ends. The physical speaker keeps producing audio briefly after
       // the last onended fires, and we don't want the mic to transcribe
       // Randy's own voice as user input.
-      const TTS_ECHO_GRACE_MS = 700;
+      const TTS_ECHO_GRACE_MS = 1200;
       function ttsEchoActive() {
         if (STATE.slots.some(s => s.isSpeaking)) return true;
+        if (VOICE.ttsPaused) return true;
         return (Date.now() - VOICE.lastTtsEndAt) < TTS_ECHO_GRACE_MS;
       }
       function markTtsEnded() { VOICE.lastTtsEndAt = Date.now(); }
+
+      // Normalize text for echo comparison: lowercase, alphanumerics + spaces only.
+      // This lets us compare what Randy spoke against what the recognizer heard,
+      // ignoring punctuation, capitalization, and minor transcription quirks.
+      function normalizeForEcho(text) {
+        return String(text || '').toLowerCase()
+          .replace(/[^a-z0-9]+/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim();
+      }
+
+      // Record TTS text in a rolling buffer so handleVoiceTranscript can detect
+      // when the recognizer has picked up Randy's own voice from the speaker.
+      function appendRecentTts(text) {
+        const n = normalizeForEcho(text);
+        if (!n) return;
+        VOICE.recentTtsText = (VOICE.recentTtsText + ' ' + n).slice(-2000);
+      }
+
+      // True if `text` looks like an echo of something Randy just spoke. Uses
+      // substring match plus a high-overlap word-set fallback so transcription
+      // wobbles ("intune" vs "in tune") still get caught.
+      function isLikelyEcho(text) {
+        const n = normalizeForEcho(text);
+        if (!n || n.length < 4) return false;
+        if (!VOICE.recentTtsText) return false;
+        if (VOICE.recentTtsText.indexOf(n) !== -1) return true;
+        const words = n.split(' ').filter(w => w.length >= 3);
+        if (words.length < 2) return false;
+        const ttsWords = new Set(VOICE.recentTtsText.split(' '));
+        let matches = 0;
+        for (const w of words) if (ttsWords.has(w)) matches++;
+        return (matches / words.length) >= 0.7;
+      }
+
+      // Pause speech recognition while TTS is playing. Cuts off the mic
+      // entirely so Randy's own voice can't be transcribed as user input.
+      // Idempotent — safe to call from every TTS chunk.
+      function pauseRecognitionForTts() {
+        VOICE.ttsPaused = true;
+        if (VOICE.resumeRecognitionId) {
+          clearTimeout(VOICE.resumeRecognitionId);
+          VOICE.resumeRecognitionId = null;
+        }
+        clearInterim();
+        if (VOICE.recognition) {
+          try { VOICE.recognition.abort(); } catch {}
+        }
+      }
+
+      // Resume recognition after TTS finishes, with a grace window so the
+      // speaker has time to settle before the mic starts listening again.
+      function scheduleRecognitionResume() {
+        if (VOICE.resumeRecognitionId) clearTimeout(VOICE.resumeRecognitionId);
+        VOICE.resumeRecognitionId = setTimeout(() => {
+          VOICE.resumeRecognitionId = null;
+          VOICE.ttsPaused = false;
+          markTtsEnded();
+          if (VOICE.wantRunning && anyVoiceEnabled() && VOICE.recognition) {
+            try { VOICE.recognition.start(); } catch {}
+          }
+        }, TTS_ECHO_GRACE_MS);
+      }
 
       function escapeRegex(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 
@@ -870,20 +949,18 @@ Web search is invisible to the user. Never mention that you are searching, looki
         const text = String(raw).trim();
         if (!text) return;
 
-        // Echo guard: while TTS is speaking (or within the post-playback tail
-        // window) mic input is usually Randy's own voice. Drop short fragments,
-        // but treat a substantial utterance as the user trying to interrupt —
-        // stop TTS so the new turn can be answered.
-        if (ttsEchoActive()) {
-          const t = text.toLowerCase();
-          if (/^(stop|cancel|quiet|shut up|never mind)\b/.test(t)) {
-            stopSpeaking();
-            return;
-          }
-          if (text.length < 15) return;
-          stopSpeaking();
-          // Fall through to normal handling.
-        }
+        // Echo guard 1: if this transcript looks like something Randy spoke in
+        // the last few seconds, it's a re-transcription of TTS output bleeding
+        // back through the mic — drop it silently no matter when it arrived.
+        if (isLikelyEcho(text)) return;
+
+        // Echo guard 2: while TTS is speaking or in the post-playback grace
+        // window the mic shouldn't be picking up anything. Recognition is
+        // actively paused via pauseRecognitionForTts(), but a stray final
+        // result can still arrive right at the boundary. Drop anything that
+        // shows up here — voice interrupts via the mic are unreliable while
+        // the speaker is loud anyway, and the user can use the Stop button.
+        if (ttsEchoActive()) return;
 
         // Continuous conversation mode: after the first wake word we accept each
         // utterance as a command without requiring "Hey Randy" again. The user exits
@@ -940,13 +1017,6 @@ Web search is invisible to the user. Never mention that you are searching, looki
           STATE.slots[idx].isListening = false;
           STATE.slots[idx].inputText = cleaned;
           sendMessage(idx, true);
-          return;
-        }
-
-        // "Stop speaking" shortcut while TTS is active
-        const lower = text.toLowerCase();
-        if (/\b(stop|cancel|quiet|shut up|never mind)\b/.test(lower) && STATE.slots.some(s => s.isSpeaking)) {
-          stopSpeaking();
           return;
         }
 
@@ -1094,13 +1164,17 @@ Web search is invisible to the user. Never mention that you are searching, looki
           // For transient errors (no-speech, aborted, network), allow onend to restart.
         };
         r.onend = () => {
+          // Don't auto-restart while TTS is playing — pauseRecognitionForTts()
+          // intentionally aborted us. scheduleRecognitionResume() will restart
+          // the recognizer after the post-TTS grace window elapses.
+          if (VOICE.ttsPaused) return;
           // Auto-restart if any slot still wants voice and we haven't been told to stop.
           if (!VOICE.wantRunning || !anyVoiceEnabled()) return;
           // r.start() can throw InvalidStateError if the recognizer is still
           // shutting down from a previous session — retry with backoff so we
           // don't end up with a silently-dead recognizer.
           const tryStart = (attempt) => {
-            if (!VOICE.wantRunning || !anyVoiceEnabled()) return;
+            if (!VOICE.wantRunning || !anyVoiceEnabled() || VOICE.ttsPaused) return;
             try { r.start(); }
             catch (err) {
               if (attempt < 4) setTimeout(() => tryStart(attempt + 1), 250 * (attempt + 1));
@@ -1126,11 +1200,14 @@ Web search is invisible to the user. Never mention that you are searching, looki
           try { VOICE.recognition.stop(); } catch {}
         }
         if (VOICE.wakeTimeoutId) { clearTimeout(VOICE.wakeTimeoutId); VOICE.wakeTimeoutId = null; }
+        if (VOICE.resumeRecognitionId) { clearTimeout(VOICE.resumeRecognitionId); VOICE.resumeRecognitionId = null; }
+        VOICE.ttsPaused = false;
         VOICE.activeSlot = null;
         VOICE.awaitingCommand = false;
         VOICE.conversationMode = false;
         VOICE.interimText = '';
         VOICE.interimSlot = null;
+        VOICE.recentTtsText = '';
         STATE.slots.forEach(s => { s.isListening = false; });
       }
 
