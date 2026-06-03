@@ -635,8 +635,16 @@ Web search is invisible to the user. Never mention that you are searching, looki
             }
           });
         } catch {}
+        // Only honor a saved proxy URL if it actually looks like an Apps Script
+        // /exec deployment. Anything else (a sheet URL pasted by mistake, an
+        // older docs.google.com value, etc.) gets discarded so the hardcoded
+        // default above takes over on the next load.
         const savedGsheet = localStorage.getItem('recast_gsheet_url');
-        if (savedGsheet) GSHEET_WEBHOOK = savedGsheet;
+        if (savedGsheet && /^https:\/\/script\.google\.com\/macros\/s\/[^\/]+\/exec\b/.test(savedGsheet)) {
+          GSHEET_WEBHOOK = savedGsheet;
+        } else if (savedGsheet) {
+          localStorage.removeItem('recast_gsheet_url');
+        }
       }
 
       // Ping the proxy to verify it's reachable and that the Apps Script has an
