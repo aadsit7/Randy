@@ -391,6 +391,32 @@
         .saved-actions { opacity: 1; }
         .saved-actions button { min-width: 34px; min-height: 34px; padding: 7px; }
       }
+      /* Background-listen status strip above the message list */
+      .passive-ribbon { padding: 8px 12px; background: linear-gradient(180deg, rgba(0,112,243,0.06), rgba(0,112,243,0.02)); border-top: 1px solid #e2e8f0; border-bottom: 1px solid #e2e8f0; display: flex; flex-direction: column; gap: 6px; }
+      .passive-ribbon .pr-head { display: flex; align-items: center; gap: 8px; font-size: 11px; color: #475569; }
+      .passive-ribbon .pr-label { font-weight: 700; color: var(--navy); letter-spacing: 0.01em; }
+      .passive-ribbon .pr-meta { color: #94a3b8; }
+      .passive-ribbon .pr-spacer { flex: 1; }
+      .passive-ribbon .pr-mute { color: #64748b; display: grid; place-items: center; }
+      .passive-ribbon .pr-dot { width: 8px; height: 8px; border-radius: 50%; background: #10b981; box-shadow: 0 0 0 0 rgba(16,185,129,0.55); animation: passivePulse 2s ease-out infinite; flex-shrink: 0; }
+      .passive-ribbon .pr-dot.thinking { background: var(--primary); animation: passivePulseFast 0.9s ease-out infinite; }
+      @keyframes passivePulse  { 0%{box-shadow:0 0 0 0 rgba(16,185,129,0.55);}70%{box-shadow:0 0 0 8px rgba(16,185,129,0);}100%{box-shadow:0 0 0 0 rgba(16,185,129,0);} }
+      @keyframes passivePulseFast { 0%{box-shadow:0 0 0 0 rgba(0,112,243,0.55);}70%{box-shadow:0 0 0 6px rgba(0,112,243,0);}100%{box-shadow:0 0 0 0 rgba(0,112,243,0);} }
+      @media (prefers-reduced-motion: reduce) { .passive-ribbon .pr-dot { animation: none; } }
+      .passive-ribbon .pr-last, .passive-ribbon .pr-empty { display: flex; align-items: center; gap: 8px; font-size: 11.5px; padding: 4px 6px; border-radius: 6px; line-height: 1.3; }
+      .passive-ribbon .pr-empty { color: #94a3b8; font-style: italic; padding-left: 16px; }
+      .passive-ribbon .pr-last .pr-text { flex: 1; min-width: 0; color: var(--navy); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .passive-ribbon .pr-last .pr-conf { font-size: 10px; font-weight: 700; color: #64748b; letter-spacing: 0.04em; flex-shrink: 0; }
+      .passive-ribbon .pr-accepted { background: rgba(16,185,129,0.08); color: #047857; }
+      .passive-ribbon .pr-accepted .pr-text { color: #064e3b; font-weight: 500; }
+      .passive-ribbon .pr-accepted .pr-conf { color: #047857; }
+      .passive-ribbon .pr-skipped { color: #94a3b8; }
+      .passive-ribbon .pr-skipped .pr-text { color: #64748b; }
+
+      /* Right-aligned on/off pill inside the overflow menu */
+      .menu-toggle-state { margin-left: auto; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 9999px; background: #f1f5f9; color: #64748b; letter-spacing: 0.04em; }
+      .menu-toggle-state.on { background: #d1fae5; color: #047857; }
+
       /* Per-answer copy button inside the saved-conversation popout */
       .popout-answer { position: relative; max-width: 84%; }
       .popout-answer .chat-bubble { max-width: 100%; padding-right: 38px; }
@@ -679,7 +705,12 @@ Web search is invisible to the user. Never mention that you are searching, looki
           isListening: false,
           isSpeaking: false,
           abortController: null, // abort the in-flight Anthropic fetch
-          ttsQueue: null         // FIFO of sentence TTS utterances so we speak in order
+          ttsQueue: null,        // FIFO of sentence TTS utterances so we speak in order
+          // Background-listen mode: classifier auto-submits technical questions
+          // overheard on a call without requiring "Hey Randy". speakResponses
+          // is a separate mute control for auto-answered passive replies.
+          passiveListen: false,
+          speakResponses: false
         };
       }
 
@@ -719,8 +750,20 @@ Web search is invisible to the user. Never mention that you are searching, looki
         lastTtsEndAt: 0,         // timestamp of last TTS end, for post-playback echo grace window
         ttsPaused: false,        // recognition is currently paused because TTS is playing
         resumeRecognitionId: null, // pending setTimeout id for resuming recognition after TTS
-        recentTtsText: ''        // normalized rolling buffer of recently-spoken TTS text for echo matching
+        recentTtsText: '',       // normalized rolling buffer of recently-spoken TTS text for echo matching
+        // Background-listen mode (passive question detection)
+        passiveContext: [],      // last few utterances, oldest first, for classifier disambiguation
+        passivePending: false,   // a classifier call is in flight — skip new utterances to avoid pile-up
+        passiveLastSubmitted: '', // most recently auto-submitted text, for cheap dedupe
+        passiveLastSubmittedAt: 0, // ms timestamp of last passive submit, for time-based dedupe
+        passiveDecisions: []     // ring buffer of recent { text, accepted, confidence, topic, ts } for the UI ribbon
       };
+
+      const PASSIVE_DEDUPE_MS = 6000;     // ignore identical/near-identical utterances within this window
+      const PASSIVE_MIN_CHARS = 8;        // ignore one-word grunts
+      const PASSIVE_CONF_THRESHOLD = 0.65; // classifier confidence needed to auto-submit
+      const PASSIVE_CONTEXT_LEN = 3;      // utterances of context to pass alongside the candidate
+      const PASSIVE_DECISIONS_KEEP = 6;   // ring buffer length for the UI ribbon
 
       const SLOT_COLORS = ['#0000CC'];
 
@@ -734,7 +777,9 @@ Web search is invisible to the user. Never mention that you are searching, looki
           prompt: s.prompt,
           voiceEnabled: s.voiceEnabled,
           voiceName: s.voiceName,
-          voicePersonality: s.voicePersonality
+          voicePersonality: s.voicePersonality,
+          passiveListen: !!s.passiveListen,
+          speakResponses: !!s.speakResponses
         }));
         try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(data)); } catch {}
       }
@@ -762,6 +807,8 @@ Web search is invisible to the user. Never mention that you are searching, looki
               STATE.slots[i].voiceEnabled = !!d.voiceEnabled;
               STATE.slots[i].voiceName = d.voiceName || STATE.slots[i].label;
               STATE.slots[i].voicePersonality = d.voicePersonality || DEFAULT_VOICE_PERSONALITY;
+              STATE.slots[i].passiveListen = !!d.passiveListen;
+              STATE.slots[i].speakResponses = !!d.speakResponses;
             }
           });
         } catch {}
@@ -1306,6 +1353,153 @@ Web search is invisible to the user. Never mention that you are searching, looki
           render();
           return;
         }
+
+        // Passive listen fall-through: no wake word matched. If any voice-enabled
+        // slot has background-listen on, hand this utterance to the classifier.
+        // Wake-word and conversation-mode paths above already own the turn when
+        // they fire, so we only reach here on otherwise-unclaimed speech.
+        for (let i = 0; i < STATE.slots.length; i++) {
+          const slot = STATE.slots[i];
+          if (slot.voiceEnabled && slot.passiveListen) {
+            maybeHandlePassiveUtterance(i, text);
+            return;
+          }
+        }
+      }
+
+      // Hand an overheard final utterance to the technical-question classifier and,
+      // if it scores high enough, push it through the normal chat pipeline so it
+      // shows up as a regular user turn. The slot's speakResponses flag controls
+      // whether the answer is also read aloud — by default it isn't.
+      function maybeHandlePassiveUtterance(idx, raw) {
+        const text = String(raw || '').trim();
+        if (text.length < PASSIVE_MIN_CHARS) {
+          recordPassiveDecision(text, false, 0, 'too short');
+          render();
+          return;
+        }
+        // Time + content dedupe: don't re-submit the same overheard sentence twice
+        // in quick succession (ASR sometimes finalizes the same span twice).
+        const now = Date.now();
+        if (
+          VOICE.passiveLastSubmitted &&
+          now - VOICE.passiveLastSubmittedAt < PASSIVE_DEDUPE_MS &&
+          fuzzyEqual(text, VOICE.passiveLastSubmitted)
+        ) {
+          return;
+        }
+        // While a classifier call is in flight or the slot is busy answering a
+        // prior question, queue context but skip a new classification — the next
+        // utterance will catch up.
+        const slot = STATE.slots[idx];
+        pushPassiveContext(text);
+        if (VOICE.passivePending || (slot && slot.loading)) return;
+
+        VOICE.passivePending = true;
+        classifyUtterance(text, VOICE.passiveContext.slice(0, -1))
+          .then(decision => {
+            const accepted =
+              decision.is_question === true &&
+              typeof decision.confidence === 'number' &&
+              decision.confidence >= PASSIVE_CONF_THRESHOLD;
+            recordPassiveDecision(text, accepted, decision.confidence || 0, decision.topic || '');
+            if (!accepted) { render(); return; }
+            // Auto-submit through the normal chat pipeline as if the user typed it.
+            VOICE.passiveLastSubmitted = text;
+            VOICE.passiveLastSubmittedAt = Date.now();
+            const s = STATE.slots[idx];
+            if (!s || s.loading) { render(); return; }
+            s.inputText = text;
+            sendMessage(idx, false, true);
+          })
+          .catch(err => {
+            console.warn('classifyUtterance failed:', err);
+            recordPassiveDecision(text, false, 0, 'classify failed');
+            render();
+          })
+          .finally(() => { VOICE.passivePending = false; });
+      }
+
+      function pushPassiveContext(text) {
+        VOICE.passiveContext.push(text);
+        while (VOICE.passiveContext.length > PASSIVE_CONTEXT_LEN) VOICE.passiveContext.shift();
+      }
+
+      function recordPassiveDecision(text, accepted, confidence, topic) {
+        VOICE.passiveDecisions.push({ text, accepted: !!accepted, confidence: Number(confidence) || 0, topic: topic || '', ts: Date.now() });
+        while (VOICE.passiveDecisions.length > PASSIVE_DECISIONS_KEEP) VOICE.passiveDecisions.shift();
+      }
+
+      // Cheap near-equality: collapse whitespace and lowercase, then compare.
+      function fuzzyEqual(a, b) {
+        const n = s => String(s).toLowerCase().replace(/[^\w]+/g, ' ').trim();
+        return n(a) === n(b);
+      }
+
+      // The classifier system prompt. Tight on scope, strict on output shape.
+      const PASSIVE_CLASSIFIER_SYSTEM = [
+        'You are a strict gate. Decide whether the LATEST utterance overheard during a sales call is a TECHNICAL QUESTION that a Recast Software solution engineer should answer.',
+        '',
+        'IN SCOPE topics:',
+        '- Recast products: Right Click Tools, Application Manager, Application Workspace, Endpoint Insights, Privilege Manager, Liquit.',
+        '- Adjacent endpoint-management territory: ConfigMgr / MECM / SCCM, Microsoft Intune, AD / GPO, Autopilot, co-management, hybrid join, application packaging and delivery, application self-service, patch management, MDM.',
+        '',
+        'OUT OF SCOPE: small talk, pleasantries, scheduling, status updates, contract / pricing / legal questions, anything not endpoint-management adjacent.',
+        '',
+        'Return STRICT JSON only. No prose, no code fences. Schema:',
+        '{"is_question": boolean, "confidence": number between 0 and 1, "topic": short phrase, "reason": at most 12 words}',
+        '',
+        'Set is_question=true only when ALL hold:',
+        '1. The latest utterance functions as a question (interrogative form or a clear ask).',
+        '2. The question is in scope per the lists above.',
+        '3. An SE could plausibly answer it now.',
+        '',
+        'Confidence below 0.6 means do not act. Be conservative; false positives interrupt a live call.'
+      ].join('\n');
+
+      async function classifyUtterance(text, contextArr) {
+        if (!GSHEET_WEBHOOK) return { is_question: false, confidence: 0 };
+        const ctxLines = (contextArr || [])
+          .map((u, i) => (i + 1) + '. ' + u)
+          .join('\n');
+        const userContent =
+          (ctxLines ? 'Recent context (older first):\n' + ctxLines + '\n\n' : '') +
+          'Latest utterance:\n' + text;
+        const body = {
+          action: 'chat',
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 120,
+          system: PASSIVE_CLASSIFIER_SYSTEM,
+          messages: [{ role: 'user', content: userContent }],
+          save: false  // don't pollute the history sheet with classifier calls
+        };
+        const resp = await fetch(GSHEET_WEBHOOK, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify(body)
+        });
+        if (!resp.ok) throw new Error('Classifier HTTP ' + resp.status);
+        const data = await resp.json();
+        if (!data || data.ok === false) throw new Error((data && data.error) || 'Classifier error');
+        return parseClassifierReply(String(data.reply || ''));
+      }
+
+      // The classifier should reply with JSON, but models occasionally wrap it.
+      // Pull the first {...} block out and parse defensively.
+      function parseClassifierReply(reply) {
+        const m = reply.match(/\{[\s\S]*\}/);
+        if (!m) return { is_question: false, confidence: 0 };
+        try {
+          const j = JSON.parse(m[0]);
+          return {
+            is_question: !!j.is_question,
+            confidence: typeof j.confidence === 'number' ? j.confidence : 0,
+            topic: j.topic || '',
+            reason: j.reason || ''
+          };
+        } catch {
+          return { is_question: false, confidence: 0 };
+        }
       }
 
       // Pick the slot the interim transcript belongs to: the active command slot if one
@@ -1494,7 +1688,7 @@ Web search is invisible to the user. Never mention that you are searching, looki
       // ~2-5 seconds off the round trip.
       const WEB_SEARCH_HINT_RE = /\b(search|look ?up|latest|news|today|right now|current|price of|weather|stock|score|who won|breaking)\b/i;
 
-      async function sendMessage(idx, viaVoice = false) {
+      async function sendMessage(idx, viaVoice = false, viaPassive = false) {
         const slot = STATE.slots[idx];
         // Claim the slot synchronously BEFORE any await/render, so two
         // near-simultaneous callers (e.g. voice finalization + Enter key)
@@ -1577,6 +1771,13 @@ Web search is invisible to the user. Never mention that you are searching, looki
             }
             slot.ttsQueue.done = true;
             processTtsQueue(idx);
+          }
+
+          // Passive-listen replies bypass the sentence-streaming TTS queue (the
+          // answer arrives in one shot from the proxy). When the user has
+          // unmuted Randy, speak a trimmed version after the reply renders.
+          if (viaPassive && slot.speakResponses && reply) {
+            speakText(extractSummary(reply), idx, assistantMsgIdx);
           }
 
           // The proxy already appended this Q&A to the Randy Tasks sheet.
@@ -1939,6 +2140,43 @@ Web search is invisible to the user. Never mention that you are searching, looki
           </div>`;
       }
 
+      // Thin status strip shown only while passiveListen is on: a calm pulse,
+      // a count of accepted/heard utterances, and the most recent classified
+      // utterance. Builds trust that Randy is actually listening + filtering.
+      function renderPassiveRibbon(idx) {
+        const decisions = VOICE.passiveDecisions.slice(-3);
+        const accepted = VOICE.passiveDecisions.filter(d => d.accepted).length;
+        const heard = VOICE.passiveDecisions.length;
+        const last = decisions[decisions.length - 1];
+        const slot = STATE.slots[idx];
+        return `
+          <div class="passive-ribbon">
+            <div class="pr-head">
+              <span class="pr-dot ${VOICE.passivePending ? 'thinking' : 'live'}"></span>
+              <span class="pr-label">Background listen</span>
+              <span class="pr-meta">${accepted} answered · ${heard} heard</span>
+              <span class="pr-spacer"></span>
+              <span class="pr-mute" title="${slot && slot.speakResponses ? 'Randy will speak passive answers aloud' : 'Randy is muted — answers appear in chat only'}">
+                <i data-lucide="${slot && slot.speakResponses ? 'volume-2' : 'volume-x'}" class="w-3 h-3"></i>
+              </span>
+            </div>
+            ${last ? `
+              <div class="pr-last ${last.accepted ? 'pr-accepted' : 'pr-skipped'}" title="${last.accepted ? 'Classified as a technical question and sent to Randy' : 'Skipped — not a technical question Randy should answer'}">
+                <i data-lucide="${last.accepted ? 'check' : 'minus'}" class="w-3 h-3"></i>
+                <span class="pr-text">${escHtml(truncate(last.text, 90))}</span>
+                <span class="pr-conf">${Math.round((last.confidence || 0) * 100)}%</span>
+              </div>
+            ` : `
+              <div class="pr-empty">Waiting for a technical question…</div>
+            `}
+          </div>`;
+      }
+
+      function truncate(s, n) {
+        s = String(s || '');
+        return s.length > n ? s.substring(0, n - 1) + '…' : s;
+      }
+
       function renderCard(slot, idx) {
         const color = SLOT_COLORS[idx];
         const msgs = slot.messages;
@@ -1972,13 +2210,30 @@ Web search is invisible to the user. Never mention that you are searching, looki
               </div>
               <div style="flex:1;min-width:0">
                 <div class="conv-title">${escHtml(slot.label)}</div>
-                <div class="conv-sub">${isSpeaking ? 'Speaking\u2026' : isListening ? 'Listening\u2026' : slot.loading ? 'Thinking\u2026' : 'Online \u00b7 Ready to help'}</div>
+                <div class="conv-sub">${
+                  isSpeaking ? 'Speaking\u2026'
+                  : isListening ? 'Listening\u2026'
+                  : slot.loading ? 'Thinking\u2026'
+                  : slot.passiveListen ? `<i data-lucide="ear" class="w-3 h-3 inline" style="vertical-align:-2px;margin-right:4px"></i>Listening in background${slot.speakResponses ? ' \u00b7 unmuted' : ' \u00b7 muted'}`
+                  : 'Online \u00b7 Ready to help'
+                }</div>
               </div>
               <button class="overflow-btn" title="More actions" aria-label="More actions" aria-haspopup="true" aria-expanded="${STATE.cardMenuOpen ? 'true' : 'false'}" data-action="toggle-card-menu" data-idx="${idx}">
                 <i data-lucide="more-vertical" class="w-5 h-5"></i>
               </button>
               ${STATE.cardMenuOpen ? `
                 <div class="overflow-menu" data-menu="card">
+                  <button data-action="toggle-passive-listen" data-idx="${idx}">
+                    <i data-lucide="${slot.passiveListen ? 'ear' : 'ear-off'}" class="w-4 h-4"></i>
+                    Background listen
+                    <span class="menu-toggle-state ${slot.passiveListen ? 'on' : ''}">${slot.passiveListen ? 'On' : 'Off'}</span>
+                  </button>
+                  <button data-action="toggle-speak-responses" data-idx="${idx}" ${!slot.passiveListen ? 'disabled' : ''} title="${slot.passiveListen ? 'Have Randy read passive replies aloud' : 'Turn on Background listen first'}">
+                    <i data-lucide="${slot.speakResponses ? 'volume-2' : 'volume-x'}" class="w-4 h-4"></i>
+                    Randy speaks
+                    <span class="menu-toggle-state ${slot.speakResponses ? 'on' : ''}">${slot.speakResponses ? 'On' : 'Muted'}</span>
+                  </button>
+                  <hr>
                   <button data-action="save-to-sheet" data-idx="${idx}" ${slot.messages.length === 0 ? 'disabled' : ''}>
                     <i data-lucide="download" class="w-4 h-4"></i> Save conversation
                   </button>
@@ -1992,6 +2247,7 @@ Web search is invisible to the user. Never mention that you are searching, looki
                 </div>
               ` : ''}
             </div>
+            ${slot.passiveListen ? renderPassiveRibbon(idx) : ''}
             <div id="home-scroll-${idx}" class="flex-1 overflow-y-auto px-4 py-4 flex flex-col gap-3" style="background:var(--row);min-height:0">
               ${msgs.length === 0 ? `
                 <div class="flex-1 flex items-center justify-center">
@@ -2318,6 +2574,38 @@ Web search is invisible to the user. Never mention that you are searching, looki
             case 'toggle-voice': {
               if (STATE.activeTab === 'settings') readFields();
               toggleSlotVoice(idx);
+              break;
+            }
+            case 'toggle-passive-listen': {
+              const s = STATE.slots[idx];
+              if (!s) break;
+              if (!VOICE.srSupported) { showToast('Voice not supported in this browser'); break; }
+              s.passiveListen = !s.passiveListen;
+              if (s.passiveListen) {
+                // Passive listen requires the recognizer to be running. Mirror
+                // the user enabling the mic so SR starts if it wasn't already.
+                if (!s.voiceEnabled) { s.voiceEnabled = true; }
+                startRecognition();
+                showToast('Background listen on');
+              } else {
+                // Turning it off doesn't disable the mic — the wake-word path
+                // can still be in use. Just stop classifying.
+                VOICE.passivePending = false;
+                if (!s.speakResponses) { /* leave speak-toggle alone */ }
+                showToast('Background listen off');
+              }
+              saveSettings();
+              render();
+              break;
+            }
+            case 'toggle-speak-responses': {
+              const s = STATE.slots[idx];
+              if (!s || !s.passiveListen) break;
+              s.speakResponses = !s.speakResponses;
+              saveSettings();
+              showToast(s.speakResponses ? 'Randy will speak passive answers' : 'Randy is muted');
+              if (!s.speakResponses && s.isSpeaking) stopSpeaking();
+              render();
               break;
             }
             case 'stop-speaking': {
