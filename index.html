@@ -391,6 +391,17 @@
         .saved-actions { opacity: 1; }
         .saved-actions button { min-width: 34px; min-height: 34px; padding: 7px; }
       }
+      /* Per-answer copy button inside the saved-conversation popout */
+      .popout-answer { position: relative; max-width: 84%; }
+      .popout-answer .chat-bubble { max-width: 100%; padding-right: 38px; }
+      .popout-copy { position: absolute; top: 6px; right: 6px; background: rgba(255,255,255,0.85); border: 1px solid #e2e8f0; color: #64748b; padding: 4px; min-width: 26px; min-height: 26px; border-radius: 6px; cursor: pointer; display: grid; place-items: center; transition: opacity 0.12s, background 0.12s, color 0.12s, border-color 0.12s; opacity: 0.55; }
+      .popout-answer:hover .popout-copy { opacity: 1; }
+      .popout-copy:hover { background: #fff; color: var(--primary); border-color: var(--primary); }
+      .popout-copy.copied { background: #ecfdf5; border-color: #6ee7b7; color: #047857; opacity: 1; }
+      @media (pointer: coarse) {
+        .popout-copy { opacity: 1; min-width: 32px; min-height: 32px; padding: 6px; }
+        .popout-answer .chat-bubble { padding-right: 46px; }
+      }
 
       /* Use the center-column width better for message bubbles */
       .chat-panel .chat-bubble { max-width: 100%; }
@@ -1848,7 +1859,7 @@ Web search is invisible to the user. Never mention that you are searching, looki
 
         return `
           <div class="fixed inset-0 z-50 flex items-center justify-center" style="background:rgba(15,23,42,0.55);padding:20px" data-action="close-history-bg">
-            <div class="card history-popout" style="max-width:680px;width:100%;max-height:85vh;display:flex;flex-direction:column;border-radius:14px;overflow:hidden;box-shadow:0 24px 60px rgba(15,23,42,0.28)" onclick="event.stopPropagation()">
+            <div class="card history-popout" style="max-width:680px;width:100%;max-height:85vh;display:flex;flex-direction:column;border-radius:14px;overflow:hidden;box-shadow:0 24px 60px rgba(15,23,42,0.28)">
               <div style="padding:16px 18px;display:flex;align-items:flex-start;gap:12px;background:var(--navy);color:#fff">
                 <div style="flex:1;min-width:0">
                   <div style="font-size:14px;font-weight:600;line-height:1.35;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">${escHtml(title)}</div>
@@ -1863,13 +1874,18 @@ Web search is invisible to the user. Never mention that you are searching, looki
                 </button>
               </div>
               <div style="flex:1;overflow-y:auto;padding:18px;display:flex;flex-direction:column;gap:14px;background:#fafbfc">
-                ${entry.pairs.map(p => `
+                ${entry.pairs.map((p, i) => `
                   <div>
                     <div style="display:flex;justify-content:flex-end;margin-bottom:6px">
                       <div class="chat-bubble chat-user" style="font-size:13px">${escHtml(p.question)}</div>
                     </div>
                     <div style="display:flex;justify-content:flex-start">
-                      <div class="chat-bubble chat-bot" style="font-size:13px;white-space:pre-wrap">${escHtml(p.answer)}</div>
+                      <div class="popout-answer">
+                        <div class="chat-bubble chat-bot" style="font-size:13px;white-space:pre-wrap">${escHtml(p.answer)}</div>
+                        <button class="popout-copy" data-action="copy-answer" data-id="${escAttr(entry.id)}" data-pair="${i}" title="Copy answer" aria-label="Copy answer">
+                          <i data-lucide="copy" class="w-3.5 h-3.5"></i>
+                        </button>
+                      </div>
                     </div>
                   </div>
                 `).join('')}
@@ -1878,9 +1894,7 @@ Web search is invisible to the user. Never mention that you are searching, looki
                 <button class="btn-primary" style="padding:8px 14px;font-size:12.5px;min-height:auto;display:inline-flex;align-items:center;gap:6px" data-action="load-history" data-id="${escAttr(entry.id)}">
                   <i data-lucide="message-circle-plus" class="w-3.5 h-3.5"></i>Continue in chat
                 </button>
-                <button class="btn-outline" style="padding:8px 12px;font-size:12.5px;min-height:auto;display:inline-flex;align-items:center;gap:6px" data-action="copy-history" data-id="${escAttr(entry.id)}">
-                  <i data-lucide="copy" class="w-3.5 h-3.5"></i>Copy transcript
-                </button>
+                <span style="font-size:11px;color:#94a3b8">Tip: hover an answer to copy it</span>
                 <div style="flex:1"></div>
                 ${confirmingDelete ? `
                   <span style="font-size:12px;color:#b45309;font-weight:600;margin-right:4px">Delete this conversation?</span>
@@ -2224,7 +2238,7 @@ Web search is invisible to the user. Never mention that you are searching, looki
           if (STATE.historyConfirmDeleteId) {
             const insidePanel = !!e.target.closest('.history-panel-open');
             const insidePopout = !!HISTORY_VIEW.open && !!e.target.closest('.history-popout');
-            const protect = act && /^(confirm-delete-history|cancel-delete-history|confirm-delete-history-yes|confirm-delete-history-popout|copy-history|load-history|noop)$/.test(act.dataset.action);
+            const protect = act && /^(confirm-delete-history|cancel-delete-history|confirm-delete-history-yes|confirm-delete-history-popout|copy-answer|load-history|noop)$/.test(act.dataset.action);
             if ((!insidePanel && !insidePopout) || (act && !protect)) {
               STATE.historyConfirmDeleteId = null;
               if (!act) { render(); return; }
@@ -2370,11 +2384,17 @@ Web search is invisible to the user. Never mention that you are searching, looki
               showToast('Conversation deleted');
               break;
             }
-            case 'copy-history': {
+            case 'copy-answer': {
               const h = getHistory().find(x => x.id === act.dataset.id);
-              if (!h) break;
-              const text = h.pairs.map(p => 'Q: ' + p.question + '\n\nA: ' + p.answer).join('\n\n---\n\n');
-              const done = () => showToast('Transcript copied');
+              const pi = parseInt(act.dataset.pair, 10);
+              if (!h || !h.pairs[pi]) break;
+              const text = h.pairs[pi].answer || '';
+              const btn = act;
+              const done = () => {
+                showToast('Answer copied');
+                btn.classList.add('copied');
+                setTimeout(() => btn.classList.remove('copied'), 1200);
+              };
               const fail = () => showToast('Copy failed');
               if (navigator.clipboard && navigator.clipboard.writeText) {
                 navigator.clipboard.writeText(text).then(done).catch(fail);
