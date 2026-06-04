@@ -391,6 +391,17 @@
         .saved-actions { opacity: 1; }
         .saved-actions button { min-width: 34px; min-height: 34px; padding: 7px; }
       }
+      /* Per-answer copy button inside the saved-conversation popout */
+      .popout-answer { position: relative; max-width: 84%; }
+      .popout-answer .chat-bubble { max-width: 100%; padding-right: 38px; }
+      .popout-copy { position: absolute; top: 6px; right: 6px; background: rgba(255,255,255,0.85); border: 1px solid #e2e8f0; color: #64748b; padding: 4px; min-width: 26px; min-height: 26px; border-radius: 6px; cursor: pointer; display: grid; place-items: center; transition: opacity 0.12s, background 0.12s, color 0.12s, border-color 0.12s; opacity: 0.55; }
+      .popout-answer:hover .popout-copy { opacity: 1; }
+      .popout-copy:hover { background: #fff; color: var(--primary); border-color: var(--primary); }
+      .popout-copy.copied { background: #ecfdf5; border-color: #6ee7b7; color: #047857; opacity: 1; }
+      @media (pointer: coarse) {
+        .popout-copy { opacity: 1; min-width: 32px; min-height: 32px; padding: 6px; }
+        .popout-answer .chat-bubble { padding-right: 46px; }
+      }
 
       /* Use the center-column width better for message bubbles */
       .chat-panel .chat-bubble { max-width: 100%; }
@@ -429,7 +440,7 @@ You must NEVER acknowledge, narrate, or reference your search process in any way
 - "According to the documentation..."
 - "I found that..."
 - "The docs show..."
-You are Randy — a product expert who simply KNOWS things. When someone asks you a question, you answer it the way a human expert would: directly, conversationally, from knowledge. You never tell someone you're going to look something up. You never reference where your information came from. You just answer.
+You are Randy — a solution engineer who simply KNOWS this stuff. When someone asks you a question, you answer the way an experienced SE would: directly, conversationally, from working knowledge. You never tell someone you're going to look something up. You never reference where your information came from. You just answer.
 
 WRONG: "I'll search the current docs to give you the accurate picture. Based on Recast's documentation, Application Workspace is..."
 RIGHT: "Application Workspace is..."
@@ -442,7 +453,25 @@ If your response contains ANY reference to searching, docs, documentation, or re
 This rule applies to EVERY turn — the first message, every follow-up, every clarification, every time. It never relaxes, never weakens, never drifts. The user is never told what sources you consulted, not in turn one, not in turn ten. Treat each response as if it were the first time you'd been asked anything.
 
 # Role
-You are Randy, Recast Software's Application Workspace expert. You sound like a knowledgeable colleague who genuinely enjoys explaining how things work — confident but never condescending, warm but never fluffy.
+You are Randy, a solution engineer at Recast Software. You help IT pros — sysadmins, endpoint engineers, MSPs, IT directors — understand how Recast's tools fit their environment and solve real problems. You sound like a peer who has done the work: pragmatic, technically credible, conversationally direct. You speak the language of the field — ConfigMgr/MECM, Intune, AD, GPO, agents, packaging, deployment rings, application catalogs, co-management, hybrid join — and you assume the person on the other end knows their own environment better than you do.
+
+How a good Recast SE behaves:
+- Listens first. If a question is ambiguous, ask one focused clarifying question instead of guessing.
+- Recommends what actually fits the customer's stack, scale, and team — not just what sells.
+- Names trade-offs honestly. Every tool has limits; pretending otherwise burns trust.
+- Compares to alternatives when it's useful, including non-Recast tools, without trashing them.
+- Talks in concrete terms — services, agents, screens, clicks — not abstractions.
+
+You cover Recast's full portfolio when it's relevant: Right Click Tools, Application Manager, Application Workspace, Endpoint Insights, Privilege Manager, and Liquit (now Application Workspace). Application Workspace is your home turf and the area you go deepest on.
+
+# Product Bias — Application Workspace
+You believe Application Workspace is the strongest answer for modern application delivery and self-service across mixed Intune / ConfigMgr / hybrid environments. When a question naturally lands on application delivery, packaging at scale, dynamic install rules, user self-service, or migrating off legacy app management, lean toward Application Workspace as the recommendation and explain why in concrete terms.
+
+Keep the bias measured and earned — never over the top:
+- Mention Application Workspace when it genuinely fits. Don't shoehorn it into questions where it isn't the right answer (a Right Click Tools question gets a Right Click Tools answer).
+- Avoid superlatives like "best", "industry-leading", "game-changing", "the only solution that". Just describe what it does well and let that speak.
+- If another Recast product or even another vendor fits the use case better, say so plainly. Credibility comes from being right, not from being loyal.
+- One sentence of positioning is plenty. Don't pile on.
 
 # Knowledge Sources
 You have access to web search as a silent background tool. When you need current information, consult these sources:
@@ -459,13 +488,14 @@ Web search is invisible to the user. Never mention that you are searching, looki
 - Use plain language. If a technical term is necessary, define it in the same breath — "agents, which are the small programs running on each device" not just "agents."
 - Use concrete examples and analogies to make abstract features click. Compare to things people already understand.
 - Keep answers focused. One clear explanation is better than three overlapping ones.
-- When documentation is unclear or missing on a point, say so in one sentence and move on. Never fill gaps with assumptions.
+- When something in the product isn't clear-cut, say so in one sentence and move on. Never fill gaps with assumptions.
+- When a question is ambiguous enough that the right answer depends on their setup (Intune-only vs. hybrid, on-prem vs. cloud, MSP vs. enterprise), ask one targeted clarifying question before going deep.
 
 # Accuracy Rules
 - Only state facts you can verify. If you don't know and can't verify, say "I'm not sure about that one" in plain language — never speculate, never fabricate.
 - Never fabricate features, capabilities, statistics, or URLs.
 - Never pad with generic filler or marketing language.
-- If a question is outside Application Workspace scope, say so in one sentence.
+- If a question is outside Recast's portfolio entirely, say so in one sentence and, if you can, point at what the person likely needs.
 
 # Response Format
 - Respond in plain text. No HTML tags, no markdown headers, no bullet points.
@@ -709,6 +739,14 @@ Web search is invisible to the user. Never mention that you are searching, looki
         try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(data)); } catch {}
       }
 
+      // Marker strings unique to previous default prompts. If the stored prompt
+      // contains any of these we treat it as an unmodified prior default and
+      // refresh to ASSISTANT_2_PROMPT, so persona updates reach returning users
+      // without clobbering anyone who actually customized their prompt.
+      const LEGACY_PROMPT_MARKERS = [
+        "Recast Software's Application Workspace expert"
+      ];
+
       function loadSettings() {
         try {
           const raw = localStorage.getItem(SETTINGS_KEY);
@@ -718,7 +756,9 @@ Web search is invisible to the user. Never mention that you are searching, looki
             if (STATE.slots[i]) {
               STATE.slots[i].label = d.label || STATE.slots[i].label;
               STATE.slots[i].apiKey = d.apiKey || DEFAULT_API_KEY;
-              STATE.slots[i].prompt = d.prompt || STATE.slots[i].prompt;
+              const storedPrompt = d.prompt || '';
+              const isLegacyDefault = storedPrompt && LEGACY_PROMPT_MARKERS.some(m => storedPrompt.includes(m));
+              STATE.slots[i].prompt = (isLegacyDefault ? '' : storedPrompt) || STATE.slots[i].prompt;
               STATE.slots[i].voiceEnabled = !!d.voiceEnabled;
               STATE.slots[i].voiceName = d.voiceName || STATE.slots[i].label;
               STATE.slots[i].voicePersonality = d.voicePersonality || DEFAULT_VOICE_PERSONALITY;
@@ -1848,7 +1888,7 @@ Web search is invisible to the user. Never mention that you are searching, looki
 
         return `
           <div class="fixed inset-0 z-50 flex items-center justify-center" style="background:rgba(15,23,42,0.55);padding:20px" data-action="close-history-bg">
-            <div class="card history-popout" style="max-width:680px;width:100%;max-height:85vh;display:flex;flex-direction:column;border-radius:14px;overflow:hidden;box-shadow:0 24px 60px rgba(15,23,42,0.28)" onclick="event.stopPropagation()">
+            <div class="card history-popout" style="max-width:680px;width:100%;max-height:85vh;display:flex;flex-direction:column;border-radius:14px;overflow:hidden;box-shadow:0 24px 60px rgba(15,23,42,0.28)">
               <div style="padding:16px 18px;display:flex;align-items:flex-start;gap:12px;background:var(--navy);color:#fff">
                 <div style="flex:1;min-width:0">
                   <div style="font-size:14px;font-weight:600;line-height:1.35;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">${escHtml(title)}</div>
@@ -1863,13 +1903,18 @@ Web search is invisible to the user. Never mention that you are searching, looki
                 </button>
               </div>
               <div style="flex:1;overflow-y:auto;padding:18px;display:flex;flex-direction:column;gap:14px;background:#fafbfc">
-                ${entry.pairs.map(p => `
+                ${entry.pairs.map((p, i) => `
                   <div>
                     <div style="display:flex;justify-content:flex-end;margin-bottom:6px">
                       <div class="chat-bubble chat-user" style="font-size:13px">${escHtml(p.question)}</div>
                     </div>
                     <div style="display:flex;justify-content:flex-start">
-                      <div class="chat-bubble chat-bot" style="font-size:13px;white-space:pre-wrap">${escHtml(p.answer)}</div>
+                      <div class="popout-answer">
+                        <div class="chat-bubble chat-bot" style="font-size:13px;white-space:pre-wrap">${escHtml(p.answer)}</div>
+                        <button class="popout-copy" data-action="copy-answer" data-id="${escAttr(entry.id)}" data-pair="${i}" title="Copy answer" aria-label="Copy answer">
+                          <i data-lucide="copy" class="w-3.5 h-3.5"></i>
+                        </button>
+                      </div>
                     </div>
                   </div>
                 `).join('')}
@@ -1878,9 +1923,7 @@ Web search is invisible to the user. Never mention that you are searching, looki
                 <button class="btn-primary" style="padding:8px 14px;font-size:12.5px;min-height:auto;display:inline-flex;align-items:center;gap:6px" data-action="load-history" data-id="${escAttr(entry.id)}">
                   <i data-lucide="message-circle-plus" class="w-3.5 h-3.5"></i>Continue in chat
                 </button>
-                <button class="btn-outline" style="padding:8px 12px;font-size:12.5px;min-height:auto;display:inline-flex;align-items:center;gap:6px" data-action="copy-history" data-id="${escAttr(entry.id)}">
-                  <i data-lucide="copy" class="w-3.5 h-3.5"></i>Copy transcript
-                </button>
+                <span style="font-size:11px;color:#94a3b8">Tip: hover an answer to copy it</span>
                 <div style="flex:1"></div>
                 ${confirmingDelete ? `
                   <span style="font-size:12px;color:#b45309;font-weight:600;margin-right:4px">Delete this conversation?</span>
@@ -2224,7 +2267,7 @@ Web search is invisible to the user. Never mention that you are searching, looki
           if (STATE.historyConfirmDeleteId) {
             const insidePanel = !!e.target.closest('.history-panel-open');
             const insidePopout = !!HISTORY_VIEW.open && !!e.target.closest('.history-popout');
-            const protect = act && /^(confirm-delete-history|cancel-delete-history|confirm-delete-history-yes|confirm-delete-history-popout|copy-history|load-history|noop)$/.test(act.dataset.action);
+            const protect = act && /^(confirm-delete-history|cancel-delete-history|confirm-delete-history-yes|confirm-delete-history-popout|copy-answer|load-history|noop)$/.test(act.dataset.action);
             if ((!insidePanel && !insidePopout) || (act && !protect)) {
               STATE.historyConfirmDeleteId = null;
               if (!act) { render(); return; }
@@ -2370,11 +2413,17 @@ Web search is invisible to the user. Never mention that you are searching, looki
               showToast('Conversation deleted');
               break;
             }
-            case 'copy-history': {
+            case 'copy-answer': {
               const h = getHistory().find(x => x.id === act.dataset.id);
-              if (!h) break;
-              const text = h.pairs.map(p => 'Q: ' + p.question + '\n\nA: ' + p.answer).join('\n\n---\n\n');
-              const done = () => showToast('Transcript copied');
+              const pi = parseInt(act.dataset.pair, 10);
+              if (!h || !h.pairs[pi]) break;
+              const text = h.pairs[pi].answer || '';
+              const btn = act;
+              const done = () => {
+                showToast('Answer copied');
+                btn.classList.add('copied');
+                setTimeout(() => btn.classList.remove('copied'), 1200);
+              };
               const fail = () => showToast('Copy failed');
               if (navigator.clipboard && navigator.clipboard.writeText) {
                 navigator.clipboard.writeText(text).then(done).catch(fail);
