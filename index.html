@@ -419,10 +419,9 @@
         classifier: 'claude-haiku-4-5'
       };
 
-      // Web search tool versions. Sonnet 4.6 paths use the current tool with
-      // dynamic filtering; the Haiku voice path keeps the older tool version.
-      const SEARCH_TOOL_CURRENT = 'web_search_20260209';
-      const SEARCH_TOOL_LEGACY  = 'web_search_20250305';
+      // Web search tool. One version everywhere — the one the original app
+      // already used successfully against this account.
+      const SEARCH_TOOL = 'web_search_20250305';
 
       // Support-doc domains Randy researches in technical-assist mode.
       // Editable in Settings; one domain per line there.
@@ -546,6 +545,14 @@
         additionalProperties: false
       };
 
+      // Safety net when the classifier service is unreachable: obvious
+      // technical questions still get answered.
+      const TECH_TOPIC_RE = /\b(recast|liquit|application workspace|right.?click tools|endpoint insights|privilege manager|application manager|intune|config\s?manager|configmgr|sccm|mecm|autopilot|co.?management|gpo|group policy|hybrid join|win32|msi|packag(?:e|ing)|app (?:deploy|delivery|catalog)|self.?service|patch(?:ing|es)?|third.?party|mdm|endpoint)\b/i;
+      const QUESTIONISH_RE = /\?|\b(how|what|why|when|where|which|who|can|could|does|do(?:es)?n.?t|did|is|are|will|would|should)\b[\s\S]{3,}|^(walk me through|tell me|explain|show me)/i;
+      function looksLikeTechQuestion(t) {
+        return TECH_TOPIC_RE.test(t) && QUESTIONISH_RE.test(t);
+      }
+
       // Voice turns attach the (slower) web_search tool only when the prompt
       // clearly benefits from live data or product facts.
       const WEB_SEARCH_HINT_RE = /\b(search|look ?up|latest|news|today|right now|current|price of|weather|stock|score|who won|breaking|recast|liquit|workspace|intune|configmgr|sccm|mecm|right click)\b/i;
@@ -632,19 +639,12 @@
         recentTtsText: ''         // rolling buffer of spoken text for echo matching
       };
 
-      // Listening runtime state. The microphone and the computer's sound are
-      // merged into ONE stream with the Web Audio API, and the speech
-      // recognizer listens to that mixed track.
+      // Listening runtime state. Randy listens through the microphone only —
+      // the mic naturally hears the user's voice AND the call playing on the
+      // speakers. (Browsers never allow capturing screen/tab audio without a
+      // picker dialog, so mic listening is what makes one-tap possible.)
       const TECH = {
-        mixerCtx: null,           // AudioContext doing the mixing
-        mixerDest: null,          // MediaStreamAudioDestinationNode
-        mixedTrack: null,         // the track recognition listens to
-        micStream: null,          // getUserMedia stream (echo-cancelled)
-        micNode: null,
-        dispStream: null,         // getDisplayMedia stream (computer sound)
-        dispNode: null,
-        hasComputerAudio: false,  // is computer sound in the mix right now?
-        forceMicOnly: false,      // fallback when the mixed track can't capture
+        lastErrorToastAt: 0,      // throttle pipeline-failure toasts
         buffer: '',               // join buffer for ASR fragments
         bufferTimerId: null,
         deferrals: 0,
@@ -658,9 +658,6 @@
       };
 
       function listeningOn() { return STATE.slots[0].listenOn; }
-      function mixedTrackLive() {
-        return !!TECH.mixedTrack && TECH.mixedTrack.readyState === 'live';
-      }
 
       /* ================================================================
        * SETTINGS PERSISTENCE
@@ -1305,13 +1302,6 @@
 
       function recognitionWanted() { return listeningOn(); }
 
-      // Listen to the mixed mic+computer track when we have one; otherwise
-      // fall back to the default microphone.
-      function recognitionSourceTrack() {
-        if (TECH.forceMicOnly) return null;
-        return mixedTrackLive() ? TECH.mixedTrack : null;
-      }
-
       function ensureRecognition() {
         if (!VOICE.srSupported) return null;
         if (VOICE.recognition) return VOICE.recognition;
@@ -1350,13 +1340,9 @@
             try { r.phrases = []; } catch {}
             return; // onend restarts cleanly
           }
-          // The mixed track failed to capture — drop to the plain microphone
-          // (onend restarts with the default mic).
-          if (e.error === 'audio-capture' && recognitionSourceTrack()) {
-            TECH.forceMicOnly = true;
-            TECH.hasComputerAudio = false;
-            showToast("Randy couldn't hear the audio mix — switching to the microphone");
-            render();
+          if (e.error === 'audio-capture') {
+            stopListening({ silent: true });
+            showToast("Randy couldn't use the microphone — check that one is plugged in");
             return;
           }
           // Transient errors (no-speech, aborted, network) fall through to
@@ -1366,12 +1352,6 @@
           // Intentionally paused for TTS — scheduleRecognitionResume restarts.
           if (VOICE.ttsPaused) return;
           if (!VOICE.wantRunning || !recognitionWanted()) return;
-          // The mixed track died (mixer torn down mid-flight) — stop cleanly.
-          if (listeningOn() && TECH.mixedTrack && TECH.mixedTrack.readyState !== 'live') {
-            stopListening({ silent: true });
-            showToast('Listening stopped — tap the mic to start again');
-            return;
-          }
           // start() can throw InvalidStateError while the previous session is
           // still shutting down — retry with backoff.
           const tryStart = (attempt) => {
@@ -1387,14 +1367,11 @@
         return r;
       }
 
-      // Low-level start with the current source. Throws on InvalidStateError
-      // (caller handles retry).
+      // Low-level start. Throws on InvalidStateError (caller handles retry).
       function startRecognitionNow() {
         const r = ensureRecognition();
         if (!r) return;
-        const track = recognitionSourceTrack();
-        if (track) r.start(track);
-        else r.start();
+        r.start();
       }
 
       function startRecognition() {
@@ -1682,32 +1659,17 @@
 
 
       /* ================================================================
-       * LISTENING — one switch: microphone + computer sound, mixed
+       * LISTENING — one switch, microphone only (no pickers, no pop-ups)
        * ================================================================ */
 
-      // The big mic button. ON: get the microphone, ask once to share a
-      // tab/screen so Randy can hear the computer's sound too, mix both
-      // into one stream, and start listening. OFF: stop everything.
+      // The big mic button. ON: ask for the microphone once and start
+      // listening. The mic hears the user's voice AND the call playing on
+      // the speakers — no screen sharing, nothing to choose. OFF: stop.
       async function toggleListening() {
         const slot = STATE.slots[0];
         if (!VOICE.srSupported) { showToast('Randy needs Chrome or Edge to listen'); return; }
         if (slot.listenOn) { stopListening(); return; }
-        // Create (or wake) the audio mixer NOW, while we're still inside the
-        // click. Browsers only let audio start from a user action, and after
-        // the permission prompts below, the click no longer counts.
-        ensureMixerCtx();
         await startListening();
-      }
-
-      function ensureMixerCtx() {
-        try {
-          if (!TECH.mixerCtx || TECH.mixerCtx.state === 'closed') {
-            TECH.mixerCtx = new (window.AudioContext || window.webkitAudioContext)();
-          }
-          if (TECH.mixerCtx.state === 'suspended') TECH.mixerCtx.resume();
-        } catch (err) {
-          TECH.mixerCtx = null;
-        }
       }
 
       async function startListening() {
@@ -1716,106 +1678,31 @@
         const r = ensureRecognition();
         if (!r) { showToast('Randy needs Chrome or Edge to listen'); return; }
 
-        teardownMixerStreams();
-        TECH.forceMicOnly = false;
-        // Engines new enough for these flags also accept a MediaStreamTrack
-        // in start(). Older engines just use the plain microphone, so we
-        // skip the screen-share ask there.
-        const modern = ('phrases' in r) || ('processLocally' in r);
-
-        // 1) Microphone. Echo cancellation on, so Randy's own voice coming
-        // out of the speakers is mostly removed before we ever hear it.
-        let micOk = false;
+        // Ask for the mic up front so a denial fails loudly here, with a
+        // clear message, instead of dying quietly inside the recognizer.
         if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
           try {
-            TECH.micStream = await navigator.mediaDevices.getUserMedia({
-              audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
-            });
-            micOk = true;
+            const probe = await navigator.mediaDevices.getUserMedia({ audio: true });
+            probe.getTracks().forEach(t => { try { t.stop(); } catch {} });
           } catch (err) {
-            TECH.micStream = null;
+            showToast('Randy needs the microphone. Click Allow and try again.');
+            render();
+            return;
           }
         }
-
-        // 2) Computer sound. Chrome rules: pick a tab (any computer) or the
-        // whole screen (Windows), and check "Also share audio".
-        let dispOk = false;
-        if (modern && TECH.mixerCtx && navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia) {
-          try {
-            const stream = await navigator.mediaDevices.getDisplayMedia({
-              video: true,
-              audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
-              systemAudio: 'include',
-              selfBrowserSurface: 'exclude',
-              surfaceSwitching: 'include'
-            });
-            const track = stream.getAudioTracks()[0];
-            if (track) {
-              TECH.dispStream = stream;
-              dispOk = true;
-              // Chrome's "Stop sharing" bar ends the tracks — keep going
-              // with just the mic when that happens.
-              const onEnded = () => handleDisplayEnded();
-              track.addEventListener('ended', onEnded);
-              const vTrack = stream.getVideoTracks()[0];
-              if (vTrack) vTrack.addEventListener('ended', onEnded);
-            } else {
-              stream.getTracks().forEach(t => { try { t.stop(); } catch {} });
-            }
-          } catch (err) {
-            // The user closed the picker — listening with just the mic is fine.
-          }
-        }
-
-        if (!micOk && !dispOk) {
-          teardownMixerStreams();
-          showToast('Randy could not get the microphone. Allow mic access and try again.');
-          render();
-          return;
-        }
-
-        // 3) Mix what we got into one track and listen to that. If the
-        // browser won't run the mixer, fall back to the plain microphone.
-        if (modern && TECH.mixerCtx) {
-          try {
-            if (TECH.mixerCtx.state !== 'running') {
-              try { await TECH.mixerCtx.resume(); } catch (err) {}
-            }
-            if (TECH.mixerCtx.state === 'running') {
-              TECH.mixerDest = TECH.mixerCtx.createMediaStreamDestination();
-              if (TECH.micStream) {
-                TECH.micNode = TECH.mixerCtx.createMediaStreamSource(TECH.micStream);
-                TECH.micNode.connect(TECH.mixerDest);
-              }
-              if (TECH.dispStream) {
-                TECH.dispNode = TECH.mixerCtx.createMediaStreamSource(TECH.dispStream);
-                TECH.dispNode.connect(TECH.mixerDest);
-              }
-              TECH.mixedTrack = TECH.mixerDest.stream.getAudioTracks()[0] || null;
-            }
-          } catch (err) {
-            TECH.mixedTrack = null;
-          }
-        }
-        if (!TECH.mixedTrack && TECH.dispStream) {
-          // Without the mixer we can't hear the computer sound — let that
-          // share go and stick to the microphone.
-          try { if (TECH.dispNode) TECH.dispNode.disconnect(); } catch {}
-          TECH.dispNode = null;
-          TECH.dispStream.getTracks().forEach(t => { try { t.stop(); } catch {} });
-          TECH.dispStream = null;
-          dispOk = false;
-        }
-        TECH.hasComputerAudio = !!(dispOk && TECH.mixedTrack);
 
         slot.listenOn = true;
         TECH.heard = 0;
         TECH.answered = 0;
         TECH.decisions = [];
         startRecognition();
-        showToast(TECH.hasComputerAudio
-          ? 'Randy is listening to your mic and your computer sound'
-          : 'Randy is listening to your microphone');
+        // Warn right away if the answer service is unreachable, so "hears
+        // but never answers" can't happen silently.
+        loadRemoteConfig().then(() => {
+          if (!PROXY.ready) showToast('⚠ Randy cannot reach his answer service — open Settings');
+          else if (!PROXY.hasKey) showToast('⚠ The answer service has no API key — open Settings');
+        });
+        showToast('Randy is listening');
         render();
       }
 
@@ -1828,48 +1715,8 @@
         TECH.pending = false;
         exitConversationMode();   // aborts in-flight replies and any TTS
         stopRecognition();
-        closeMixer();
         if (!silent && wasOn) showToast('Randy stopped listening');
         render();
-      }
-
-      // Stop the streams and nodes but keep the AudioContext alive so the
-      // next start (inside a click) can reuse it.
-      function teardownMixerStreams() {
-        try { if (TECH.micNode) TECH.micNode.disconnect(); } catch {}
-        try { if (TECH.dispNode) TECH.dispNode.disconnect(); } catch {}
-        TECH.micNode = null;
-        TECH.dispNode = null;
-        if (TECH.micStream) TECH.micStream.getTracks().forEach(t => { try { t.stop(); } catch {} });
-        if (TECH.dispStream) TECH.dispStream.getTracks().forEach(t => { try { t.stop(); } catch {} });
-        TECH.micStream = null;
-        TECH.dispStream = null;
-        if (TECH.mixedTrack) { try { TECH.mixedTrack.stop(); } catch {} }
-        TECH.mixedTrack = null;
-        TECH.mixerDest = null;
-        TECH.hasComputerAudio = false;
-      }
-
-      function closeMixer() {
-        teardownMixerStreams();
-        if (TECH.mixerCtx) { try { TECH.mixerCtx.close(); } catch {} }
-        TECH.mixerCtx = null;
-      }
-
-      // "Stop sharing" was clicked: drop the computer sound from the mix but
-      // keep listening with the microphone. The mixed track stays alive, so
-      // recognition never even restarts.
-      function handleDisplayEnded() {
-        if (!TECH.dispStream) return;
-        try { if (TECH.dispNode) TECH.dispNode.disconnect(); } catch {}
-        TECH.dispNode = null;
-        TECH.dispStream.getTracks().forEach(t => { try { t.stop(); } catch {} });
-        TECH.dispStream = null;
-        TECH.hasComputerAudio = false;
-        if (STATE.slots[0].listenOn) {
-          showToast('Screen share ended — Randy now hears just the microphone');
-          render();
-        }
       }
 
       /* ---------- utterance buffering + classification ---------- */
@@ -1937,14 +1784,23 @@
             if (!accepted) { renderAssistStatus(); return; }
             TECH.lastSubmitted = candidate;
             TECH.lastSubmittedAt = Date.now();
-            TECH.answered++;
             runAssistAnswer(0, candidate);
           })
           .catch(err => {
             TECH.pending = false;
-            console.warn('classifyUtterance failed:', err);
-            recordAssistDecision(candidate, false, 0, 'classifier error');
-            renderAssistStatus();
+            console.error('classifier failed:', err);
+            toastPipelineError("Randy couldn't check a question", err);
+            // Keep the SE alive: obvious technical questions are answered
+            // even when the classifier service is down.
+            if (looksLikeTechQuestion(candidate)) {
+              recordAssistDecision(candidate, true, 0.7, 'fallback match');
+              TECH.lastSubmitted = candidate;
+              TECH.lastSubmittedAt = Date.now();
+              runAssistAnswer(0, candidate);
+            } else {
+              recordAssistDecision(candidate, false, 0, 'check failed');
+              renderAssistStatus();
+            }
           });
       }
 
@@ -1957,6 +1813,14 @@
         TECH.heard++;
         TECH.decisions.push({ text, accepted: !!accepted, confidence: Number(confidence) || 0, topic: topic || '', ts: Date.now() });
         while (TECH.decisions.length > ASSIST.DECISIONS_KEEP) TECH.decisions.shift();
+      }
+
+      // One pipeline-failure toast per 30s — loud, but not spammy.
+      function toastPipelineError(prefix, err) {
+        const now = Date.now();
+        if (now - TECH.lastErrorToastAt < 30000) return;
+        TECH.lastErrorToastAt = now;
+        showToast(prefix + ' — ' + (err && err.message ? err.message : err));
       }
 
       function fuzzyEqual(a, b) {
@@ -2085,9 +1949,7 @@
             messages: conversationPayloadMessages(slot, 20)
           };
           if (needsSearch) {
-            body.tools = [viaVoice
-              ? { type: SEARCH_TOOL_LEGACY, name: 'web_search', max_uses: 2 }
-              : { type: SEARCH_TOOL_CURRENT, name: 'web_search', max_uses: 3 }];
+            body.tools = [{ type: SEARCH_TOOL, name: 'web_search', max_uses: viaVoice ? 2 : 3 }];
           }
 
           const data = await postChat(body, controller.signal);
@@ -2166,16 +2028,25 @@
           while (prior.length && prior[0].role !== 'user') prior.shift();
 
           const domains = (slot.allowedDomains || []).filter(Boolean);
-          const tool = { type: SEARCH_TOOL_CURRENT, name: 'web_search', max_uses: ASSIST.SEARCH_MAX_USES };
+          const tool = { type: SEARCH_TOOL, name: 'web_search', max_uses: ASSIST.SEARCH_MAX_USES };
           if (domains.length) tool.allowed_domains = domains;
 
-          const data = await postChat({
+          const baseBody = {
             model: MODELS.assist,
             max_tokens: 1600,
             system: systemBlocks(slot.prompt + '\n\n' + ASSIST_STYLE),
-            messages: prior.concat([{ role: 'user', content: question }]),
-            tools: [tool]
-          }, controller.signal);
+            messages: prior.concat([{ role: 'user', content: question }])
+          };
+          let data;
+          try {
+            data = await postChat(Object.assign({ tools: [tool] }, baseBody), controller.signal);
+          } catch (err) {
+            if (err && err.name === 'AbortError') throw err;
+            // Web search failed (tool rejected, timeout, transient error) —
+            // answer from knowledge rather than staying silent.
+            console.error('search-enabled answer failed, retrying without tools:', err);
+            data = await postChat(baseBody, controller.signal);
+          }
 
           const { main, spoken } = splitSpoken(String(data.reply || ''));
           const msg = slot.messages[assistantMsgIdx];
@@ -2188,6 +2059,7 @@
           if (slot.speakAnswers && spoken) {
             speakText(spoken, idx, assistantMsgIdx);
           }
+          TECH.answered++;
 
           setTimeout(() => fetchHistoryFromSheet({ silent: true }), 600);
         } catch (err) {
@@ -2197,6 +2069,8 @@
               slot.messages.splice(assistantMsgIdx, 1);
             }
           } else {
+            console.error('assist answer failed:', err);
+            toastPipelineError("Randy couldn't answer", err);
             const placeholder = slot.messages[assistantMsgIdx];
             const errMsg = '⚠️ ' + (err.message || 'Connection failed. Check the proxy URL in Settings.');
             if (placeholder && placeholder.role === 'assistant') placeholder.content = errMsg;
@@ -2310,9 +2184,7 @@
         } else if (on) {
           orbClass = 'monitor'; orbInner = '<i data-lucide="mic" class="w-9 h-9"></i>';
           action = 'toggle-listen'; title = 'Randy is on — tap to turn him off';
-          statusText = TECH.hasComputerAudio
-            ? 'Listening: mic + computer sound'
-            : 'Listening: microphone';
+          statusText = 'Listening for questions…';
           statusClass = 'listening'; live = true;
         } else {
           orbClass = 'off'; orbInner = '<i data-lucide="mic-off" class="w-9 h-9"></i>';
@@ -2362,16 +2234,15 @@
         const statusLine = !on ? ''
           : TECH.pending
             ? 'Checking a question…'
-            : (TECH.hasComputerAudio ? 'Hearing your mic + computer sound' : 'Hearing your microphone')
-              + ' · ' + TECH.answered + ' answered / ' + TECH.heard + ' heard';
+            : 'Listening · ' + TECH.answered + ' answered / ' + TECH.heard + ' heard';
         return `
           <div class="assist-card">
             <div class="ac-head">
               <div class="ac-title">${on ? 'Randy is listening for tech questions' : 'How it works'}</div>
             </div>
             <div class="ac-sub">${on
-              ? 'When someone asks a technical question, the answer shows up in the chat.'
-              : 'Tap the mic above. Randy listens to your microphone and your computer sound. When he hears a technical question, he answers it in the chat.'}</div>
+              ? 'When someone asks a technical question, the answer shows up in the chat. Tip: keep your sound on speakers, not headphones, so Randy can hear your call too.'
+              : 'Tap the mic above. Randy listens through your microphone — he hears you and your call on the speakers. When he hears a technical question, he answers it in the chat.'}</div>
             <div class="ac-row">
               <span class="ac-label"><i data-lucide="${slot.speakAnswers ? 'volume-2' : 'volume-x'}" class="w-3.5 h-3.5"></i>Read answers out loud</span>
               <div class="voice-switch ${slot.speakAnswers ? 'on' : ''}" role="switch" aria-checked="${!!slot.speakAnswers}" tabindex="0"
@@ -2541,7 +2412,7 @@
             <div class="pr-head">
               <span class="pr-dot ${TECH.pending ? 'thinking' : ''}"></span>
               <span class="pr-label">Randy is listening</span>
-              <span class="pr-meta">${TECH.hasComputerAudio ? 'mic + computer sound' : 'microphone'} · ${TECH.answered} answered / ${TECH.heard} heard</span>
+              <span class="pr-meta">${TECH.answered} answered / ${TECH.heard} heard</span>
               <span class="pr-spacer"></span>
               <span class="pr-mute" title="${slot.speakAnswers ? 'Randy reads answers out loud' : 'Answers show in the chat only'}">
                 <i data-lucide="${slot.speakAnswers ? 'volume-2' : 'volume-x'}" class="w-3 h-3"></i>
