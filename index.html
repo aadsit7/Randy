@@ -2141,8 +2141,38 @@
        * RENDER
        * ================================================================ */
 
+      // render() rebuilds the whole DOM, which would reset every scroll
+      // container to the top. Capture positions first and restore after:
+      // if the user was at (or near) the bottom, stick to the bottom so the
+      // newest answer stays in view; otherwise put them back where they were.
+      const SCROLL_IDS = ['home-scroll-0', 'chat-scroll'];
+
+      function captureScroll() {
+        const state = {};
+        for (const id of SCROLL_IDS) {
+          const el = document.getElementById(id);
+          if (!el) continue;
+          state[id] = {
+            top: el.scrollTop,
+            atBottom: el.scrollTop + el.clientHeight >= el.scrollHeight - 48
+          };
+        }
+        return state;
+      }
+
+      function restoreScroll(state) {
+        for (const id in state) {
+          const el = document.getElementById(id);
+          if (!el) continue;
+          el.scrollTop = state[id].atBottom
+            ? el.scrollHeight
+            : Math.min(state[id].top, el.scrollHeight);
+        }
+      }
+
       function render() {
         const root = document.getElementById('app');
+        const scroll = captureScroll();
         root.innerHTML = `
           <header class="app-bar">
             <div class="app-shell mx-auto px-4 flex items-center justify-between gap-3" style="height:60px">
@@ -2169,6 +2199,7 @@
           ${renderToast()}
         `;
         if (window.lucide?.createIcons) try { window.lucide.createIcons(); } catch {}
+        restoreScroll(scroll);
         bindEvents();
       }
 
