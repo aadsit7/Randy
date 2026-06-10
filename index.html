@@ -528,7 +528,9 @@
         '2. The question is in scope per the lists above.',
         '3. An SE could plausibly answer it now without asking anything back.',
         '',
-        'confidence is your 0-to-1 certainty that auto-answering helps. Below 0.6 means do not act. Be conservative; false positives interrupt a live call. Speech-to-text may garble product names ("in tune" = Intune, "config manager"/"SCCM" = ConfigMgr, "liquid" = Liquit) — interpret charitably but do not invent a question that is not there.'
+        'confidence is your 0-to-1 certainty that auto-answering helps. Below 0.6 means do not act. Be conservative; false positives interrupt a live call. Speech-to-text may garble product names ("in tune" = Intune, "config manager"/"SCCM" = ConfigMgr, "liquid" = Liquit) — interpret charitably but do not invent a question that is not there.',
+        '',
+        'Respond with ONLY a JSON object — no prose, no code fences: {"is_question": boolean, "confidence": number 0-1, "topic": "short phrase", "reason": "max 12 words"}'
       ].join('\n');
 
       // JSON schema enforced via structured outputs — the classifier reply is
