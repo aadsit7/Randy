@@ -252,11 +252,6 @@
       .assist-card .ac-sub { font-size:11px; color: var(--muted-blue); line-height:1.5; margin-top:6px; }
       .assist-card .ac-row { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-top:12px; }
       .assist-card .ac-label { font-size:11.5px; font-weight:600; color:#E6ECFF; display:inline-flex; align-items:center; gap:6px; }
-      .src-pills { display:flex; width:100%; background: rgba(0,0,0,.18); border-radius:9px; padding:3px; gap:3px; margin-top:10px; }
-      .src-pill { flex:1; border:none; border-radius:7px; background:transparent; color: var(--muted-blue); font-size:11px; font-weight:700; padding:7px 4px; cursor:pointer; display:inline-flex; align-items:center; justify-content:center; gap:5px; transition: all .15s; line-height:1; }
-      .src-pill.active { background:#fff; color: var(--primary); box-shadow: 0 2px 6px rgba(0,0,0,.18); }
-      .src-pill:not(.active):hover { color:#fff; }
-      .src-pill:disabled { opacity:.45; cursor:not-allowed; }
       .ac-status { display:flex; align-items:center; gap:8px; margin-top:12px; font-size:11px; color:#DCE6FF; background: rgba(0,0,0,.14); border-radius:8px; padding:8px 10px; line-height:1.35; }
       .ac-status .acs-dot { width:8px; height:8px; border-radius:50%; background:#34d399; flex-shrink:0; box-shadow: 0 0 0 0 rgba(52,211,153,.55); animation: statusPulse 2s ease-out infinite; }
       .ac-status .acs-dot.thinking { background: var(--cyan-hi); animation: statusPulse 0.9s ease-out infinite; }
@@ -448,7 +443,8 @@
         MAX_BUFFER_CHARS: 420,    // cap the join buffer so run-on speech still flushes
         MAX_DEFERRALS: 4,         // re-checks while a prior classify/answer is busy
         SEARCH_MAX_USES: 3,       // web searches per answer (latency budget)
-        HISTORY_PAIRS: 2          // prior assist Q&A pairs sent as context
+        HISTORY_PAIRS: 2,         // prior assist Q&A pairs sent as context
+        CONV_EXIT_MS: 20000       // follow-up window after a voice answer
       };
 
       /* ================================================================
@@ -586,16 +582,18 @@
           messages: [],                 // {role, content, kind?, spoken?, sources?}
           inputText: '',
           loading: false,
-          voiceEnabled: true,
+          // The one big switch. When on, Randy hears the microphone and the
+          // computer's sound together, answers technical questions in the
+          // chat, and responds to "Hey Randy". Always starts off — turning
+          // it on needs a click (the screen-share picker requires one).
+          listenOn: false,
           voiceName: 'Randy',
           voicePersonality: DEFAULT_VOICE_PERSONALITY,
           isListening: false,
           isSpeaking: false,
           abortController: null,        // abort the in-flight proxy fetch
           ttsQueue: null,               // FIFO of sentence TTS utterances
-          // Technical assistance
-          techAssist: false,            // the left-panel slider
-          speakAnswers: false,          // read assist answers aloud
+          speakAnswers: false,          // read answers out loud
           allowedDomains: DEFAULT_RESEARCH_DOMAINS.slice()
         };
       }
@@ -616,7 +614,6 @@
       const VOICE = {
         srSupported: !!(window.SpeechRecognition || window.webkitSpeechRecognition),
         ttsSupported: !!window.speechSynthesis,
-        captureSupported: !!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia),
         recognition: null,        // shared SpeechRecognition instance
         wantRunning: false,       // should the recognizer be running?
         audioCtx: null,           // lazy AudioContext for the wake beep
@@ -624,6 +621,7 @@
         awaitingCommand: false,   // wake word heard, waiting for the question
         conversationMode: false,  // keep accepting commands without re-arming
         wakeTimeoutId: null,      // 30s drop back to passive listening (first arm only)
+        convExitTimerId: null,    // auto-exit a voice conversation after a quiet spell
         permissionDenied: false,
         toastTimeoutId: null,
         toastMessage: '',
@@ -636,11 +634,18 @@
         recentTtsText: ''         // rolling buffer of spoken text for echo matching
       };
 
-      // Technical-assist runtime state (not persisted except where noted).
+      // Listening runtime state. The microphone and the computer's sound are
+      // merged into ONE stream with the Web Audio API, and the speech
+      // recognizer listens to that mixed track.
       const TECH = {
-        source: 'mic',            // 'mic' | 'desktop' (persisted as a preference)
-        captureStream: null,      // getDisplayMedia stream while desktop-listening
-        captureTrack: null,       // its audio MediaStreamTrack
+        mixerCtx: null,           // AudioContext doing the mixing
+        mixerDest: null,          // MediaStreamAudioDestinationNode
+        mixedTrack: null,         // the track recognition listens to
+        micStream: null,          // getUserMedia stream (echo-cancelled)
+        micNode: null,
+        dispStream: null,         // getDisplayMedia stream (computer sound)
+        dispNode: null,
+        hasComputerAudio: false,  // is computer sound in the mix right now?
         buffer: '',               // join buffer for ASR fragments
         bufferTimerId: null,
         deferrals: 0,
@@ -653,10 +658,9 @@
         answered: 0
       };
 
-      function activeSlotTechAssist() { return STATE.slots[0].techAssist; }
-      function desktopListening() {
-        return activeSlotTechAssist() && TECH.source === 'desktop' &&
-               !!TECH.captureTrack && TECH.captureTrack.readyState === 'live';
+      function listeningOn() { return STATE.slots[0].listenOn; }
+      function mixedTrackLive() {
+        return !!TECH.mixedTrack && TECH.mixedTrack.readyState === 'live';
       }
 
       /* ================================================================
@@ -667,13 +671,10 @@
         const data = STATE.slots.map(s => ({
           label: s.label,
           prompt: s.prompt,
-          voiceEnabled: s.voiceEnabled,
           voiceName: s.voiceName,
           voicePersonality: s.voicePersonality,
-          techAssist: !!s.techAssist,
           speakAnswers: !!s.speakAnswers,
-          allowedDomains: s.allowedDomains,
-          techSource: TECH.source
+          allowedDomains: s.allowedDomains
         }));
         try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(data)); } catch {}
       }
@@ -699,24 +700,16 @@
             const storedPrompt = d.prompt || '';
             const isLegacyDefault = storedPrompt && LEGACY_PROMPT_MARKERS.some(m => storedPrompt.includes(m));
             s.prompt = (isLegacyDefault ? '' : storedPrompt) || s.prompt;
-            s.voiceEnabled = !!d.voiceEnabled;
             s.voiceName = d.voiceName || s.label;
             s.voicePersonality = d.voicePersonality || DEFAULT_VOICE_PERSONALITY;
-            // techAssist (with migration from the old passiveListen key)
-            s.techAssist = !!(d.techAssist !== undefined ? d.techAssist : d.passiveListen);
+            // speakAnswers (migrating the older speakResponses key)
             s.speakAnswers = !!(d.speakAnswers !== undefined ? d.speakAnswers : d.speakResponses);
             if (Array.isArray(d.allowedDomains)) {
               s.allowedDomains = d.allowedDomains.filter(x => typeof x === 'string' && x.trim()).map(x => x.trim());
             }
-            if (d.techSource === 'desktop' || d.techSource === 'mic') TECH.source = d.techSource;
           });
         } catch {}
-        // Desktop capture needs a user gesture every session — never resume it
-        // silently. Fall back to mic-source assist if it was left on.
-        if (TECH.source === 'desktop' && STATE.slots[0].techAssist) {
-          TECH.source = 'mic';
-        }
-        if (!VOICE.captureSupported) TECH.source = 'mic';
+        // Listening always starts OFF — the screen-share picker needs a click.
         // Only honor a saved proxy URL if it looks like an Apps Script /exec
         // deployment; junk values fall back to the hardcoded default.
         const savedGsheet = localStorage.getItem('recast_gsheet_url');
@@ -1067,12 +1060,12 @@
         return (matches / words.length) >= 0.7;
       }
 
-      // Pause mic recognition while TTS is playing so Randy can't transcribe
-      // his own voice. While desktop-listening we deliberately keep the
-      // recognizer running (it's hearing the call, not our speaker) and rely
-      // on isLikelyEcho() text matching instead.
+      // Pause recognition while TTS is playing ONLY during a back-and-forth
+      // voice conversation (turn-taking). In passive listening Randy keeps
+      // hearing the call; mic echo cancellation plus isLikelyEcho() text
+      // matching keep his own voice out.
       function pauseRecognitionForTts() {
-        if (desktopListening()) return;
+        if (!VOICE.conversationMode && !VOICE.awaitingCommand) return;
         VOICE.ttsPaused = true;
         if (VOICE.resumeRecognitionId) {
           clearTimeout(VOICE.resumeRecognitionId);
@@ -1085,7 +1078,6 @@
       }
 
       function scheduleRecognitionResume() {
-        if (desktopListening()) return;
         if (VOICE.resumeRecognitionId) clearTimeout(VOICE.resumeRecognitionId);
         VOICE.resumeRecognitionId = setTimeout(() => {
           VOICE.resumeRecognitionId = null;
@@ -1159,6 +1151,7 @@
             VOICE.playingMsg = null;
             markTtsEnded();
             scheduleRecognitionResume();
+            if (VOICE.conversationMode) scheduleConvAutoExit();
             render();
           }
         }
@@ -1222,6 +1215,8 @@
           if (!VOICE.conversationMode) {
             VOICE.activeSlot = null;
             VOICE.awaitingCommand = false;
+          } else {
+            scheduleConvAutoExit();
           }
           VOICE.playingMsg = null;
           markTtsEnded();
@@ -1258,22 +1253,12 @@
        * SPEECH RECOGNITION — one engine, two sources (mic | desktop track)
        * ================================================================ */
 
-      function anyVoiceEnabled() { return STATE.slots.some(s => s.voiceEnabled); }
+      function recognitionWanted() { return listeningOn(); }
 
-      // The recognizer should be running when the mic assistant is enabled OR
-      // technical assistance is actively listening (either source).
-      function recognitionWanted() {
-        return anyVoiceEnabled() || activeSlotTechAssist();
-      }
-
-      // Pick the input for the next start(): the live desktop-capture track
-      // while desktop-listening, otherwise the default microphone.
+      // Listen to the mixed mic+computer track when we have one; otherwise
+      // fall back to the default microphone.
       function recognitionSourceTrack() {
-        if (activeSlotTechAssist() && TECH.source === 'desktop' &&
-            TECH.captureTrack && TECH.captureTrack.readyState === 'live') {
-          return TECH.captureTrack;
-        }
-        return null;
+        return mixedTrackLive() ? TECH.mixedTrack : null;
       }
 
       function applyPhraseBiasing(r) {
@@ -1318,12 +1303,8 @@
         r.onerror = (e) => {
           if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
             VOICE.permissionDenied = true;
-            VOICE.wantRunning = false;
-            STATE.slots.forEach(s => { s.voiceEnabled = false; s.isListening = false; });
-            if (activeSlotTechAssist() && TECH.source === 'mic') setTechAssist(false);
-            saveSettings();
-            showToast('Microphone access required for voice assistant');
-            render();
+            stopListening({ silent: true });
+            showToast('Randy needs microphone access — allow the mic and try again');
             return;
           }
           // Transient errors (no-speech, aborted, network) fall through to
@@ -1333,10 +1314,10 @@
           // Intentionally paused for TTS — scheduleRecognitionResume restarts.
           if (VOICE.ttsPaused) return;
           if (!VOICE.wantRunning || !recognitionWanted()) return;
-          // Desktop track died (user hit "Stop sharing") — fall back cleanly.
-          if (activeSlotTechAssist() && TECH.source === 'desktop' &&
-              (!TECH.captureTrack || TECH.captureTrack.readyState !== 'live')) {
-            handleCaptureEnded();
+          // The mixed track died (mixer torn down mid-flight) — stop cleanly.
+          if (listeningOn() && TECH.mixedTrack && TECH.mixedTrack.readyState !== 'live') {
+            stopListening({ silent: true });
+            showToast('Listening stopped — tap the mic to start again');
             return;
           }
           // start() can throw InvalidStateError while the previous session is
@@ -1418,6 +1399,7 @@
       const EXIT_CONVERSATION_RE = /^(stop|cancel|never mind|nevermind|that'?s all|exit|goodbye|good ?bye|end (?:conversation|chat)|quiet|shut up)\b/i;
 
       function exitConversationMode() {
+        clearConvAutoExit();
         if (VOICE.interimSlot !== null && STATE.slots[VOICE.interimSlot]) {
           STATE.slots[VOICE.interimSlot].inputText = '';
         }
@@ -1461,49 +1443,40 @@
         slot.loading = false;
       }
 
-      // Push-to-talk: the orb arms Randy to take the next utterance as a
-      // command — same effect as saying the wake word.
-      function armListening() {
-        const slot = STATE.slots[0];
-        if (!VOICE.srSupported) { showToast('Voice needs Chrome or Edge'); return; }
-        if (!slot.voiceEnabled) {
-          slot.voiceEnabled = true;
-          saveSettings();
-        }
-        startRecognition();
-        playBeep();
-        if (slot.loading) interruptCurrentReply(0);
-        VOICE.activeSlot = 0;
-        VOICE.awaitingCommand = true;
-        VOICE.conversationMode = true;
-        slot.isListening = true;
-        render();
+      // After Randy answers a spoken question, he keeps listening for a
+      // follow-up for a short window, then quietly goes back to passive
+      // listening — so a live call can't get swallowed as "commands".
+      function scheduleConvAutoExit() {
+        clearConvAutoExit();
+        VOICE.convExitTimerId = setTimeout(() => {
+          VOICE.convExitTimerId = null;
+          if (!VOICE.conversationMode && !VOICE.awaitingCommand) return;
+          VOICE.conversationMode = false;
+          VOICE.awaitingCommand = false;
+          VOICE.activeSlot = null;
+          STATE.slots.forEach(s => { s.isListening = false; });
+          render();
+        }, ASSIST.CONV_EXIT_MS);
+      }
+      function clearConvAutoExit() {
+        if (VOICE.convExitTimerId) { clearTimeout(VOICE.convExitTimerId); VOICE.convExitTimerId = null; }
       }
 
       function handleVoiceTranscript(raw) {
         const text = String(raw).trim();
         if (!text) return;
 
-        // Echo guard 1: re-transcription of Randy's own TTS — drop.
+        // Drop re-transcriptions of Randy's own voice.
         if (isLikelyEcho(text)) return;
 
-        // Desktop-listening: every final utterance belongs to the technical
-        // assistant (the mic isn't the source, so wake words don't apply).
-        // Runs ahead of the TTS gate — the captured call keeps talking even
-        // while Randy speaks, and we must not lose it.
-        if (activeSlotTechAssist() && TECH.source === 'desktop') {
-          assistIngest(text);
-          return;
-        }
+        const ttsBusy = ttsEchoActive();
 
-        // Echo guard 2: while TTS is speaking (or just after), the mic path
-        // drops everything — a stray final at the boundary is unreliable.
-        if (ttsEchoActive()) return;
-
-        // Continuous conversation: accept each utterance as a command.
+        // Active conversation ("Hey Randy" was said): each utterance is a
+        // question for Randy. Turn-taking — ignored while Randy is talking.
         if (VOICE.conversationMode && VOICE.activeSlot !== null) {
+          if (ttsBusy) return;
           const slot = STATE.slots[VOICE.activeSlot];
-          if (!slot || !slot.voiceEnabled) {
+          if (!slot || !slot.listenOn) {
             exitConversationMode();
             return;
           }
@@ -1514,6 +1487,7 @@
             return;
           }
           if (cleaned.length < 2) return;
+          clearConvAutoExit();
           if (slot.loading) interruptCurrentReply(VOICE.activeSlot);
           if (VOICE.wakeTimeoutId) { clearTimeout(VOICE.wakeTimeoutId); VOICE.wakeTimeoutId = null; }
           VOICE.awaitingCommand = false;
@@ -1524,10 +1498,11 @@
           return;
         }
 
-        // Armed-command path (wake word without a command in the same breath).
+        // Armed (wake word heard, waiting for the question).
         if (VOICE.activeSlot !== null && VOICE.awaitingCommand) {
+          if (ttsBusy) return;
           const slot = STATE.slots[VOICE.activeSlot];
-          if (!slot || !slot.voiceEnabled) {
+          if (!slot || !slot.listenOn) {
             if (VOICE.wakeTimeoutId) { clearTimeout(VOICE.wakeTimeoutId); VOICE.wakeTimeoutId = null; }
             VOICE.activeSlot = null;
             VOICE.awaitingCommand = false;
@@ -1540,6 +1515,7 @@
             return;
           }
           if (cleaned.length < 2) return;
+          clearConvAutoExit();
           if (slot.loading) interruptCurrentReply(VOICE.activeSlot);
           if (VOICE.wakeTimeoutId) { clearTimeout(VOICE.wakeTimeoutId); VOICE.wakeTimeoutId = null; }
           VOICE.awaitingCommand = false;
@@ -1551,54 +1527,55 @@
           return;
         }
 
-        // Scan for a wake word.
-        for (let i = 0; i < STATE.slots.length; i++) {
-          const slot = STATE.slots[i];
-          if (!slot.voiceEnabled) continue;
-          const pattern = buildWakePattern(slot.voiceName || slot.label);
-          const match = text.match(pattern);
-          if (!match) continue;
+        // Wake word scan (skipped while Randy is talking).
+        if (!ttsBusy) {
+          for (let i = 0; i < STATE.slots.length; i++) {
+            const slot = STATE.slots[i];
+            if (!slot.listenOn) continue;
+            const pattern = buildWakePattern(slot.voiceName || slot.label);
+            const match = text.match(pattern);
+            if (!match) continue;
 
-          if (slot.loading) interruptCurrentReply(i);
-          playBeep();
+            if (slot.loading) interruptCurrentReply(i);
+            playBeep();
 
-          // Wake word + question in one breath.
-          const after = text.slice(match.index + match[0].length).trim();
-          if (after.length >= 2) {
+            // Wake word + question in one breath.
+            const after = text.slice(match.index + match[0].length).trim();
+            if (after.length >= 2) {
+              VOICE.activeSlot = i;
+              VOICE.awaitingCommand = false;
+              VOICE.conversationMode = true;
+              slot.isListening = false;
+              slot.inputText = after;
+              sendMessage(i, { viaVoice: true });
+              return;
+            }
+
+            // Arm and wait for the question. 30s fallback on the first arm only.
             VOICE.activeSlot = i;
-            VOICE.awaitingCommand = false;
-            VOICE.conversationMode = true;
-            slot.isListening = false;
-            slot.inputText = after;
-            sendMessage(i, { viaVoice: true });
+            VOICE.awaitingCommand = true;
+            slot.isListening = true;
+            if (VOICE.wakeTimeoutId) clearTimeout(VOICE.wakeTimeoutId);
+            const armedSlotIdx = i;
+            VOICE.wakeTimeoutId = setTimeout(() => {
+              VOICE.wakeTimeoutId = null;
+              if (VOICE.conversationMode) return;
+              if (VOICE.activeSlot !== armedSlotIdx) return;
+              VOICE.activeSlot = null;
+              VOICE.awaitingCommand = false;
+              const s = STATE.slots[armedSlotIdx];
+              if (s) s.isListening = false;
+              render();
+            }, 30000);
+            render();
             return;
           }
-
-          // Arm and wait for the question. 30s fallback on the first arm only.
-          VOICE.activeSlot = i;
-          VOICE.awaitingCommand = true;
-          slot.isListening = true;
-          if (VOICE.wakeTimeoutId) clearTimeout(VOICE.wakeTimeoutId);
-          const armedSlotIdx = i;
-          VOICE.wakeTimeoutId = setTimeout(() => {
-            VOICE.wakeTimeoutId = null;
-            if (VOICE.conversationMode) return;
-            if (VOICE.activeSlot !== armedSlotIdx) return;
-            VOICE.activeSlot = null;
-            VOICE.awaitingCommand = false;
-            const s = STATE.slots[armedSlotIdx];
-            if (s) s.isListening = false;
-            render();
-          }, 30000);
-          render();
-          return;
         }
 
-        // No wake word matched. Mic-source technical assistance gets the
-        // unclaimed utterance.
-        if (activeSlotTechAssist() && TECH.source === 'mic') {
-          assistIngest(text);
-        }
+        // Everything else: passive listening for technical questions — this
+        // keeps working even while Randy is talking, because the call on the
+        // computer keeps going.
+        if (listeningOn()) assistIngest(text);
       }
 
       /* ================================================================
@@ -1607,20 +1584,15 @@
 
       function interimTargetSlot() {
         if (VOICE.activeSlot !== null && VOICE.awaitingCommand) return VOICE.activeSlot;
-        if (activeSlotTechAssist()) return 0;
-        for (let i = 0; i < STATE.slots.length; i++) {
-          if (STATE.slots[i].voiceEnabled) return i;
-        }
-        return null;
+        return listeningOn() ? 0 : null;
       }
 
       function updateInterim(text) {
-        // Suppress while Randy's own voice could be echoing back — except in
-        // desktop-listening, where the captured call is independent of our
-        // speaker output.
-        if (!desktopListening() && ttsEchoActive()) { clearInterim(); return; }
         const trimmed = String(text || '').trim();
         if (trimmed.length < 2) { clearInterim(); return; }
+        // Don't flash Randy's own voice back onscreen.
+        if (isLikelyEcho(trimmed)) { clearInterim(); return; }
+        if ((VOICE.conversationMode || VOICE.awaitingCommand) && ttsEchoActive()) { clearInterim(); return; }
         const target = interimTargetSlot();
         if (target === null) { clearInterim(); return; }
 
@@ -1655,163 +1627,160 @@
         if (!isComposerFocused()) render();
       }
 
-      function toggleSlotVoice(idx) {
-        const slot = STATE.slots[idx];
-        if (!VOICE.srSupported) { showToast('Voice not supported in this browser'); return; }
-        slot.voiceEnabled = !slot.voiceEnabled;
-        saveSettings();
-        if (slot.voiceEnabled) {
-          startRecognition();
-        } else {
-          if (VOICE.activeSlot === idx) {
-            if (VOICE.wakeTimeoutId) { clearTimeout(VOICE.wakeTimeoutId); VOICE.wakeTimeoutId = null; }
-            VOICE.activeSlot = null;
-            VOICE.awaitingCommand = false;
-            VOICE.conversationMode = false;
-            if (slot.abortController) { try { slot.abortController.abort(); } catch {} slot.abortController = null; }
-            slot.ttsQueue = null;
-            slot.loading = false;
-          }
-          slot.isListening = false;
-          if (slot.isSpeaking) stopSpeaking();
-          if (!recognitionWanted()) stopRecognition();
-        }
-        render();
-      }
+
 
       /* ================================================================
-       * TECHNICAL ASSISTANCE — capture, classify, answer
+       * LISTENING — one switch: microphone + computer sound, mixed
        * ================================================================ */
 
-      // Slider handler. Turning on with the desktop source opens the share
-      // picker (requires the click gesture); mic source just ensures the
-      // recognizer is running.
-      async function setTechAssist(on) {
+      // The big mic button. ON: get the microphone, ask once to share a
+      // tab/screen so Randy can hear the computer's sound too, mix both
+      // into one stream, and start listening. OFF: stop everything.
+      async function toggleListening() {
         const slot = STATE.slots[0];
-        if (!VOICE.srSupported) { showToast('Voice not supported in this browser — use Chrome or Edge'); return; }
-        if (on === slot.techAssist) return;
+        if (!VOICE.srSupported) { showToast('Randy needs Chrome or Edge to listen'); return; }
+        if (slot.listenOn) { stopListening(); return; }
+        await startListening();
+      }
 
-        if (!on) {
-          slot.techAssist = false;
-          stopDesktopCapture();
-          clearAssistBuffer();
-          TECH.pending = false;
-          if (!recognitionWanted()) stopRecognition();
-          else restartRecognition(); // back onto the mic if voice stays on
-          saveSettings();
-          showToast('Technical assistance off');
+      async function startListening() {
+        const slot = STATE.slots[0];
+        if (slot.listenOn) return;
+        const r = ensureRecognition();
+        if (!r) { showToast('Randy needs Chrome or Edge to listen'); return; }
+
+        teardownMixer();
+        // Engines new enough for contextual biasing / on-device flags also
+        // accept a MediaStreamTrack in start(). Older engines just use the
+        // plain microphone, so we skip the screen-share ask there.
+        const modern = ('phrases' in r) || ('processLocally' in r);
+
+        // 1) Microphone. Echo cancellation on, so Randy's own voice coming
+        // out of the speakers is mostly removed before we ever hear it.
+        let micOk = false;
+        if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+          try {
+            TECH.micStream = await navigator.mediaDevices.getUserMedia({
+              audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+            });
+            micOk = true;
+          } catch (err) {
+            TECH.micStream = null;
+          }
+        }
+
+        // 2) Computer sound. Chrome rules: pick a tab (any computer) or the
+        // whole screen (Windows), and check "Also share audio".
+        let dispOk = false;
+        if (modern && navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia) {
+          try {
+            const stream = await navigator.mediaDevices.getDisplayMedia({
+              video: true,
+              audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+              systemAudio: 'include',
+              selfBrowserSurface: 'exclude',
+              surfaceSwitching: 'include'
+            });
+            const track = stream.getAudioTracks()[0];
+            if (track) {
+              TECH.dispStream = stream;
+              dispOk = true;
+              // Chrome's "Stop sharing" bar ends the tracks — keep going
+              // with just the mic when that happens.
+              const onEnded = () => handleDisplayEnded();
+              track.addEventListener('ended', onEnded);
+              const vTrack = stream.getVideoTracks()[0];
+              if (vTrack) vTrack.addEventListener('ended', onEnded);
+            } else {
+              stream.getTracks().forEach(t => { try { t.stop(); } catch {} });
+            }
+          } catch (err) {
+            // The user closed the picker — listening with just the mic is fine.
+          }
+        }
+
+        if (!micOk && !dispOk) {
+          teardownMixer();
+          showToast('Randy could not get the microphone. Allow mic access and try again.');
           render();
           return;
         }
 
-        if (TECH.source === 'desktop') {
-          const ok = await startDesktopCapture();
-          if (!ok) { render(); return; } // toast already shown
+        // 3) Mix what we got into one track and listen to that.
+        if (modern) {
+          try {
+            TECH.mixerCtx = new (window.AudioContext || window.webkitAudioContext)();
+            if (TECH.mixerCtx.state === 'suspended') TECH.mixerCtx.resume();
+            TECH.mixerDest = TECH.mixerCtx.createMediaStreamDestination();
+            if (TECH.micStream) {
+              TECH.micNode = TECH.mixerCtx.createMediaStreamSource(TECH.micStream);
+              TECH.micNode.connect(TECH.mixerDest);
+            }
+            if (TECH.dispStream) {
+              TECH.dispNode = TECH.mixerCtx.createMediaStreamSource(TECH.dispStream);
+              TECH.dispNode.connect(TECH.mixerDest);
+            }
+            TECH.mixedTrack = TECH.mixerDest.stream.getAudioTracks()[0] || null;
+          } catch (err) {
+            TECH.mixedTrack = null; // fall back to the plain microphone
+          }
         }
-        slot.techAssist = true;
+        TECH.hasComputerAudio = dispOk && !!TECH.mixedTrack;
+
+        slot.listenOn = true;
         TECH.heard = 0;
         TECH.answered = 0;
         TECH.decisions = [];
         startRecognition();
-        if (TECH.source === 'desktop') restartRecognition();
-        saveSettings();
-        showToast(TECH.source === 'desktop'
-          ? 'Listening to computer audio for technical questions'
-          : 'Listening for technical questions on the microphone');
+        showToast(TECH.hasComputerAudio
+          ? 'Randy is listening to your mic and your computer sound'
+          : 'Randy is listening to your microphone');
         render();
       }
 
-      // Source pills. Switching to desktop while assist is on opens the
-      // picker immediately; cancelling keeps the previous source.
-      async function setTechSource(source) {
-        if (source === TECH.source) return;
-        if (source === 'desktop' && !VOICE.captureSupported) {
-          showToast('Computer-audio capture needs desktop Chrome or Edge');
-          return;
-        }
+      function stopListening({ silent = false } = {}) {
         const slot = STATE.slots[0];
-        if (!slot.techAssist) {
-          TECH.source = source;
-          saveSettings();
-          render();
-          return;
-        }
-        if (source === 'desktop') {
-          const ok = await startDesktopCapture();
-          if (!ok) { render(); return; }
-          TECH.source = 'desktop';
-        } else {
-          TECH.source = 'mic';
-          stopDesktopCapture();
-        }
+        const wasOn = slot.listenOn;
+        slot.listenOn = false;
         clearAssistBuffer();
-        restartRecognition();
-        saveSettings();
-        showToast(source === 'desktop' ? 'Now listening to computer audio' : 'Now listening on the microphone');
+        clearConvAutoExit();
+        TECH.pending = false;
+        exitConversationMode();   // aborts in-flight replies and any TTS
+        stopRecognition();
+        teardownMixer();
+        if (!silent && wasOn) showToast('Randy stopped listening');
         render();
       }
 
-      // Capture tab/system audio. Chrome rules: tab audio works everywhere;
-      // whole-screen audio works on Windows ("Also share system audio");
-      // window shares never carry audio.
-      async function startDesktopCapture() {
-        if (!VOICE.captureSupported) {
-          showToast('Computer-audio capture needs desktop Chrome or Edge');
-          return false;
-        }
-        stopDesktopCapture();
-        let stream;
-        try {
-          stream = await navigator.mediaDevices.getDisplayMedia({
-            video: true,
-            audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
-            systemAudio: 'include',
-            selfBrowserSurface: 'exclude',
-            surfaceSwitching: 'include'
-          });
-        } catch (err) {
-          if (err && (err.name === 'NotAllowedError' || err.name === 'AbortError')) {
-            showToast('Share cancelled — pick the meeting tab and tick “Also share tab audio”');
-          } else {
-            showToast('Could not capture computer audio: ' + (err && err.message ? err.message : err));
-          }
-          return false;
-        }
-        const track = stream.getAudioTracks()[0];
-        if (!track) {
-          stream.getTracks().forEach(t => { try { t.stop(); } catch {} });
-          showToast('No audio in that share — choose a tab (or entire screen on Windows) and tick “Also share audio”');
-          return false;
-        }
-        TECH.captureStream = stream;
-        TECH.captureTrack = track;
-        // "Stop sharing" (Chrome's bar) ends the tracks — fall back gracefully.
-        const onEnded = () => handleCaptureEnded();
-        track.addEventListener('ended', onEnded);
-        const vTrack = stream.getVideoTracks()[0];
-        if (vTrack) vTrack.addEventListener('ended', onEnded);
-        return true;
+      function teardownMixer() {
+        try { if (TECH.micNode) TECH.micNode.disconnect(); } catch {}
+        try { if (TECH.dispNode) TECH.dispNode.disconnect(); } catch {}
+        TECH.micNode = null;
+        TECH.dispNode = null;
+        if (TECH.micStream) TECH.micStream.getTracks().forEach(t => { try { t.stop(); } catch {} });
+        if (TECH.dispStream) TECH.dispStream.getTracks().forEach(t => { try { t.stop(); } catch {} });
+        TECH.micStream = null;
+        TECH.dispStream = null;
+        if (TECH.mixedTrack) { try { TECH.mixedTrack.stop(); } catch {} }
+        TECH.mixedTrack = null;
+        if (TECH.mixerCtx) { try { TECH.mixerCtx.close(); } catch {} }
+        TECH.mixerCtx = null;
+        TECH.mixerDest = null;
+        TECH.hasComputerAudio = false;
       }
 
-      function stopDesktopCapture() {
-        if (TECH.captureStream) {
-          TECH.captureStream.getTracks().forEach(t => { try { t.stop(); } catch {} });
-        }
-        TECH.captureStream = null;
-        TECH.captureTrack = null;
-      }
-
-      function handleCaptureEnded() {
-        if (!TECH.captureTrack && !TECH.captureStream) return;
-        stopDesktopCapture();
-        const slot = STATE.slots[0];
-        if (slot.techAssist && TECH.source === 'desktop') {
-          slot.techAssist = false;
-          clearAssistBuffer();
-          saveSettings();
-          showToast('Screen share ended — technical assistance turned off');
-          if (!recognitionWanted()) stopRecognition();
-          else restartRecognition();
+      // "Stop sharing" was clicked: drop the computer sound from the mix but
+      // keep listening with the microphone. The mixed track stays alive, so
+      // recognition never even restarts.
+      function handleDisplayEnded() {
+        if (!TECH.dispStream) return;
+        try { if (TECH.dispNode) TECH.dispNode.disconnect(); } catch {}
+        TECH.dispNode = null;
+        TECH.dispStream.getTracks().forEach(t => { try { t.stop(); } catch {} });
+        TECH.dispStream = null;
+        TECH.hasComputerAudio = false;
+        if (STATE.slots[0].listenOn) {
+          showToast('Screen share ended — Randy now hears just the microphone');
           render();
         }
       }
@@ -1838,7 +1807,7 @@
       function flushAssistBuffer() {
         TECH.bufferTimerId = null;
         const slot = STATE.slots[0];
-        if (!slot.techAssist) { clearAssistBuffer(); return; }
+        if (!slot.listenOn) { clearAssistBuffer(); return; }
         const candidate = TECH.buffer.trim();
 
         // Busy with a previous classify/answer — defer briefly so we don't
@@ -2072,6 +2041,9 @@
           slot.loading = false;
           slot.abortController = null;
         }
+        // Keep the follow-up window open for a bit, then drop back to
+        // passive listening automatically.
+        if (viaVoice && (VOICE.conversationMode || VOICE.awaitingCommand)) scheduleConvAutoExit();
         render();
         scrollChat();
       }
@@ -2222,65 +2194,58 @@
 
       function renderVoiceStage(slot, idx) {
         const name = escHtml(slot.voiceName || slot.label);
-        const voiceOn = !!slot.voiceEnabled;
+        const on = !!slot.listenOn;
         const isSpeaking = !!slot.isSpeaking;
         const loading = !!slot.loading;
         const sr = VOICE.srSupported;
-        const inConversation = VOICE.conversationMode && VOICE.activeSlot === idx;
-        const isListening = voiceOn && !loading && !isSpeaking &&
-          (inConversation || (VOICE.activeSlot === idx && VOICE.awaitingCommand));
+        const inConversation = on && VOICE.activeSlot === idx && !loading && !isSpeaking &&
+          (VOICE.conversationMode || VOICE.awaitingCommand);
 
         let orbClass, orbInner, action, title, statusText, statusClass, live = false;
         if (!sr) {
           orbClass = 'off'; orbInner = '<i data-lucide="mic-off" class="w-9 h-9"></i>';
-          action = 'noop'; title = 'Voice needs Chrome or Edge';
-          statusText = 'Voice unavailable'; statusClass = 'off';
+          action = 'noop'; title = 'Randy needs Chrome or Edge';
+          statusText = 'Use Chrome or Edge to talk to Randy'; statusClass = 'off';
         } else if (isSpeaking) {
           orbClass = 'speaking';
           orbInner = '<span class="sound-wave"><span class="sound-wave-bar"></span><span class="sound-wave-bar"></span><span class="sound-wave-bar"></span></span>';
-          action = 'stop-speaking'; title = 'Stop speaking';
-          statusText = 'Speaking…'; statusClass = 'speaking';
+          action = 'stop-speaking'; title = 'Tap to stop Randy talking';
+          statusText = 'Talking…'; statusClass = 'speaking';
         } else if (loading) {
           orbClass = 'thinking';
           orbInner = '<span class="orb-dots"><span class="typing-dot"></span><span class="typing-dot"></span><span class="typing-dot"></span></span>';
-          action = 'exit-conversation'; title = 'Stop';
+          action = 'exit-conversation'; title = 'Tap to cancel';
           statusText = 'Thinking…'; statusClass = '';
-        } else if (isListening) {
+        } else if (inConversation) {
           orbClass = 'listening'; orbInner = '<i data-lucide="mic" class="w-9 h-9"></i>';
-          action = 'exit-conversation'; title = 'Tap to stop listening';
-          statusText = 'Listening…'; statusClass = 'listening'; live = true;
-        } else if (slot.techAssist && TECH.source === 'desktop') {
-          orbClass = 'monitor'; orbInner = '<i data-lucide="ear" class="w-9 h-9"></i>';
-          action = 'toggle-assist'; title = 'Monitoring computer audio — tap to stop';
-          statusText = 'Monitoring computer audio'; statusClass = 'listening'; live = true;
-        } else if (slot.techAssist) {
-          orbClass = 'monitor'; orbInner = '<i data-lucide="ear" class="w-9 h-9"></i>';
-          action = 'arm-listening'; title = 'Monitoring the mic — tap to ask Randy directly';
-          statusText = 'Monitoring microphone'; statusClass = 'listening'; live = true;
-        } else if (voiceOn) {
-          orbClass = 'ready'; orbInner = '<i data-lucide="mic" class="w-9 h-9"></i>';
-          action = 'arm-listening'; title = 'Tap to talk to ' + name;
-          statusText = 'Ready — tap or say “Hey ' + name + '”'; statusClass = '';
+          action = 'exit-conversation'; title = 'Randy is listening to you — tap to stop';
+          statusText = 'Listening to you — ask away'; statusClass = 'listening'; live = true;
+        } else if (on) {
+          orbClass = 'monitor'; orbInner = '<i data-lucide="mic" class="w-9 h-9"></i>';
+          action = 'toggle-listen'; title = 'Randy is on — tap to turn him off';
+          statusText = TECH.hasComputerAudio
+            ? 'Listening: mic + computer sound'
+            : 'Listening: microphone';
+          statusClass = 'listening'; live = true;
         } else {
           orbClass = 'off'; orbInner = '<i data-lucide="mic-off" class="w-9 h-9"></i>';
-          action = 'arm-listening'; title = 'Tap to talk';
-          statusText = 'Voice off'; statusClass = 'off';
+          action = 'toggle-listen'; title = 'Tap to turn Randy on';
+          statusText = 'Off — tap the mic to start'; statusClass = 'off';
         }
 
+        // While Randy is busy talking or thinking, the orb does something
+        // else, so show a small "turn off" link to keep OFF one tap away.
+        const offLink = sr && on && (isSpeaking || loading || inConversation)
+          ? `<button class="stage-mutebtn" data-action="toggle-listen"><i data-lucide="power" class="w-3 h-3"></i>Turn Randy off</button>`
+          : '';
+
         const wake = !sr
-          ? '<div class="wh-label">Voice</div><div class="wh-phrase">Use <b>Chrome</b> or <b>Edge</b> to talk</div>'
-          : (slot.techAssist && TECH.source === 'desktop')
-            ? '<div class="wh-label">Computer audio</div><div class="wh-phrase">Randy hears the shared tab / screen</div>'
-            : voiceOn
-              ? '<div class="wh-label">Wake word</div><div class="wh-phrase">Say <b>“Hey ' + name + '”</b> or tap the orb</div>'
-              : '<div class="wh-label">Voice</div><div class="wh-phrase">Tap the orb to start talking</div>';
+          ? '<div class="wh-label">Voice</div><div class="wh-phrase">Use <b>Chrome</b> or <b>Edge</b></div>'
+          : on
+            ? '<div class="wh-label">Ask Randy directly</div><div class="wh-phrase">Say <b>“Hey ' + name + '”</b> and then your question</div>'
+            : '<div class="wh-label">One button</div><div class="wh-phrase">Tap the mic — Randy hears your call and answers tech questions in the chat</div>';
 
         const disabled = action === 'noop' ? 'disabled' : '';
-        const muteBtn = sr && voiceOn && !(slot.techAssist && TECH.source === 'desktop')
-          ? `<button class="stage-mutebtn" data-action="toggle-voice" data-idx="${idx}"><i data-lucide="mic-off" class="w-3 h-3"></i>Turn microphone off</button>`
-          : (sr && !voiceOn && !slot.techAssist
-            ? `<button class="stage-mutebtn" data-action="toggle-voice" data-idx="${idx}"><i data-lucide="mic" class="w-3 h-3"></i>Enable wake-word listening</button>`
-            : '');
 
         return `
           <div class="voice-stage">
@@ -2296,51 +2261,37 @@
               </button>
             </div>
             <div class="stage-name">${name}</div>
-            <div class="stage-role">Recast solution engineer — ask anything, or let him listen for questions on your call</div>
+            <div class="stage-role">Your Recast product expert. He listens, spots tech questions, and answers them in the chat.</div>
             <div class="stage-status ${statusClass}"><span class="st-dot"></span>${statusText}</div>
-            ${muteBtn}
-            ${renderAssistCard(slot, idx)}
+            ${offLink}
+            ${renderListenCard(slot)}
             <div class="wake-hint">${wake}</div>
           </div>`;
       }
 
-      function renderAssistCard(slot, idx) {
-        const on = !!slot.techAssist;
-        const sr = VOICE.srSupported;
+      function renderListenCard(slot) {
+        const on = !!slot.listenOn;
         const last = TECH.decisions[TECH.decisions.length - 1];
-        const desktopOk = VOICE.captureSupported;
         const statusLine = !on ? ''
           : TECH.pending
-            ? 'Checking a possible question…'
-            : (TECH.source === 'desktop'
-                ? (desktopListening() ? 'Listening to shared audio' : 'Waiting for shared audio…')
-                : 'Listening on the microphone')
-              + ' · ' + TECH.answered + ' answered / ' + TECH.heard + ' heard';
+            ? 'Checking a question…'
+            : (TECH.hasComputerAudio ? 'Hearing your mic + computer sound' : 'Hearing your microphone')
+              + ' · ' + TECH.answered + ' answered';
         return `
           <div class="assist-card">
             <div class="ac-head">
-              <div class="ac-title">Listen for technical assistance</div>
-              <div class="voice-switch ${on ? 'on' : ''} ${sr ? '' : 'disabled'}" role="switch" aria-checked="${on}" tabindex="0"
-                   title="${sr ? 'Randy listens for technical questions and answers like a solution engineer' : 'Needs Chrome or Edge'}"
-                   data-action="toggle-assist"></div>
+              <div class="ac-title">${on ? 'Randy is listening for tech questions' : 'How it works'}</div>
             </div>
-            <div class="ac-sub">Randy quietly listens, spots technical questions about the product, researches the support docs, and answers in chat${slot.speakAnswers ? ' and out loud' : ''}.</div>
+            <div class="ac-sub">${on
+              ? 'When someone asks a technical question, the answer shows up in the chat.'
+              : 'Tap the mic above. Randy listens to your microphone and your computer sound. When he hears a technical question, he answers it in the chat.'}</div>
+            <div class="ac-row">
+              <span class="ac-label"><i data-lucide="${slot.speakAnswers ? 'volume-2' : 'volume-x'}" class="w-3.5 h-3.5"></i>Read answers out loud</span>
+              <div class="voice-switch ${slot.speakAnswers ? 'on' : ''}" role="switch" aria-checked="${!!slot.speakAnswers}" tabindex="0"
+                   title="${slot.speakAnswers ? 'Randy reads each answer out loud' : 'Answers show in the chat only'}"
+                   data-action="toggle-speak-answers"></div>
+            </div>
             ${on ? `
-              <div class="src-pills" role="tablist" aria-label="Audio source">
-                <button class="src-pill ${TECH.source === 'mic' ? 'active' : ''}" data-action="set-assist-source" data-source="mic" title="Listen through the microphone">
-                  <i data-lucide="mic" class="w-3.5 h-3.5"></i>Microphone
-                </button>
-                <button class="src-pill ${TECH.source === 'desktop' ? 'active' : ''}" data-action="set-assist-source" data-source="desktop" ${desktopOk ? '' : 'disabled'}
-                        title="${desktopOk ? 'Capture a meeting tab or screen and listen to the computer audio' : 'Needs desktop Chrome or Edge'}">
-                  <i data-lucide="monitor-speaker" class="w-3.5 h-3.5"></i>Computer audio
-                </button>
-              </div>
-              <div class="ac-row">
-                <span class="ac-label"><i data-lucide="${slot.speakAnswers ? 'volume-2' : 'volume-x'}" class="w-3.5 h-3.5"></i>Speak answers aloud</span>
-                <div class="voice-switch ${slot.speakAnswers ? 'on' : ''}" role="switch" aria-checked="${!!slot.speakAnswers}" tabindex="0"
-                     title="${slot.speakAnswers ? 'Randy reads each answer summary out loud' : 'Answers appear in chat only'}"
-                     data-action="toggle-speak-answers"></div>
-              </div>
               <div class="ac-status">
                 <span class="acs-dot ${TECH.pending ? 'thinking' : ''}"></span>
                 <span>${escHtml(statusLine)}</span>
@@ -2348,9 +2299,9 @@
               ${last ? `
                 <div class="ac-last">
                   <i data-lucide="${last.accepted ? 'check' : 'minus'}" class="w-3 h-3 ${last.accepted ? 'ok' : 'skip'}" style="margin-top:1px"></i>
-                  <span class="txt">${escHtml(truncate(last.text, 110))}${last.topic ? ' · ' + escHtml(last.topic) : ''} (${Math.round((last.confidence || 0) * 100)}%)</span>
+                  <span class="txt">${escHtml(truncate(last.text, 110))} (${Math.round((last.confidence || 0) * 100)}%)</span>
                 </div>
-              ` : on ? '<div class="ac-last"><span class="txt" style="font-style:italic">Waiting for a technical question…</span></div>' : ''}
+              ` : '<div class="ac-last"><span class="txt" style="font-style:italic">Waiting for a question…</span></div>'}
             ` : ''}
           </div>`;
       }
@@ -2475,10 +2426,10 @@
         if (!VOICE.wantRunning || !VOICE.interimText) return '';
         if (VOICE.interimSlot !== slotIdx) return '';
         const slot = STATE.slots[slotIdx];
-        if (!slot) return '';
-        const assistMode = slot.techAssist && !VOICE.awaitingCommand && !VOICE.conversationMode;
-        if (!slot.voiceEnabled && !slot.techAssist) return '';
-        if (!desktopListening() && ttsEchoActive()) return '';
+        if (!slot || !slot.listenOn) return '';
+        const inConvo = VOICE.awaitingCommand || VOICE.conversationMode;
+        const assistMode = !inConvo;
+        if (inConvo && ttsEchoActive()) return '';
         const fontSize = expanded ? '' : 'font-size:11px;padding:6px 10px;';
         const cancelSize = expanded ? 'font-size:11px;padding:4px 10px;' : 'font-size:10px;padding:3px 8px;';
         return `
@@ -2502,15 +2453,15 @@
           <div class="passive-ribbon">
             <div class="pr-head">
               <span class="pr-dot ${TECH.pending ? 'thinking' : ''}"></span>
-              <span class="pr-label">Technical assistance</span>
-              <span class="pr-meta">${TECH.source === 'desktop' ? 'computer audio' : 'microphone'} · ${TECH.answered} answered / ${TECH.heard} heard</span>
+              <span class="pr-label">Randy is listening</span>
+              <span class="pr-meta">${TECH.hasComputerAudio ? 'mic + computer sound' : 'microphone'} · ${TECH.answered} answered</span>
               <span class="pr-spacer"></span>
-              <span class="pr-mute" title="${slot.speakAnswers ? 'Answers are spoken aloud' : 'Muted — answers appear in chat only'}">
+              <span class="pr-mute" title="${slot.speakAnswers ? 'Randy reads answers out loud' : 'Answers show in the chat only'}">
                 <i data-lucide="${slot.speakAnswers ? 'volume-2' : 'volume-x'}" class="w-3 h-3"></i>
               </span>
             </div>
             ${last ? `
-              <div class="pr-last ${last.accepted ? 'pr-accepted' : 'pr-skipped'}" title="${last.accepted ? 'Classified as a technical question and answered' : 'Skipped — not a technical question Randy should answer'}">
+              <div class="pr-last ${last.accepted ? 'pr-accepted' : 'pr-skipped'}" title="${last.accepted ? 'Randy heard a technical question and answered it' : 'Heard, but not a technical question — skipped'}">
                 <i data-lucide="${last.accepted ? 'check' : 'minus'}" class="w-3 h-3"></i>
                 <span class="pr-text">${escHtml(truncate(last.text, 90))}</span>
                 <span class="pr-conf">${Math.round((last.confidence || 0) * 100)}%</span>
@@ -2525,27 +2476,27 @@
         const msgs = slot.messages;
         const composerExpanded = STATE.composerExpanded;
         const hasText = (slot.inputText || '').trim().length > 0;
-        const voiceOn = !!slot.voiceEnabled;
+        const on = !!slot.listenOn;
         const isSpeaking = !!slot.isSpeaking;
         const inConversation = VOICE.conversationMode && VOICE.activeSlot === idx;
-        const isListening = voiceOn && !slot.loading && !isSpeaking &&
+        const isListening = on && !slot.loading && !isSpeaking &&
           (inConversation || (VOICE.activeSlot === idx && VOICE.awaitingCommand));
 
         return `
           <div class="chat-panel ${composerExpanded ? 'composer-expanded' : ''}" style="position:relative">
             <div class="conv-header">
-              <div class="chat-avatar ${voiceOn || slot.techAssist ? '' : 'muted'}" style="background:var(--primary);width:34px;height:34px;font-size:13px">
+              <div class="chat-avatar ${on ? '' : 'muted'}" style="background:var(--primary);width:34px;height:34px;font-size:13px">
                 ${escHtml(slot.label.charAt(0))}
                 <span class="status-dot"></span>
               </div>
               <div style="flex:1;min-width:0">
                 <div class="conv-title">${escHtml(slot.label)}</div>
                 <div class="conv-sub">${
-                  isSpeaking ? 'Speaking…'
-                  : isListening ? 'Listening…'
+                  isSpeaking ? 'Talking…'
+                  : isListening ? 'Listening to you…'
                   : slot.loading ? 'Thinking…'
-                  : slot.techAssist ? `<i data-lucide="ear" class="w-3 h-3 inline" style="vertical-align:-2px;margin-right:4px"></i>Technical assistance on · ${TECH.source === 'desktop' ? 'computer audio' : 'microphone'}`
-                  : 'Online · Recast solution engineer'
+                  : on ? `<i data-lucide="ear" class="w-3 h-3 inline" style="vertical-align:-2px;margin-right:4px"></i>Listening for tech questions`
+                  : 'Online · Recast product expert'
                 }</div>
               </div>
               <button class="overflow-btn" title="More actions" aria-label="More actions" aria-haspopup="true" aria-expanded="${STATE.cardMenuOpen ? 'true' : 'false'}" data-action="toggle-card-menu" data-idx="${idx}">
@@ -2566,13 +2517,13 @@
                 </div>
               ` : ''}
             </div>
-            ${slot.techAssist ? renderAssistRibbon(idx) : ''}
+            ${slot.listenOn ? renderAssistRibbon(idx) : ''}
             <div id="home-scroll-${idx}" class="flex-1 overflow-y-auto px-4 py-4 flex flex-col gap-3" style="background:var(--row);min-height:0">
               ${msgs.length === 0 ? `
                 <div class="flex-1 flex items-center justify-center">
                   <div class="text-center" style="max-width:340px">
                     <div style="width:46px;height:46px;border-radius:12px;background:var(--quote);display:grid;place-items:center;margin:0 auto 14px"><i data-lucide="message-square-text" class="w-5 h-5" style="color:var(--primary)"></i></div>
-                    <div style="font-size:13.5px;color:var(--gray);line-height:1.6">Ask about the Recast portfolio — type below, say <b style="color:var(--navy)">“Hey ${escHtml(slot.voiceName || slot.label)}”</b>, or flip on <b style="color:var(--navy)">technical assistance</b> to let Randy listen for questions on your call.</div>
+                    <div style="font-size:13.5px;color:var(--gray);line-height:1.6">Tap the <b style="color:var(--navy)">mic button</b> and Randy listens for tech questions and answers them here. You can also type a question below, or say <b style="color:var(--navy)">“Hey ${escHtml(slot.voiceName || slot.label)}”</b>.</div>
                     <div class="qp-row">
                       <button class="qp-chip" data-action="quick-prompt" data-q="What is Application Workspace and how is it different from Application Manager?">What is Application Workspace?</button>
                       <button class="qp-chip" data-action="quick-prompt" data-q="How does Application Workspace deploy apps to Intune-managed devices?">App delivery with Intune</button>
@@ -2688,7 +2639,7 @@
                 <div class="w-9 h-9 rounded-full grid place-items-center text-white font-bold" style="background:var(--primary)">${escHtml(slot.label.charAt(0))}</div>
                 <div>
                   <div class="text-sm font-semibold">${escHtml(slot.label)}</div>
-                  <div class="text-[10px] text-white/50">${slot.messages.length} messages${slot.voiceEnabled?' · voice on':''}${slot.techAssist?' · tech assist on':''}</div>
+                  <div class="text-[10px] text-white/50">${slot.messages.length} messages${slot.listenOn?' · listening':''}</div>
                 </div>
               </div>
               <div class="flex items-center gap-2">
@@ -2796,19 +2747,14 @@
               </div>
 
               <div class="full" style="border-top:1px dashed #e2e8f0;padding-top:16px">
-                <div class="flex items-center justify-between mb-3">
-                  <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide">
-                    <i data-lucide="mic" class="w-3 h-3 inline mr-1"></i>Voice Assistant
-                  </label>
-                  ${VOICE.srSupported ? `
-                    <div class="voice-switch ${slot.voiceEnabled?'on':''}" data-action="toggle-voice" data-idx="${es}" title="Toggle voice"></div>
-                  ` : `<span class="text-[11px] text-red-500">Not supported in this browser (Chrome/Edge only)</span>`}
-                </div>
+                <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">
+                  <i data-lucide="mic" class="w-3 h-3 inline mr-1"></i>Voice${VOICE.srSupported ? '' : ' — needs Chrome or Edge'}
+                </label>
 
                 <div class="mb-3">
                   <label class="block text-[11px] font-semibold text-slate-500 uppercase tracking-wide mb-1">Voice Personality Override</label>
                   <textarea id="setting-voicepersonality" rows="4" placeholder="${escAttr(DEFAULT_VOICE_PERSONALITY)}" ${VOICE.srSupported?'':'disabled'}>${escHtml(slot.voicePersonality || DEFAULT_VOICE_PERSONALITY)}</textarea>
-                  <p class="text-[11px] text-slate-400 mt-1">Appended to the system prompt whenever a response is triggered by voice. Kept out of text-only replies.</p>
+                  <p class="text-[11px] text-slate-400 mt-1">How Randy talks when he answers out loud. Typed answers don't use this.</p>
                 </div>
 
                 ${VOICE.ttsSupported ? `
@@ -2911,19 +2857,12 @@
               sendMessage(0);
               break;
             }
-            case 'toggle-voice': {
-              if (STATE.activeTab === 'settings') readFields();
-              toggleSlotVoice(idx !== null ? idx : 0);
-              break;
-            }
-            case 'arm-listening': armListening(); break;
-            case 'toggle-assist': setTechAssist(!STATE.slots[0].techAssist); break;
-            case 'set-assist-source': setTechSource(act.dataset.source === 'desktop' ? 'desktop' : 'mic'); break;
+            case 'toggle-listen': toggleListening(); break;
             case 'toggle-speak-answers': {
               const s = STATE.slots[0];
               s.speakAnswers = !s.speakAnswers;
               saveSettings();
-              showToast(s.speakAnswers ? 'Randy will speak answers aloud' : 'Randy is muted — answers in chat only');
+              showToast(s.speakAnswers ? 'Randy will read answers out loud' : 'Answers will show in the chat only');
               if (!s.speakAnswers && s.isSpeaking) stopSpeaking();
               render();
               break;
@@ -3055,9 +2994,7 @@
               s.label = 'Randy';
               s.voiceName = 'Randy';
               s.voicePersonality = DEFAULT_VOICE_PERSONALITY;
-              s.voiceEnabled = true;
               s.allowedDomains = DEFAULT_RESEARCH_DOMAINS.slice();
-              if (!recognitionWanted()) stopRecognition();
               saveSettings(); render(); break;
             }
           }
@@ -3143,12 +3080,8 @@
             if (STATE.activeTab === 'settings') render();
           };
         }
-        // Resume mic listening if voice (or mic-source tech assist) was on.
-        // Chrome needs a user gesture for the very first permission prompt, so
-        // this silently no-ops on cold loads — the first orb tap triggers it.
-        if (recognitionWanted() && VOICE.srSupported) {
-          try { startRecognition(); } catch {}
-        }
+        // Listening always starts OFF: turning it on needs a click anyway
+        // (the screen-share picker requires a user gesture).
       });
     </script>
   </body>
