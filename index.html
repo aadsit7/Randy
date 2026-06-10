@@ -263,11 +263,6 @@
       .ac-last .skip { color: var(--muted-blue); }
       .ac-last .txt { flex:1; min-width:0; overflow:hidden; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; }
 
-      .wake-hint { margin-top:12px; width:100%; background: rgba(255,255,255,.07); border:1px solid rgba(255,255,255,.14); border-radius:10px; padding:10px 14px; text-align:center; }
-      .wake-hint .wh-label { font-size:10px; letter-spacing:0.12em; text-transform:uppercase; color: var(--muted-blue); font-weight:700; margin-bottom:4px; }
-      .wake-hint .wh-phrase { font-size:13px; font-weight:600; color:#fff; }
-      .wake-hint .wh-phrase b { color: var(--cyan); font-weight:700; }
-
       /* Slimmer chat header */
       .conv-header { display:flex; align-items:center; gap:12px; padding:14px 16px; border-bottom:1px solid var(--divider); background:#fff; }
       .conv-title { font-size:15px; font-weight:700; color: var(--navy); letter-spacing:-0.01em; }
@@ -435,6 +430,7 @@
       // Technical-assist tuning.
       const ASSIST = {
         DEBOUNCE_MS: 1400,        // silence gap before a buffered utterance is classified
+        DEBOUNCE_FAST_MS: 900,    // shorter gap when the buffer already looks like a full question
         MIN_CHARS: 10,            // ignore fragments shorter than this
         MIN_WORDS: 3,             // ...or with fewer words than this
         CONF_THRESHOLD: 0.65,     // classifier confidence needed to auto-answer
@@ -443,7 +439,7 @@
         DECISIONS_KEEP: 8,        // ring buffer for the status UI
         MAX_BUFFER_CHARS: 420,    // cap the join buffer so run-on speech still flushes
         MAX_DEFERRALS: 4,         // re-checks while a prior classify/answer is busy
-        SEARCH_MAX_USES: 3,       // web searches per answer (latency budget)
+        SEARCH_MAX_USES: 2,       // web searches per answer (latency budget)
         HISTORY_PAIRS: 2,         // prior assist Q&A pairs sent as context
         CONV_EXIT_MS: 20000       // follow-up window after a voice answer
       };
@@ -551,6 +547,14 @@
       const QUESTIONISH_RE = /\?|\b(how|what|why|when|where|which|who|can|could|does|do(?:es)?n.?t|did|is|are|will|would|should)\b[\s\S]{3,}|^(walk me through|tell me|explain|show me)/i;
       function looksLikeTechQuestion(t) {
         return TECH_TOPIC_RE.test(t) && QUESTIONISH_RE.test(t);
+      }
+
+      // Tight question shapes for the fast path: clearly-formed technical
+      // questions skip the classifier round-trip entirely. Looser shapes
+      // still go through the classifier.
+      const INSTANT_QUESTION_RE = /^(how|what|why|when|where|which|who|can|could|does|do|did|is|are|will|would|should|tell me|walk me through|explain|show me)\b|\b(how (do|does|did|can|could|would|will)|what (is|are|about|does|happens)|can (it|you|we|they)|does (it|that|this)|is there|are there)\b/i;
+      function isInstantTechQuestion(t) {
+        return TECH_TOPIC_RE.test(t) && INSTANT_QUESTION_RE.test(t);
       }
 
       // Voice turns attach the (slower) web_search tool only when the prompt
@@ -1735,7 +1739,9 @@
         if (!t) return;
         TECH.buffer = (TECH.buffer + ' ' + t).trim().slice(-ASSIST.MAX_BUFFER_CHARS);
         if (TECH.bufferTimerId) clearTimeout(TECH.bufferTimerId);
-        TECH.bufferTimerId = setTimeout(flushAssistBuffer, ASSIST.DEBOUNCE_MS);
+        // Complete-looking questions get a shorter quiet-gap before firing.
+        const delay = isInstantTechQuestion(TECH.buffer) ? ASSIST.DEBOUNCE_FAST_MS : ASSIST.DEBOUNCE_MS;
+        TECH.bufferTimerId = setTimeout(flushAssistBuffer, delay);
       }
 
       function flushAssistBuffer() {
@@ -1771,6 +1777,17 @@
         }
 
         pushAssistContext(candidate);
+
+        // Fast path: an obvious technical question goes straight to the
+        // answer — no classifier round-trip (saves a couple of seconds).
+        if (isInstantTechQuestion(candidate)) {
+          recordAssistDecision(candidate, true, 0.85, 'instant');
+          TECH.lastSubmitted = candidate;
+          TECH.lastSubmittedAt = Date.now();
+          runAssistAnswer(0, candidate);
+          return;
+        }
+
         TECH.pending = true;
         renderAssistStatus();
         classifyUtterance(candidate, TECH.context.slice(0, -1))
@@ -2033,7 +2050,11 @@
 
           const baseBody = {
             model: MODELS.assist,
-            max_tokens: 1600,
+            max_tokens: 1100,
+            // Medium effort trades a sliver of depth for noticeably faster
+            // answers — right for a live call. (Older proxy deployments drop
+            // this field harmlessly.)
+            output_config: { effort: 'medium' },
             system: systemBlocks(slot.prompt + '\n\n' + ASSIST_STYLE),
             messages: prior.concat([{ role: 'user', content: question }])
           };
@@ -2198,12 +2219,6 @@
           ? `<button class="stage-mutebtn" data-action="toggle-listen"><i data-lucide="power" class="w-3 h-3"></i>Turn Randy off</button>`
           : '';
 
-        const wake = !sr
-          ? '<div class="wh-label">Voice</div><div class="wh-phrase">Use <b>Chrome</b> or <b>Edge</b></div>'
-          : on
-            ? '<div class="wh-label">Ask Randy directly</div><div class="wh-phrase">Say <b>“Hey ' + name + '”</b> and then your question</div>'
-            : '<div class="wh-label">One button</div><div class="wh-phrase">Tap the mic — Randy hears your call and answers tech questions in the chat</div>';
-
         const disabled = action === 'noop' ? 'disabled' : '';
 
         return `
@@ -2224,7 +2239,6 @@
             <div class="stage-status ${statusClass}"><span class="st-dot"></span>${statusText}</div>
             ${offLink}
             ${renderListenCard(slot)}
-            <div class="wake-hint">${wake}</div>
           </div>`;
       }
 
@@ -2237,13 +2251,7 @@
             : 'Listening · ' + TECH.answered + ' answered / ' + TECH.heard + ' heard';
         return `
           <div class="assist-card">
-            <div class="ac-head">
-              <div class="ac-title">${on ? 'Randy is listening for tech questions' : 'How it works'}</div>
-            </div>
-            <div class="ac-sub">${on
-              ? 'When someone asks a technical question, the answer shows up in the chat. Tip: keep your sound on speakers, not headphones, so Randy can hear your call too.'
-              : 'Tap the mic above. Randy listens through your microphone — he hears you and your call on the speakers. When he hears a technical question, he answers it in the chat.'}</div>
-            <div class="ac-row">
+            <div class="ac-row" style="margin-top:0">
               <span class="ac-label"><i data-lucide="${slot.speakAnswers ? 'volume-2' : 'volume-x'}" class="w-3.5 h-3.5"></i>Read answers out loud</span>
               <div class="voice-switch ${slot.speakAnswers ? 'on' : ''}" role="switch" aria-checked="${!!slot.speakAnswers}" tabindex="0"
                    title="${slot.speakAnswers ? 'Randy reads each answer out loud' : 'Answers show in the chat only'}"
