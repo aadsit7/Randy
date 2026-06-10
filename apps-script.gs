@@ -12,14 +12,15 @@
  *        Execute as: Me
  *        Who has access: Anyone
  *      Copy the /exec URL.
- *   5. Paste that URL into Randy's Settings → "Google Sheet Webhook URL".
+ *   5. Paste that URL into Randy's Settings → "Apps Script Proxy URL".
  *      You do not need to enter an Anthropic API key in the app anymore.
  *
  * Endpoints:
  *   GET  ?action=list_history          → { history: [{session_id, date, timestamp, pairs:[{question,answer}]}] }
  *   GET  ?action=ping                  → { ok:true, has_api_key:bool, sheet:"Randy Tasks" }
  *   GET  (no action)                   → { ok:true, has_api_key:bool }  (key is never returned)
- *   POST { action:"chat", system, messages, model?, max_tokens?, tools?, session_id?, save?:true }
+ *   POST { action:"chat", system, messages, model?, max_tokens?, tools?,
+ *          output_config?, session_id?, save?:true }
  *                                      → { ok:true, reply, sources, model, usage }
  *   POST { question, answer, sources?, model?, session_id? }  (legacy save)
  *                                      → { ok:true }
@@ -35,8 +36,13 @@ var TASKS_HEADERS = ['Question', 'Answer', 'Sources', 'Date', 'Model', 'Session_
 
 var ANTHROPIC_URL     = 'https://api.anthropic.com/v1/messages';
 var ANTHROPIC_VERSION = '2023-06-01';
-var DEFAULT_MODEL     = 'claude-sonnet-4-5';
-var DEFAULT_MAX_TOK   = 1024;
+var DEFAULT_MODEL     = 'claude-sonnet-4-6';
+var DEFAULT_MAX_TOK   = 2048;
+
+// Transient Anthropic statuses worth retrying (rate limit / overload / 5xx).
+var RETRYABLE_STATUS  = [429, 500, 502, 503, 529];
+var MAX_RETRIES       = 2;       // total attempts = 1 + MAX_RETRIES
+var MAX_CONTINUATIONS = 3;       // pause_turn re-sends for server-side tool loops
 
 /* ---------- HTTP entry points ---------- */
 
@@ -90,57 +96,44 @@ function handleChat_(body) {
     model:      String(body.model || DEFAULT_MODEL),
     max_tokens: Number(body.max_tokens) || DEFAULT_MAX_TOK,
     stream:     false, // Apps Script can't stream back to the browser
+    // `system` may be a plain string or an array of text blocks (the client
+    // sends an array with cache_control so the persona prefix gets cached).
     system:     body.system || '',
     messages:   Array.isArray(body.messages) ? body.messages : []
   };
   if (Array.isArray(body.tools) && body.tools.length) payload.tools = body.tools;
-
-  var res = UrlFetchApp.fetch(ANTHROPIC_URL, {
-    method:             'post',
-    contentType:        'application/json',
-    headers: {
-      'x-api-key':         apiKey,
-      'anthropic-version': ANTHROPIC_VERSION
-    },
-    payload:            JSON.stringify(payload),
-    muteHttpExceptions: true
-  });
-
-  var status = res.getResponseCode();
-  var text   = res.getContentText();
-  if (status < 200 || status >= 300) {
-    var msg = 'Anthropic API error (' + status + ')';
-    try { var j = JSON.parse(text); if (j && j.error && j.error.message) msg = j.error.message; } catch (e2) {}
-    return { ok: false, status: status, error: msg };
+  if (body.output_config && typeof body.output_config === 'object') {
+    payload.output_config = body.output_config;
   }
 
-  var parsed;
-  try { parsed = JSON.parse(text); }
-  catch (err) { return { ok: false, error: 'Bad response from Anthropic' }; }
+  var parsed = fetchAnthropic_(apiKey, payload);
+  if (parsed.ok === false) return parsed;
+
+  // Server-side tools (web search) can pause the sampling loop. Re-send the
+  // conversation with the assistant turn appended and the API resumes where
+  // it left off. Bounded so a misbehaving loop can't run forever.
+  var continuations = 0;
+  while (parsed.stop_reason === 'pause_turn' && continuations < MAX_CONTINUATIONS) {
+    continuations++;
+    var resumed = {
+      model:      payload.model,
+      max_tokens: payload.max_tokens,
+      stream:     false,
+      system:     payload.system,
+      messages:   payload.messages.concat([{ role: 'assistant', content: parsed.content }])
+    };
+    if (payload.tools) resumed.tools = payload.tools;
+    if (payload.output_config) resumed.output_config = payload.output_config;
+    var next = fetchAnthropic_(apiKey, resumed);
+    if (next.ok === false) break; // keep what we have rather than failing the turn
+    parsed = next;
+  }
 
   var extracted = extractReply_(parsed);
 
   if (body.save !== false && extracted.text) {
     try {
-      var lastUser = null;
-      for (var i = payload.messages.length - 1; i >= 0; i--) {
-        if (payload.messages[i] && payload.messages[i].role === 'user') {
-          lastUser = payload.messages[i];
-          break;
-        }
-      }
-      var question = '';
-      if (lastUser) {
-        if (typeof lastUser.content === 'string') question = lastUser.content;
-        else if (Array.isArray(lastUser.content)) {
-          for (var k = 0; k < lastUser.content.length; k++) {
-            var block = lastUser.content[k];
-            if (block && block.type === 'text' && typeof block.text === 'string') {
-              question += (question ? '\n' : '') + block.text;
-            }
-          }
-        }
-      }
+      var question = lastUserText_(payload.messages);
       if (question) {
         appendRow_({
           question:   question,
@@ -160,11 +153,75 @@ function handleChat_(body) {
     ok:          true,
     reply:       extracted.text,
     sources:     extracted.sources,
-    content:     parsed.content,
     model:       parsed.model,
     stop_reason: parsed.stop_reason,
     usage:       parsed.usage
   };
+}
+
+// One Anthropic round trip with bounded retry on transient failures.
+// Returns the parsed response object, or { ok:false, error } on hard failure.
+function fetchAnthropic_(apiKey, payload) {
+  var lastError = 'Anthropic request failed';
+  for (var attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    if (attempt > 0) Utilities.sleep(1000 * Math.pow(2, attempt - 1)); // 1s, 2s
+    var res;
+    try {
+      res = UrlFetchApp.fetch(ANTHROPIC_URL, {
+        method:             'post',
+        contentType:        'application/json',
+        headers: {
+          'x-api-key':         apiKey,
+          'anthropic-version': ANTHROPIC_VERSION
+        },
+        payload:            JSON.stringify(payload),
+        muteHttpExceptions: true
+      });
+    } catch (netErr) {
+      lastError = 'Network error: ' + String((netErr && netErr.message) || netErr);
+      continue;
+    }
+
+    var status = res.getResponseCode();
+    var text   = res.getContentText();
+
+    if (status >= 200 && status < 300) {
+      try { return JSON.parse(text); }
+      catch (err) { return { ok: false, error: 'Bad response from Anthropic' }; }
+    }
+
+    var msg = 'Anthropic API error (' + status + ')';
+    try {
+      var j = JSON.parse(text);
+      if (j && j.error && j.error.message) msg = j.error.message;
+    } catch (e2) {}
+    lastError = msg;
+
+    if (RETRYABLE_STATUS.indexOf(status) === -1) {
+      return { ok: false, status: status, error: msg };
+    }
+  }
+  return { ok: false, error: lastError };
+}
+
+function lastUserText_(messages) {
+  for (var i = messages.length - 1; i >= 0; i--) {
+    var m = messages[i];
+    if (!m || m.role !== 'user') continue;
+    if (typeof m.content === 'string') return m.content;
+    if (Array.isArray(m.content)) {
+      var parts = [];
+      for (var k = 0; k < m.content.length; k++) {
+        var block = m.content[k];
+        if (block && block.type === 'text' && typeof block.text === 'string') {
+          parts.push(block.text);
+        }
+      }
+      return parts.join('\n');
+    }
+    return '';
+  }
+  return '';
 }
 
 function extractReply_(parsed) {
