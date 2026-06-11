@@ -458,6 +458,15 @@
         '- Compares to alternatives when useful, including non-Recast tools, without trashing them.',
         '- Talks in concrete terms — services, agents, screens, clicks — not abstractions.',
         '',
+        '# How You Talk',
+        'You write the way you would talk to a colleague at their desk, not the way a vendor writes a datasheet:',
+        '- Use contractions naturally — "it\'s", "you\'ll", "doesn\'t", "that\'s". Stiff, uncontracted prose reads as robotic.',
+        '- Vary your rhythm. Mix short punchy sentences with longer ones. Three same-length sentences in a row sounds like a script.',
+        '- Speak in first person where it fits: "I\'d start with...", "what I usually see is...", "honestly, that depends on...".',
+        '- Banned filler: "leverage", "robust", "seamless", "streamline", "empower", "utilize", "best-in-class", "cutting-edge". Say what the thing does instead.',
+        '- Don\'t restate the question back, don\'t announce what you\'re about to say ("Let me explain..."), and don\'t close with a summary of what you just said.',
+        '- It\'s fine to have a take. "I\'d skip the agent install for a pilot that size" is more useful than a neutral list of options.',
+        '',
         'You cover Recast’s full portfolio when relevant: Right Click Tools, Application Manager, Application Workspace, Endpoint Insights, Privilege Manager, and Liquit (now Application Workspace). Application Workspace is your home turf and the area you go deepest on.',
         '',
         '# Product Bias — Application Workspace',
@@ -499,12 +508,12 @@
         '2. Then 3-7 bullet points, each starting with "- ". One concrete fact, step, or trade-off per bullet. Bold key terms with **double asterisks**. Keep each bullet to one or two short sentences.',
         '3. If steps are needed, use a numbered list ("1.", "2.", ...) instead of bullets for that part.',
         '4. After the bullets, output a line containing exactly: ===SPOKEN===',
-        '5. After that marker, write a 2-3 sentence conversational summary of the answer, as if speaking it aloud to a colleague. Natural spoken language, no formatting, say numbers the way people talk.',
+        '5. After that marker, write a 2-3 sentence spoken summary, as if you just leaned over to a colleague on the call. Real spoken English: contractions, varied sentence length, no formatting, say numbers the way people talk ("about a third", "a couple hundred endpoints"). A brief natural lead-in is fine ("Short answer — yes.", "So the way that works is..."), but never "Great question" and never read the bullets back word for word.',
         '',
         'Total length before the marker: under 180 words. Never mention searching, docs, or sources anywhere.'
       ].join('\n');
 
-      const DEFAULT_VOICE_PERSONALITY = "Keep all responses to 2-3 short sentences since they will be spoken aloud. Use natural conversational language. Say numbers the way people talk — like '120 grand' not '$120,000'. Never use markdown, bullet points, or formatting. Be direct and warm.";
+      const DEFAULT_VOICE_PERSONALITY = "Your reply will be spoken aloud, so write it the way you'd actually say it. Keep it to 2-3 short sentences. Use contractions and everyday phrasing, and vary the sentence length — flat, uniform sentences sound robotic. An occasional natural lead-in is good ('Yeah, so...', 'Honestly,', 'Short answer —') but never 'Great question.' Say numbers the way people talk — '120 grand', 'about a third', 'a couple hundred'. No markdown, no lists, no formatting of any kind. Warm, direct, like a colleague answering across the desk.";
 
       // Classifier gate for overheard utterances.
       const CLASSIFIER_SYSTEM = [
@@ -1060,16 +1069,52 @@
 
       const TTS_STATE = { speakingSlot: null };
 
+      // Rank voices by how human they sound. Modern neural voices ("Natural",
+      // "Online", Google's hosted voices) beat the legacy desktop synths by a
+      // mile, so quality outranks gender — a natural-sounding voice that isn't
+      // deep still sounds far less robotic than a deep legacy one.
+      function scoreVoice(v) {
+        let s = 0;
+        if (/\b(natural|neural)\b/i.test(v.name)) s += 16;
+        if (/\b(premium|enhanced|plus)\b/i.test(v.name)) s += 10;
+        if (/\bonline\b/i.test(v.name)) s += 6;
+        if (/google/i.test(v.name)) s += 6;
+        if (/\b(andrew|brian|christopher|guy|davis|roger|steffan|ryan|aaron|david|daniel|alex|tom|mark|eric|fred|george|james)\b/i.test(v.name)) s += 3;
+        if (/male/i.test(v.name) && !/female/i.test(v.name)) s += 3;
+        if (/female|\b(zira|susan|hazel|samantha|victoria|karen|moira|tessa|fiona|jenny|aria|michelle|sonia|libby|emma|ava|clara|ana)\b/i.test(v.name)) s -= 4;
+        if (/^en[-_]us/i.test(v.lang)) s += 2;
+        if (/desktop/i.test(v.name)) s -= 2;
+        return s;
+      }
+
       function pickDeepVoice() {
         if (!VOICE.ttsSupported) return null;
         const voices = window.speechSynthesis.getVoices() || [];
         if (voices.length === 0) return null;
         const enVoices = voices.filter(v => /^en(-|_|$)/i.test(v.lang));
         const pool = enVoices.length ? enVoices : voices;
-        return pool.find(v => /male/i.test(v.name))
-            || pool.find(v => /\b(david|daniel|alex|tom|mark|eric|fred|george|james|guy)\b/i.test(v.name))
-            || pool.find(v => /google us english/i.test(v.name))
-            || pool[0];
+        return pool.slice().sort((a, b) => scoreVoice(b) - scoreVoice(a))[0];
+      }
+
+      // Rewrites text the way a person would actually say it, so the speech
+      // engine doesn't trip over notation it reads literally or mispronounces.
+      function prepareForSpeech(text) {
+        return String(text || '')
+          .replace(/https?:\/\/([^\s\/]+)\S*/gi, '$1')  // out loud, a URL is just its hostname
+          .replace(/\bConfigMgr\b/gi, 'Config Manager')
+          .replace(/\bSCCM\b/g, 'S C C M')              // engines say "seck-em"
+          .replace(/\bMECM\b/g, 'M E C M')
+          .replace(/\be\.g\.,?\s*/gi, 'for example, ')
+          .replace(/\bi\.e\.,?\s*/gi, 'that is, ')
+          .replace(/\betc\.(\s|$)/gi, 'and so on$1')
+          .replace(/\bvs\.?(\s|$)/gi, 'versus$1')
+          .replace(/(\w)\s*\/\s*(\w)/g, '$1 or $2')     // "Intune/ConfigMgr"
+          .replace(/\s*&\s*/g, ' and ')
+          .replace(/\s+[—–]\s+/g, ', ')                 // dashes don't pause; commas do
+          .replace(/\s*\(\s*/g, ', ')
+          .replace(/\s*\)\s*([.,;:!?])?/g, (m, p) => (p || ',') + ' ')
+          .replace(/\s{2,}/g, ' ')
+          .trim();
       }
 
       // True while Randy is speaking OR within the tail window after speech
@@ -1207,7 +1252,7 @@
       }
 
       function playTtsChunk(idx, q, text) {
-        const clean = stripMarkdown(text);
+        const clean = prepareForSpeech(stripMarkdown(text));
         if (!clean) return Promise.resolve();
         if (!VOICE.ttsSupported) return Promise.resolve();
         return new Promise((resolve) => {
@@ -1216,8 +1261,11 @@
           const u = new SpeechSynthesisUtterance(clean);
           const v = pickDeepVoice();
           if (v) u.voice = v;
-          u.pitch = 0.85;
-          u.rate = 0.95;
+          // Neural voices are tuned at their defaults; bending pitch is what
+          // made the old output sound synthetic. A whisper-faster rate reads
+          // as engaged rather than narrated.
+          u.pitch = 1.0;
+          u.rate = 1.04;
           appendRecentTts(clean);
           pauseRecognitionForTts();
           slot.isSpeaking = true;
@@ -1241,7 +1289,7 @@
 
       function speakText(text, idx, msgIdx) {
         if (!VOICE.ttsSupported) return;
-        const clean = stripMarkdown(text);
+        const clean = prepareForSpeech(stripMarkdown(text));
         if (!clean) return;
         STATE.slots.forEach((_, i) => teardownTtsQueue(i));
         try { window.speechSynthesis.cancel(); } catch {}
@@ -1249,8 +1297,8 @@
         const u = new SpeechSynthesisUtterance(clean);
         const v = pickDeepVoice();
         if (v) u.voice = v;
-        u.pitch = 0.85;
-        u.rate = 0.95;
+        u.pitch = 1.0;
+        u.rate = 1.04;
         u.onstart = () => {
           STATE.slots[idx].isSpeaking = true;
           TTS_STATE.speakingSlot = idx;
@@ -2759,9 +2807,16 @@
 
                 ${VOICE.ttsSupported ? `
                   <div>
-                    <label class="block text-[11px] font-semibold text-slate-500 uppercase tracking-wide mb-1">Available Speech Voices <span class="text-slate-400 normal-case">(picked automatically — prefers deep male)</span></label>
+                    <label class="block text-[11px] font-semibold text-slate-500 uppercase tracking-wide mb-1">Available Speech Voices <span class="text-slate-400 normal-case">(picked automatically — prefers natural-sounding voices)</span></label>
                     <select id="setting-voice-list" disabled style="opacity:0.85;width:100%;padding:10px 14px;border:2px solid #e2e8f0;border-radius:10px;font-size:14px">
-                      ${(window.speechSynthesis.getVoices() || []).filter(v => /^en(-|_|$)/i.test(v.lang)).map(v => `<option>${escHtml(v.name)} — ${escHtml(v.lang)}</option>`).join('') || '<option>(voices will load after first click)</option>'}
+                      ${(() => {
+                        const picked = pickDeepVoice();
+                        const opts = (window.speechSynthesis.getVoices() || [])
+                          .filter(v => /^en(-|_|$)/i.test(v.lang))
+                          .map(v => `<option${picked && v.name === picked.name ? ' selected' : ''}>${escHtml(v.name)} — ${escHtml(v.lang)}${picked && v.name === picked.name ? ' (in use)' : ''}</option>`)
+                          .join('');
+                        return opts || '<option>(voices will load after first click)</option>';
+                      })()}
                     </select>
                     <button class="btn-outline" style="font-size:11px;padding:5px 12px;margin-top:8px" data-action="preview-voice" data-idx="${es}">
                       <i data-lucide="play" class="w-3 h-3 inline mr-1"></i> Preview Voice
@@ -2891,7 +2946,7 @@
             }
             case 'preview-voice': {
               if (STATE.activeTab === 'settings') readFields();
-              speakText('Hello! This is how I sound.', idx !== null ? idx : 0);
+              speakText("Hey, it's Randy. This is how I'll sound when I answer out loud.", idx !== null ? idx : 0);
               break;
             }
             case 'save-settings': {
