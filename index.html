@@ -615,6 +615,11 @@
         };
       }
 
+      // Settings is gated behind this password (asked once per page load).
+      // Note: this is a soft lock against casual clicks, not real security —
+      // anyone reading the page source can see it.
+      const SETTINGS_PASSWORD = 'recast2026';
+
       const STATE = {
         activeTab: 'home',
         expandedSlot: null,
@@ -623,6 +628,7 @@
         historyConfirmDeleteId: null,
         composerExpanded: false,
         cardMenuOpen: false,
+        settingsUnlocked: false,
         slots: [makeSlot()]
       };
 
@@ -2257,8 +2263,8 @@
                 <button class="tab-btn ${STATE.activeTab==='home'?'active':''}" data-action="switch-tab" data-tab="home">
                   <i data-lucide="messages-square" class="w-4 h-4"></i> Chat
                 </button>
-                <button class="tab-btn ${STATE.activeTab==='settings'?'active':''}" data-action="switch-tab" data-tab="settings">
-                  <i data-lucide="settings" class="w-4 h-4"></i> Settings
+                <button class="tab-btn ${STATE.activeTab==='settings'?'active':''}" data-action="switch-tab" data-tab="settings" title="Settings" aria-label="Settings">
+                  <i data-lucide="settings" class="w-4 h-4"></i>
                 </button>
               </div>
             </div>
@@ -2872,7 +2878,18 @@
           if (STATE.cardMenuOpen && action !== 'toggle-card-menu') STATE.cardMenuOpen = false;
 
           switch (action) {
-            case 'switch-tab': STATE.activeTab = act.dataset.tab; render(); break;
+            case 'switch-tab': {
+              const tab = act.dataset.tab;
+              if (tab === 'settings' && !STATE.settingsUnlocked) {
+                const entered = window.prompt('Enter the settings password:');
+                if (entered === null) break;
+                if (entered !== SETTINGS_PASSWORD) { showToast('Wrong password'); break; }
+                STATE.settingsUnlocked = true;
+              }
+              STATE.activeTab = tab;
+              render();
+              break;
+            }
             case 'toggle-history': STATE.historyOpen = !STATE.historyOpen; render(); break;
             case 'refresh-history': fetchHistoryFromSheet(); break;
             case 'toggle-composer': {
