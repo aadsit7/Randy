@@ -181,8 +181,7 @@
       .tts-btn:hover { color: #475569; background: rgba(148,163,184,0.12); }
       .tts-btn.playing { color: var(--primary); }
 
-      /* ===== Live interim transcript bubble ===== */
-      .interim-bubble { opacity: 0.6; font-style: italic; border: 1px dashed rgba(37,99,235,0.4); background: rgba(37,99,235,0.06) !important; color: #334155 !important; }
+      /* ===== Live transcript caret (voice stage "Hearing live" panel) ===== */
       .interim-caret { display: inline-block; width: 6px; margin-left: 2px; animation: interim-blink 1s steps(2,end) infinite; color: #2563eb; }
       @keyframes interim-blink { 50% { opacity: 0; } }
       @media (prefers-reduced-motion: reduce) { .interim-caret { animation: none; } }
@@ -258,6 +257,13 @@
       .ac-status .acs-dot { width:8px; height:8px; border-radius:50%; background:#34d399; flex-shrink:0; box-shadow: 0 0 0 0 rgba(52,211,153,.55); animation: statusPulse 2s ease-out infinite; }
       .ac-status .acs-dot.thinking { background: var(--cyan-hi); animation: statusPulse 0.9s ease-out infinite; }
       .ac-status .acs-dot.off { background: var(--muted-blue); animation:none; }
+      .ac-live { margin-top:12px; background: rgba(0,0,0,.18); border:1px solid rgba(255,255,255,.12); border-radius:8px; padding:8px 10px; }
+      .ac-live-label { font-size:9.5px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color: var(--muted-blue); display:flex; align-items:center; gap:5px; margin-bottom:4px; }
+      .ac-live-text { font-size:11.5px; line-height:1.45; color:#fff; min-height:17px; word-break:break-word; overflow:hidden; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; }
+      #live-transcript-text:empty::before { content:'Waiting for speech…'; font-style:italic; color: var(--muted-blue); }
+      .ac-live .interim-caret { color: var(--cyan-hi); }
+      .ac-live .ac-cancel { display:none; margin-top:7px; background:rgba(239,68,68,.18); color:#fca5a5; border:1px solid rgba(239,68,68,.45); border-radius:9999px; font-size:10px; padding:3px 10px; cursor:pointer; font-weight:600; line-height:1; }
+      .ac-live.hearing .ac-cancel { display:inline-flex; }
       .ac-last { margin-top:8px; font-size:10.5px; line-height:1.45; color: var(--muted-blue); padding:0 2px; display:flex; gap:6px; align-items:flex-start; }
       .ac-last .ok { color:#6EE7B7; }
       .ac-last .skip { color: var(--muted-blue); }
@@ -319,15 +325,6 @@
       @keyframes passivePulse  { 0%{box-shadow:0 0 0 0 rgba(16,185,129,0.55);}70%{box-shadow:0 0 0 8px rgba(16,185,129,0);}100%{box-shadow:0 0 0 0 rgba(16,185,129,0);} }
       @keyframes passivePulseFast { 0%{box-shadow:0 0 0 0 rgba(0,112,243,0.55);}70%{box-shadow:0 0 0 6px rgba(0,112,243,0);}100%{box-shadow:0 0 0 0 rgba(0,112,243,0);} }
       @media (prefers-reduced-motion: reduce) { .passive-ribbon .pr-dot { animation: none; } }
-      .passive-ribbon .pr-last, .passive-ribbon .pr-empty { display: flex; align-items: center; gap: 8px; font-size: 11.5px; padding: 4px 6px; border-radius: 6px; line-height: 1.3; }
-      .passive-ribbon .pr-empty { color: #94a3b8; font-style: italic; padding-left: 16px; }
-      .passive-ribbon .pr-last .pr-text { flex: 1; min-width: 0; color: var(--navy); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-      .passive-ribbon .pr-last .pr-conf { font-size: 10px; font-weight: 700; color: #64748b; letter-spacing: 0.04em; flex-shrink: 0; }
-      .passive-ribbon .pr-accepted { background: rgba(16,185,129,0.08); color: #047857; }
-      .passive-ribbon .pr-accepted .pr-text { color: #064e3b; font-weight: 500; }
-      .passive-ribbon .pr-accepted .pr-conf { color: #047857; }
-      .passive-ribbon .pr-skipped { color: #94a3b8; }
-      .passive-ribbon .pr-skipped .pr-text { color: #64748b; }
 
       .menu-toggle-state { margin-left: auto; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 9999px; background: #f1f5f9; color: #64748b; letter-spacing: 0.04em; }
       .menu-toggle-state.on { background: #d1fae5; color: #047857; }
@@ -668,6 +665,7 @@
         lastSubmitted: '',
         lastSubmittedAt: 0,
         decisions: [],            // ring buffer {text, accepted, confidence, topic, ts}
+        recentPairs: [],          // last assist Q&As — API context that survives chat archiving
         heard: 0,
         answered: 0
       };
@@ -860,9 +858,30 @@
         return pairs;
       }
 
-      // "New chat": tuck the current conversation into History and start
-      // fresh. The sheet already has every answered Q&A (the proxy saves as
-      // it goes), so this is instant and nothing is lost.
+      // Tuck the current conversation into History and reset the chat to
+      // empty. The sheet already has every answered Q&A (the proxy saves as
+      // it goes), so this is instant and nothing is lost. Rotating the
+      // session id keeps the sheet's grouping in step with the local entry.
+      // Returns true when something was actually archived.
+      function archiveChatToHistory(slot) {
+        const pairs = collectPairs(slot);
+        if (!pairs.length) return false;
+        const ts = Date.now();
+        saveLocalHistoryEntry({
+          id: SESSION_ID + '-' + ts,
+          session_id: SESSION_ID,
+          date: new Date(ts).toLocaleDateString('en-US'),
+          timestamp: ts,
+          pairs,
+          preview: pairs[0].question.substring(0, 120)
+        });
+        slot.messages = [];
+        SESSION_ID = genSessionId();
+        setTimeout(() => fetchHistoryFromSheet({ silent: true }), 800);
+        return true;
+      }
+
+      // "New chat": archive and start fresh.
       function newChat() {
         const slot = STATE.slots[0];
         if (slot.abortController) { try { slot.abortController.abort(); } catch {} slot.abortController = null; }
@@ -870,23 +889,13 @@
         if (slot.isSpeaking) stopSpeaking();
         if (VOICE.conversationMode || VOICE.awaitingCommand) exitConversationMode();
         slot.loading = false;
-        const pairs = collectPairs(slot);
-        if (pairs.length) {
-          const ts = Date.now();
-          saveLocalHistoryEntry({
-            id: SESSION_ID + '-' + ts,
-            session_id: SESSION_ID,
-            date: new Date(ts).toLocaleDateString('en-US'),
-            timestamp: ts,
-            pairs,
-            preview: pairs[0].question.substring(0, 120)
-          });
-          setTimeout(() => fetchHistoryFromSheet({ silent: true }), 800);
+        const archived = archiveChatToHistory(slot);
+        if (!archived) {
+          slot.messages = [];
+          SESSION_ID = genSessionId();
         }
-        slot.messages = [];
         slot.inputText = '';
-        SESSION_ID = genSessionId();
-        showToast(pairs.length ? 'New chat — the old one is saved in History' : 'New chat');
+        showToast(archived ? 'New chat — the old one is saved in History' : 'New chat');
         render();
       }
 
@@ -1658,12 +1667,24 @@
       }
 
       /* ================================================================
-       * INTERIM TRANSCRIPT (live preview bubble)
+       * INTERIM TRANSCRIPT (live "Hearing live" panel on the voice stage)
        * ================================================================ */
 
       function interimTargetSlot() {
         if (VOICE.activeSlot !== null && VOICE.awaitingCommand) return VOICE.activeSlot;
         return listeningOn() ? 0 : null;
+      }
+
+      // Patch the stage panel's transcript text in place when it's mounted;
+      // fall back to a render only when it isn't (e.g. listening just turned
+      // on). Returns true when the cheap path worked.
+      function patchLiveTranscript(text) {
+        const wrap = document.getElementById('live-transcript');
+        const span = document.getElementById('live-transcript-text');
+        if (!wrap || !span) return false;
+        span.textContent = text;
+        wrap.classList.toggle('hearing', !!text);
+        return true;
       }
 
       function updateInterim(text) {
@@ -1680,12 +1701,7 @@
         VOICE.interimText = trimmed;
         VOICE.interimSlot = target;
 
-        // Cheap path: patch the existing node's text in place.
-        const existing = document.getElementById('interim-bubble-' + target);
-        if (existing && prevSlot === target) {
-          const span = existing.querySelector('.interim-text');
-          if (span) { span.textContent = trimmed; return; }
-        }
+        if (patchLiveTranscript(trimmed)) return;
         // One render to mount the node — but never while the user is typing,
         // since render() rebuilds the DOM and would steal composer focus.
         if (prevText !== trimmed || prevSlot !== target) {
@@ -1703,6 +1719,7 @@
         if (!VOICE.interimText && VOICE.interimSlot === null) return;
         VOICE.interimText = '';
         VOICE.interimSlot = null;
+        if (patchLiveTranscript('')) return;
         if (!isComposerFocused()) render();
       }
 
@@ -2067,6 +2084,15 @@
         if (slot.loading) return;
         slot.loading = true;
 
+        // Every auto-answered question starts a visually fresh chat: the
+        // previous Q&A slides into Saved Conversations so the panel always
+        // shows just the question being answered now. Follow-up context is
+        // preserved separately in TECH.recentPairs.
+        if (collectPairs(slot).length) {
+          if (slot.isSpeaking) stopSpeaking();
+          archiveChatToHistory(slot);
+        }
+
         slot.messages.push({ role: 'user', content: question, kind: 'assist-q' });
         const controller = new AbortController();
         slot.abortController = controller;
@@ -2079,16 +2105,13 @@
         try {
           // Context: the last few assist Q&A pairs keep follow-up questions
           // coherent ("and what about Intune?") without dragging latency.
+          // Pulled from TECH.recentPairs, not the chat — the chat is archived
+          // to History before each new question.
           const prior = [];
-          const msgs = slot.messages;
-          for (let i = 0; i < msgs.length - 2 && prior.length < ASSIST.HISTORY_PAIRS * 2; i++) {
-            const m = msgs[msgs.length - 3 - i];
-            if (!m || !m.content) continue;
-            if (m.kind === 'assist' || m.kind === 'assist-q') prior.unshift({ role: m.role, content: m.content });
+          for (const p of TECH.recentPairs.slice(-ASSIST.HISTORY_PAIRS)) {
+            prior.push({ role: 'user', content: p.question });
+            prior.push({ role: 'assistant', content: p.answer });
           }
-          // The API requires the first message to be a user turn; the cap can
-          // slice a pair in half, leaving a leading assistant message.
-          while (prior.length && prior[0].role !== 'user') prior.shift();
 
           const domains = (slot.allowedDomains || []).filter(Boolean);
           const tool = { type: SEARCH_TOOL, name: 'web_search', max_uses: ASSIST.SEARCH_MAX_USES };
@@ -2127,6 +2150,8 @@
             speakText(spoken, idx, assistantMsgIdx);
           }
           TECH.answered++;
+          TECH.recentPairs.push({ question, answer: msg.content });
+          while (TECH.recentPairs.length > ASSIST.HISTORY_PAIRS) TECH.recentPairs.shift();
 
           setTimeout(() => fetchHistoryFromSheet({ silent: true }), 600);
         } catch (err) {
@@ -2322,6 +2347,7 @@
       function renderListenCard(slot) {
         const on = !!slot.listenOn;
         const last = TECH.decisions[TECH.decisions.length - 1];
+        const inConvo = VOICE.awaitingCommand || VOICE.conversationMode;
         const statusLine = !on ? ''
           : TECH.pending
             ? 'Checking a question…'
@@ -2335,6 +2361,11 @@
                    data-action="toggle-speak-answers"></div>
             </div>
             ${on ? `
+              <div class="ac-live ${VOICE.interimText ? 'hearing' : ''}" id="live-transcript">
+                <div class="ac-live-label"><i data-lucide="audio-lines" class="w-3 h-3"></i>Hearing live</div>
+                <div class="ac-live-text"><span id="live-transcript-text">${escHtml(VOICE.interimText || '')}</span><span class="interim-caret">▊</span></div>
+                ${inConvo ? `<button class="ac-cancel" title="Cancel — don't send this" data-action="cancel-pending" data-idx="0">Cancel</button>` : ''}
+              </div>
               <div class="ac-status">
                 <span class="acs-dot ${TECH.pending ? 'thinking' : ''}"></span>
                 <span>${escHtml(statusLine)}</span>
@@ -2465,33 +2496,11 @@
         return `<button class="tts-btn ${isPlayingThis ? 'playing' : ''}" title="${title}" aria-label="${title}" data-action="tts-speak" data-slot="${slotIdx}" data-msg="${msgIdx}"><i data-lucide="${icon}" class="w-3 h-3"></i></button>`;
       }
 
-      function interimBubbleHtml(slotIdx, expanded) {
-        if (!VOICE.wantRunning || !VOICE.interimText) return '';
-        if (VOICE.interimSlot !== slotIdx) return '';
-        const slot = STATE.slots[slotIdx];
-        if (!slot || !slot.listenOn) return '';
-        const inConvo = VOICE.awaitingCommand || VOICE.conversationMode;
-        const assistMode = !inConvo;
-        if (inConvo && ttsEchoActive()) return '';
-        const fontSize = expanded ? '' : 'font-size:11px;padding:6px 10px;';
-        const cancelSize = expanded ? 'font-size:11px;padding:4px 10px;' : 'font-size:10px;padding:3px 8px;';
-        return `
-          <div class="flex justify-end items-center gap-2" id="interim-bubble-${slotIdx}">
-            ${assistMode ? '' : `
-            <button title="Cancel — don't send this" data-action="cancel-pending" data-idx="${slotIdx}"
-              style="background:rgba(239,68,68,0.08);color:#ef4444;border:1px solid rgba(239,68,68,0.35);border-radius:9999px;${cancelSize}cursor:pointer;font-weight:600;line-height:1">
-              Cancel
-            </button>`}
-            <div class="chat-bubble chat-user interim-bubble" style="${fontSize}max-width:70%">
-              <span class="interim-text">${escHtml(VOICE.interimText)}</span><span class="interim-caret">▊</span>
-            </div>
-          </div>`;
-      }
-
       // Thin status strip above the message list while tech assist is on.
+      // The live transcript itself lives on the voice stage (left panel), so
+      // the chat stays clean — just the question and its answer.
       function renderAssistRibbon(idx) {
         const slot = STATE.slots[idx];
-        const last = TECH.decisions[TECH.decisions.length - 1];
         return `
           <div class="passive-ribbon">
             <div class="pr-head">
@@ -2503,15 +2512,6 @@
                 <i data-lucide="${slot.speakAnswers ? 'volume-2' : 'volume-x'}" class="w-3 h-3"></i>
               </span>
             </div>
-            ${last ? `
-              <div class="pr-last ${last.accepted ? 'pr-accepted' : 'pr-skipped'}" title="${last.accepted ? 'Randy heard a technical question and answered it' : 'Heard, but not a technical question — skipped'}">
-                <i data-lucide="${last.accepted ? 'check' : 'minus'}" class="w-3 h-3"></i>
-                <span class="pr-text">${escHtml(truncate(last.text, 90))}</span>
-                <span class="pr-conf">${Math.round((last.confidence || 0) * 100)}%</span>
-              </div>
-            ` : `
-              <div class="pr-empty">Waiting for a technical question…</div>
-            `}
           </div>`;
       }
 
@@ -2582,7 +2582,6 @@
                   ${m.role==='user' ? renderUserMessage(m) : renderBotMessage(slot, m, mi, idx)}
                 </div>
               `).join('')}
-              ${interimBubbleHtml(idx, false)}
               ${slot.loading?'<div class="flex justify-start"><div class="chat-bot" style="padding:10px 14px;border-radius:14px"><span class="typing-dot"></span> <span class="typing-dot"></span> <span class="typing-dot"></span></div></div>':''}
             </div>
             <div class="action-bar">
@@ -2725,7 +2724,6 @@
                   ${m.role==='user' ? renderUserMessage(m) : renderBotMessage(slot, m, mi, idx)}
                 </div>
               `).join('')}
-              ${interimBubbleHtml(idx, true)}
               ${slot.loading?`<div class="flex justify-start"><div class="w-7 h-7 rounded-full grid place-items-center text-white text-xs font-bold flex-shrink-0 mr-2 mt-1" style="background:var(--primary)">${escHtml(slot.label.charAt(0))}</div><div class="chat-bubble chat-bot"><span class="typing-dot"></span> <span class="typing-dot"></span> <span class="typing-dot"></span></div></div>`:''}
             </div>
             <div class="chat-input-row flex-shrink-0">
