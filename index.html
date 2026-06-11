@@ -495,14 +495,14 @@
       // Appended for auto-answered technical-assist questions.
       const ASSIST_STYLE = [
         '# Context',
-        'You are listening in on a live sales/technical call. A technical question was just asked. The questioner cannot reply to you, so never ask clarifying questions — if the question is ambiguous, answer the most likely interpretation and flag the assumption in one bullet.',
+        'You are listening in on a live sales/technical call. A technical question was just asked. The questioner cannot reply to you, so never ask clarifying questions — if the question is ambiguous, answer the most likely interpretation and note the assumption briefly.',
         '',
-        '# Response Format — follow exactly',
-        '1. The very first characters of your reply must be **Bottom line:** followed by a one-sentence direct answer. Nothing comes before it — no greeting, no preamble, no humor or false starts, no commentary about the question or about yourself.',
-        '2. Then 3-7 bullet points, each starting with "- ". One concrete fact, step, or trade-off per bullet. Bold key terms with **double asterisks**. Keep each bullet to one or two short sentences.',
-        '3. If steps are needed, use a numbered list ("1.", "2.", ...) instead of bullets for that part.',
-        '4. After the bullets, output a line containing exactly: ===SPOKEN===',
-        '5. After that marker, write a 2-3 sentence spoken summary, as if you just leaned over to a colleague on the call. Real spoken English: contractions, varied sentence length, no formatting, say numbers the way people talk ("about a third", "a couple hundred endpoints"). A brief natural lead-in is fine ("Short answer — yes.", "So the way that works is..."), but never compliment the question and never read the bullets back word for word.',
+        '# Response Format',
+        'Write the answer the way an experienced SE would actually say it to a colleague — natural prose, not a template.',
+        '1. The first sentence is the direct answer to the question. Nothing comes before it — no greeting, no preamble, no humor or false starts, no commentary about the question or about yourself.',
+        '2. Then explain in short, natural paragraphs. When several discrete facts, steps, or trade-offs genuinely call for it, a short "- " bulleted list (or a numbered list for sequences) is fine — but only when it reads better than prose. Bold the few terms that really matter with **double asterisks**.',
+        '3. After the answer, output a line containing exactly: ===SPOKEN===',
+        '4. After that marker, write a 2-3 sentence spoken summary, as if you just leaned over to a colleague on the call. Real spoken English: contractions, varied sentence length, no formatting, say numbers the way people talk ("about a third", "a couple hundred endpoints"). A brief natural lead-in is fine ("Short answer — yes.", "So the way that works is..."), but never compliment the question and never read the answer back word for word.',
         '',
         'Total length before the marker: under 180 words. Never mention searching, docs, or sources anywhere. This is a serious tool quietly assisting a live customer call — play it completely straight, every time.'
       ].join('\n');
@@ -753,15 +753,24 @@
         return String(text || '').split(/\n?=+\s*SPOKEN\s*=+\s*\n?/i)[0].trim();
       }
 
-      // Assist answers must open with "**Bottom line:**". Models occasionally
-      // ad-lib a preamble first anyway (a greeting, a joke, a false start);
-      // if the marker exists past the start of the reply, cut everything
-      // before it. No-op for replies without the marker (typed chat).
+      // Answers should open with the answer itself. Models occasionally
+      // ad-lib a fake-out first ("Great question! ... Just kidding. Here's
+      // the real answer:") — peel those known opener patterns off the start,
+      // one at a time, until real content remains. Anchored to the start
+      // only, so it can never touch the body of a genuine answer.
       function sanitizeAssistAnswer(text) {
-        const t = String(text || '').trim();
-        const m = t.match(/\*\*\s*bottom\s+line\s*:?\s*\*\*|^bottom\s+line\s*:/im);
-        if (m && m.index > 0) return t.slice(m.index).trim();
-        return t;
+        let t = String(text || '').trim();
+        let prev;
+        do {
+          prev = t;
+          t = t
+            .replace(/^\**(?:great|good|excellent|awesome|fantastic) question\b[.!…:]*\**\s*/i, '')
+            .replace(/^let me (?:explain|walk you through|break (?:this|that|it) down)\b[^\n.!?]*[.!?…]*\s*/i, '')
+            .replace(/^just kidding\b[.!,…]*\s*/i, '')
+            .replace(/^(?:here'?s|now for) the (?:real|actual|serious) answer[.!:]*\s*/i, '')
+            .trim();
+        } while (t !== prev);
+        return t || String(text || '').trim();
       }
 
       function normalizeHistoryEntry(e) {
