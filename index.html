@@ -425,6 +425,8 @@
         DECISIONS_KEEP: 8,        // ring buffer for the status UI
         MAX_BUFFER_CHARS: 420,    // cap the join buffer so run-on speech still flushes
         MAX_DEFERRALS: 4,         // re-checks while a prior classify/answer is busy
+        INTERIM_FRESH_MS: 1500,   // interim words newer than this mean speech is still flowing
+        INTERIM_RECHECK_MS: 700,  // re-check cadence while waiting for a sentence to finish
         SEARCH_MAX_USES: 2,       // web searches per answer (latency budget)
         HISTORY_PAIRS: 2,         // prior assist Q&A pairs sent as context
         CONV_EXIT_MS: 20000       // follow-up window after a voice answer
@@ -640,6 +642,7 @@
         playingMsg: null,         // {slot, msg} of the message currently being spoken
         interimText: '',          // live partial transcript
         interimSlot: null,
+        interimAt: 0,             // when the interim transcript last changed
         lastTtsEndAt: 0,          // for the post-playback echo grace window
         ttsPaused: false,         // recognition paused because TTS is playing
         resumeRecognitionId: null,
@@ -906,7 +909,9 @@
               method: 'POST',
               mode: 'no-cors',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ action: 'delete_history', id, session_id: entry ? entry.session_id : id.split('-')[0] })
+              // Entry ids are session_id + '-' + timestamp, and session ids
+              // contain hyphens themselves — strip only the trailing timestamp.
+              body: JSON.stringify({ action: 'delete_history', id, session_id: entry ? entry.session_id : id.replace(/-\d+$/, '') })
             });
           } catch (err) {
             console.warn('Remote delete failed:', err);
@@ -1147,6 +1152,11 @@
       // True while Randy is speaking OR within the tail window after speech
       // ends — the speaker keeps producing audio briefly after onend fires.
       const TTS_ECHO_GRACE_MS = 1200;
+      // Echo text-matching only applies while Randy's audio is playing or
+      // shortly after it stops (speaker → mic → ASR adds a few seconds of
+      // lag). Beyond that, overlap with shared vocabulary — product names
+      // come up in every question — must not swallow genuine speech.
+      const TTS_ECHO_TEXT_WINDOW_MS = 8000;
       function ttsEchoActive() {
         if (STATE.slots.some(s => s.isSpeaking)) return true;
         if (VOICE.ttsPaused) return true;
@@ -1172,6 +1182,7 @@
         const n = normalizeForEcho(text);
         if (!n || n.length < 4) return false;
         if (!VOICE.recentTtsText) return false;
+        if (!ttsEchoActive() && (Date.now() - VOICE.lastTtsEndAt) > TTS_ECHO_TEXT_WINDOW_MS) return false;
         if (VOICE.recentTtsText.indexOf(n) !== -1) return true;
         const words = n.split(' ').filter(w => w.length >= 3);
         if (words.length < 2) return false;
@@ -1718,6 +1729,7 @@
         const prevSlot = VOICE.interimSlot;
         VOICE.interimText = trimmed;
         VOICE.interimSlot = target;
+        VOICE.interimAt = Date.now();
 
         if (patchLiveTranscript(trimmed)) return;
         // One render to mount the node — but never while the user is typing,
@@ -1830,6 +1842,18 @@
         const slot = STATE.slots[0];
         if (!slot.listenOn) { clearAssistBuffer(); return; }
         const candidate = TECH.buffer.trim();
+
+        // The speaker is still mid-sentence (fresh interim words are
+        // arriving) — hold the flush so the question isn't cut off halfway.
+        // The final transcript re-arms the timer when it lands; bounded so
+        // a stale interim can't stall the pipeline.
+        if (VOICE.interimText &&
+            Date.now() - VOICE.interimAt < ASSIST.INTERIM_FRESH_MS &&
+            TECH.deferrals < ASSIST.MAX_DEFERRALS) {
+          TECH.deferrals++;
+          TECH.bufferTimerId = setTimeout(flushAssistBuffer, ASSIST.INTERIM_RECHECK_MS);
+          return;
+        }
 
         // Busy with a previous classify/answer — defer briefly so we don't
         // pile up; give up after a few tries to stay current with the call.
