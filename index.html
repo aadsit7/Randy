@@ -275,9 +275,6 @@
       .conv-sub { font-size:11.5px; color: var(--gray); }
 
       /* Quick-prompt chips on empty state */
-      .qp-row { display:flex; flex-wrap:wrap; gap:8px; justify-content:center; max-width:420px; margin:14px auto 0; }
-      .qp-chip { font-size:12.5px; font-weight:500; color: var(--navy); background:#fff; border:1px solid var(--divider); border-radius:999px; padding:8px 14px; cursor:pointer; transition: all .15s var(--ease); }
-      .qp-chip:hover { border-color: var(--cyan); color: var(--primary); background: var(--quote); }
 
       /* Saved-conversation rail/panel */
       .saved-head { font-size:13px; font-weight:700; color: var(--navy); margin:0; letter-spacing:-0.01em; }
@@ -314,17 +311,6 @@
       }
 
       /* Assist status strip above the message list */
-      .passive-ribbon { padding: 8px 12px; background: linear-gradient(180deg, rgba(0,112,243,0.06), rgba(0,112,243,0.02)); border-top: 1px solid #e2e8f0; border-bottom: 1px solid #e2e8f0; display: flex; flex-direction: column; gap: 6px; }
-      .passive-ribbon .pr-head { display: flex; align-items: center; gap: 8px; font-size: 11px; color: #475569; }
-      .passive-ribbon .pr-label { font-weight: 700; color: var(--navy); letter-spacing: 0.01em; }
-      .passive-ribbon .pr-meta { color: #94a3b8; }
-      .passive-ribbon .pr-spacer { flex: 1; }
-      .passive-ribbon .pr-mute { color: #64748b; display: grid; place-items: center; }
-      .passive-ribbon .pr-dot { width: 8px; height: 8px; border-radius: 50%; background: #10b981; box-shadow: 0 0 0 0 rgba(16,185,129,0.55); animation: passivePulse 2s ease-out infinite; flex-shrink: 0; }
-      .passive-ribbon .pr-dot.thinking { background: var(--primary); animation: passivePulseFast 0.9s ease-out infinite; }
-      @keyframes passivePulse  { 0%{box-shadow:0 0 0 0 rgba(16,185,129,0.55);}70%{box-shadow:0 0 0 8px rgba(16,185,129,0);}100%{box-shadow:0 0 0 0 rgba(16,185,129,0);} }
-      @keyframes passivePulseFast { 0%{box-shadow:0 0 0 0 rgba(0,112,243,0.55);}70%{box-shadow:0 0 0 6px rgba(0,112,243,0);}100%{box-shadow:0 0 0 0 rgba(0,112,243,0);} }
-      @media (prefers-reduced-motion: reduce) { .passive-ribbon .pr-dot { animation: none; } }
 
       .menu-toggle-state { margin-left: auto; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 9999px; background: #f1f5f9; color: #64748b; letter-spacing: 0.04em; }
       .menu-toggle-state.on { background: #d1fae5; color: #047857; }
@@ -2502,25 +2488,6 @@
         return `<button class="tts-btn ${isPlayingThis ? 'playing' : ''}" title="${title}" aria-label="${title}" data-action="tts-speak" data-slot="${slotIdx}" data-msg="${msgIdx}"><i data-lucide="${icon}" class="w-3 h-3"></i></button>`;
       }
 
-      // Thin status strip above the message list while tech assist is on.
-      // The live transcript itself lives on the voice stage (left panel), so
-      // the chat stays clean — just the question and its answer.
-      function renderAssistRibbon(idx) {
-        const slot = STATE.slots[idx];
-        return `
-          <div class="passive-ribbon">
-            <div class="pr-head">
-              <span class="pr-dot ${TECH.pending ? 'thinking' : ''}"></span>
-              <span class="pr-label">Randy is listening</span>
-              <span class="pr-meta">${TECH.answered} answered / ${TECH.heard} heard</span>
-              <span class="pr-spacer"></span>
-              <span class="pr-mute" title="${slot.speakAnswers ? 'Randy reads answers out loud' : 'Answers show in the chat only'}">
-                <i data-lucide="${slot.speakAnswers ? 'volume-2' : 'volume-x'}" class="w-3 h-3"></i>
-              </span>
-            </div>
-          </div>`;
-      }
-
       function renderCard(slot, idx) {
         const msgs = slot.messages;
         const composerExpanded = STATE.composerExpanded;
@@ -2569,18 +2536,12 @@
                 </div>
               ` : ''}
             </div>
-            ${slot.listenOn ? renderAssistRibbon(idx) : ''}
             <div id="home-scroll-${idx}" class="flex-1 overflow-y-auto px-4 py-4 flex flex-col gap-3" style="background:var(--row);min-height:0">
               ${msgs.length === 0 ? `
                 <div class="flex-1 flex items-center justify-center">
                   <div class="text-center" style="max-width:340px">
                     <div style="width:46px;height:46px;border-radius:12px;background:var(--quote);display:grid;place-items:center;margin:0 auto 14px"><i data-lucide="message-square-text" class="w-5 h-5" style="color:var(--primary)"></i></div>
                     <div style="font-size:13.5px;color:var(--gray);line-height:1.6">Tap the <b style="color:var(--navy)">mic button</b> and Randy listens for tech questions and answers them here. You can also type a question below, or say <b style="color:var(--navy)">“Hey ${escHtml(slot.voiceName || slot.label)}”</b>.</div>
-                    <div class="qp-row">
-                      <button class="qp-chip" data-action="quick-prompt" data-q="What is Application Workspace and how is it different from Application Manager?">What is Application Workspace?</button>
-                      <button class="qp-chip" data-action="quick-prompt" data-q="How does Application Workspace deploy apps to Intune-managed devices?">App delivery with Intune</button>
-                      <button class="qp-chip" data-action="quick-prompt" data-q="How do Right Click Tools help with ConfigMgr device management?">Right Click Tools + ConfigMgr</button>
-                    </div>
                   </div>
                 </div>
               ` : msgs.map((m, mi) => `
@@ -2918,13 +2879,6 @@
               const inp = document.getElementById('home-input-' + idx);
               if (inp) STATE.slots[idx].inputText = inp.value;
               sendMessage(idx);
-              break;
-            }
-            case 'quick-prompt': {
-              const slot = STATE.slots[0];
-              if (slot.loading) break;
-              slot.inputText = act.dataset.q || '';
-              sendMessage(0);
               break;
             }
             case 'toggle-listen': toggleListening(); break;
