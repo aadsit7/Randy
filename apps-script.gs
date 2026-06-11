@@ -327,10 +327,21 @@ function getTasksSheet_() {
 
 /* ---------- Config + helpers ---------- */
 
+// The key is read on every chat call, and SpreadsheetApp reads cost a few
+// hundred ms each — cache it so the hot path skips the sheet entirely.
+// (A rotated key takes effect within KEY_CACHE_SECONDS.)
+var KEY_CACHE_SECONDS = 600;
+
 function getApiKey_() {
-  var fromSheet = readConfigValue_('anthropic_api_key');
-  if (fromSheet) return fromSheet;
-  return PropertiesService.getScriptProperties().getProperty('ANTHROPIC_API_KEY') || '';
+  var cache = CacheService.getScriptCache();
+  var cached = cache.get('anthropic_api_key');
+  if (cached) return cached;
+  var key = readConfigValue_('anthropic_api_key');
+  if (!key) key = PropertiesService.getScriptProperties().getProperty('ANTHROPIC_API_KEY') || '';
+  if (key) {
+    try { cache.put('anthropic_api_key', key, KEY_CACHE_SECONDS); } catch (e) {}
+  }
+  return key;
 }
 
 function readConfigValue_(key) {

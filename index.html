@@ -912,8 +912,9 @@
       }
 
       // Tuck the current conversation into History and reset the chat to
-      // empty. The sheet already has every answered Q&A (the proxy saves as
-      // it goes), so this is instant and nothing is lost. Rotating the
+      // empty. The sheet already has every answered Q&A (the client saves
+      // each one in the background), so this is instant and nothing is lost.
+      // Rotating the
       // session id keeps the sheet's grouping in step with the local entry.
       // Returns true when something was actually archived.
       function archiveChatToHistory(slot) {
@@ -2126,6 +2127,27 @@
         return data;
       }
 
+      // Fire-and-forget Q&A save (the proxy's legacy save action). Chat calls
+      // send save:false so the proxy skips its synchronous sheet append —
+      // that append cost ~0.5-2s of SpreadsheetApp time on every answer's
+      // critical path. Saving from here instead happens after the answer is
+      // already on screen. Returns the fetch promise so callers can chain
+      // the history refresh behind the completed save.
+      function postSaveToSheet({ question, answer, sources, model, sessionId }) {
+        if (!GSHEET_WEBHOOK || !question || !answer) return Promise.resolve();
+        return fetch(GSHEET_WEBHOOK, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify({
+            question: question,
+            answer: answer,
+            sources: Array.isArray(sources) ? sources.join(', ') : String(sources || ''),
+            model: model || '',
+            session_id: sessionId || ''
+          })
+        }).catch(err => console.warn('Background save failed:', err));
+      }
+
       // System prompt as a block array so the stable persona prefix is
       // eligible for Anthropic prompt caching.
       function systemBlocks(text) {
@@ -2173,11 +2195,15 @@
 
           // The empty assistant placeholder is already excluded by the
           // content filter inside conversationPayloadMessages.
+          const sessionIdAtSend = SESSION_ID;
           const body = {
             model: viaVoice ? MODELS.voice : MODELS.chat,
             max_tokens: viaVoice ? 300 : 1500,
             system: systemBlocks(systemPrompt),
-            messages: conversationPayloadMessages(slot, 20)
+            messages: conversationPayloadMessages(slot, 20),
+            // Skip the proxy's synchronous sheet append; saved from the
+            // client below, off the answer's critical path.
+            save: false
           };
           if (needsSearch) {
             body.tools = [{ type: SEARCH_TOOL, name: 'web_search', max_uses: viaVoice ? 2 : 3 }];
@@ -2201,7 +2227,14 @@
             processTtsQueue(idx);
           }
 
-          setTimeout(() => fetchHistoryFromSheet({ silent: true }), 600);
+          // Background save (the proxy only saved non-empty replies; mirror that).
+          postSaveToSheet({
+            question: text,
+            answer: reply,
+            sources: data.sources,
+            model: body.model,
+            sessionId: sessionIdAtSend
+          }).then(() => fetchHistoryFromSheet({ silent: true }));
         } catch (err) {
           if (err && err.name === 'AbortError') {
             const placeholder = slot.messages[assistantMsgIdx];
@@ -2268,6 +2301,7 @@
           const tool = { type: SEARCH_TOOL, name: 'web_search', max_uses: ASSIST.SEARCH_MAX_USES };
           if (domains.length) tool.allowed_domains = domains;
 
+          const sessionIdAtSend = SESSION_ID;
           const baseBody = {
             model: MODELS.assist,
             max_tokens: 1100,
@@ -2276,7 +2310,10 @@
             // this field harmlessly.)
             output_config: { effort: 'medium' },
             system: systemBlocks(slot.prompt + '\n\n' + ASSIST_STYLE),
-            messages: prior.concat([{ role: 'user', content: question }])
+            messages: prior.concat([{ role: 'user', content: question }]),
+            // The proxy's synchronous sheet append would sit on the answer's
+            // critical path — skip it and save from the client afterwards.
+            save: false
           };
           let data;
           try {
@@ -2304,7 +2341,15 @@
           TECH.recentPairs.push({ question, answer: msg.content });
           while (TECH.recentPairs.length > ASSIST.HISTORY_PAIRS) TECH.recentPairs.shift();
 
-          setTimeout(() => fetchHistoryFromSheet({ silent: true }), 600);
+          // Save the raw reply (same text the proxy used to append) in the
+          // background, then refresh history once the row actually exists.
+          postSaveToSheet({
+            question,
+            answer: String(data.reply || ''),
+            sources: data.sources,
+            model: MODELS.assist,
+            sessionId: sessionIdAtSend
+          }).then(() => fetchHistoryFromSheet({ silent: true }));
         } catch (err) {
           if (err && err.name === 'AbortError') {
             const placeholder = slot.messages[assistantMsgIdx];
