@@ -485,7 +485,7 @@
       // Appended for typed chat and wake-word voice conversations.
       const CHAT_STYLE = [
         '# Response Format',
-        '- Start the very first sentence with the answer itself. No preamble, no "Great question."',
+        '- Start the very first sentence with the answer itself. No preamble, no compliments about the question, no jokes or false starts before the real answer.',
         '- Plain text only: short paragraphs separated by blank lines. No markdown, no bullet points, no headers.',
         '- Use plain language; define necessary technical terms in the same breath.',
         '- Keep answers focused — 2-4 short paragraphs unless the question genuinely requires more.',
@@ -498,16 +498,16 @@
         'You are listening in on a live sales/technical call. A technical question was just asked. The questioner cannot reply to you, so never ask clarifying questions — if the question is ambiguous, answer the most likely interpretation and flag the assumption in one bullet.',
         '',
         '# Response Format — follow exactly',
-        '1. First line: **Bottom line:** followed by a one-sentence direct answer.',
+        '1. The very first characters of your reply must be **Bottom line:** followed by a one-sentence direct answer. Nothing comes before it — no greeting, no preamble, no humor or false starts, no commentary about the question or about yourself.',
         '2. Then 3-7 bullet points, each starting with "- ". One concrete fact, step, or trade-off per bullet. Bold key terms with **double asterisks**. Keep each bullet to one or two short sentences.',
         '3. If steps are needed, use a numbered list ("1.", "2.", ...) instead of bullets for that part.',
         '4. After the bullets, output a line containing exactly: ===SPOKEN===',
-        '5. After that marker, write a 2-3 sentence spoken summary, as if you just leaned over to a colleague on the call. Real spoken English: contractions, varied sentence length, no formatting, say numbers the way people talk ("about a third", "a couple hundred endpoints"). A brief natural lead-in is fine ("Short answer — yes.", "So the way that works is..."), but never "Great question" and never read the bullets back word for word.',
+        '5. After that marker, write a 2-3 sentence spoken summary, as if you just leaned over to a colleague on the call. Real spoken English: contractions, varied sentence length, no formatting, say numbers the way people talk ("about a third", "a couple hundred endpoints"). A brief natural lead-in is fine ("Short answer — yes.", "So the way that works is..."), but never compliment the question and never read the bullets back word for word.',
         '',
-        'Total length before the marker: under 180 words. Never mention searching, docs, or sources anywhere.'
+        'Total length before the marker: under 180 words. Never mention searching, docs, or sources anywhere. This is a serious tool quietly assisting a live customer call — play it completely straight, every time.'
       ].join('\n');
 
-      const DEFAULT_VOICE_PERSONALITY = "Your reply will be spoken aloud, so write it the way you'd actually say it. Keep it to 2-3 short sentences. Use contractions and everyday phrasing, and vary the sentence length — flat, uniform sentences sound robotic. An occasional natural lead-in is good ('Yeah, so...', 'Honestly,', 'Short answer —') but never 'Great question.' Say numbers the way people talk — '120 grand', 'about a third', 'a couple hundred'. No markdown, no lists, no formatting of any kind. Warm, direct, like a colleague answering across the desk.";
+      const DEFAULT_VOICE_PERSONALITY = "Your reply will be spoken aloud, so write it the way you'd actually say it. Keep it to 2-3 short sentences. Use contractions and everyday phrasing, and vary the sentence length — flat, uniform sentences sound robotic. An occasional natural lead-in is good ('Yeah, so...', 'Honestly,', 'Short answer —') but never a compliment about the question. Say numbers the way people talk — '120 grand', 'about a third', 'a couple hundred'. No markdown, no lists, no formatting of any kind. Warm, direct, like a colleague answering across the desk.";
 
       // Classifier gate for overheard utterances.
       const CLASSIFIER_SYSTEM = [
@@ -753,6 +753,17 @@
         return String(text || '').split(/\n?=+\s*SPOKEN\s*=+\s*\n?/i)[0].trim();
       }
 
+      // Assist answers must open with "**Bottom line:**". Models occasionally
+      // ad-lib a preamble first anyway (a greeting, a joke, a false start);
+      // if the marker exists past the start of the reply, cut everything
+      // before it. No-op for replies without the marker (typed chat).
+      function sanitizeAssistAnswer(text) {
+        const t = String(text || '').trim();
+        const m = t.match(/\*\*\s*bottom\s+line\s*:?\s*\*\*|^bottom\s+line\s*:/im);
+        if (m && m.index > 0) return t.slice(m.index).trim();
+        return t;
+      }
+
       function normalizeHistoryEntry(e) {
         const pairs = Array.isArray(e.pairs) ? e.pairs : [];
         const ts = e.timestamp || 0;
@@ -761,7 +772,7 @@
           session_id: e.session_id || '',
           date: e.date || (ts ? new Date(ts).toLocaleDateString('en-US') : ''),
           timestamp: ts,
-          pairs: pairs.map(p => ({ question: String(p.question || ''), answer: stripSpokenSection(p.answer) })),
+          pairs: pairs.map(p => ({ question: String(p.question || ''), answer: sanitizeAssistAnswer(stripSpokenSection(p.answer)) })),
           preview: (pairs[0] && pairs[0].question ? String(pairs[0].question).substring(0, 120) : '') || (e.preview || '')
         };
       }
@@ -2269,7 +2280,7 @@
 
           const { main, spoken } = splitSpoken(String(data.reply || ''));
           const msg = slot.messages[assistantMsgIdx];
-          msg.content = main || 'No response.';
+          msg.content = sanitizeAssistAnswer(main) || 'No response.';
           msg.spoken = spoken;
           if (Array.isArray(data.sources) && data.sources.length) {
             msg.sources = data.sources.slice(0, 6);
