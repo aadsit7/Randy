@@ -293,7 +293,9 @@ function listHistory_() {
 }
 
 function deleteHistory_(body) {
-  var sessionId = String(body.session_id || (body.id ? String(body.id).split('-')[0] : '')).trim();
+  // Entry ids are session_id + '-' + timestamp; session ids contain hyphens
+  // themselves, so strip only the trailing timestamp segment.
+  var sessionId = String(body.session_id || (body.id ? String(body.id).replace(/-\d+$/, '') : '')).trim();
   if (!sessionId) return { ok: false, error: 'Missing session_id' };
   var sheet = getTasksSheet_();
   var last  = sheet.getLastRow();
