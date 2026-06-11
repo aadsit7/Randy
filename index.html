@@ -51,11 +51,9 @@
       .chat-user { background: var(--primary); color: #fff; border-radius: 14px 14px 4px 14px; margin-left: auto; box-shadow: var(--shadow-brand); }
       .chat-bot { background: #fff; color: var(--dark); border: 1px solid var(--divider); border-radius: 4px 14px 14px 14px; box-shadow: var(--shadow-card); }
 
-      /* ===== Markdown answer cards (technical assistance) ===== */
+      /* ===== Markdown answer cards (technical assistance) =====
+         Answers render at full height — the chat panel scrolls, never the bubble. */
       .chat-md { white-space: normal; }
-      .md-scroll { max-height: 360px; overflow-y: auto; overscroll-behavior: contain; padding-right: 4px; }
-      .md-scroll::-webkit-scrollbar { width: 6px; }
-      .md-scroll::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
       .chat-md p { margin: 0 0 8px; }
       .chat-md p:last-child { margin-bottom: 0; }
       .chat-md ul, .chat-md ol { margin: 4px 0 10px 4px; padding-left: 16px; }
@@ -180,6 +178,11 @@
       .tts-btn { position: absolute; bottom: 4px; right: 4px; background: transparent; border: none; cursor: pointer; padding: 6px; min-width: 28px; min-height: 28px; border-radius: 4px; color: #94a3b8; transition: color 0.15s, background 0.15s; line-height: 0; }
       .tts-btn:hover { color: #475569; background: rgba(148,163,184,0.12); }
       .tts-btn.playing { color: var(--primary); }
+      .msg-copy { position: absolute; top: 6px; right: 6px; background: rgba(255,255,255,0.85); border: 1px solid #e2e8f0; color: #64748b; padding: 4px; min-width: 26px; min-height: 26px; border-radius: 6px; cursor: pointer; display: grid; place-items: center; transition: opacity 0.12s, background 0.12s, color 0.12s, border-color 0.12s; opacity: 0.55; }
+      .msg-wrap:hover .msg-copy, .msg-copy:focus-visible { opacity: 1; }
+      .msg-copy:hover { background: #fff; color: var(--primary); border-color: var(--primary); }
+      .msg-copy.copied { background: #ecfdf5; border-color: #6ee7b7; color: #047857; opacity: 1; }
+      @media (pointer: coarse) { .msg-copy { opacity: 1; min-width: 32px; min-height: 32px; padding: 6px; } }
 
       /* ===== Live transcript caret (voice stage "Hearing live" panel) ===== */
       .interim-caret { display: inline-block; width: 6px; margin-left: 2px; animation: interim-blink 1s steps(2,end) infinite; color: #2563eb; }
@@ -1021,6 +1024,29 @@
         const m = clean.match(/^.*?[.!?](?:\s+.*?[.!?])?/);
         const s = m ? m[0] : clean;
         return s.substring(0, 300);
+      }
+
+      // Copy text to the clipboard with a toast + brief "copied" state on btn.
+      function copyTextToClipboard(text, btn) {
+        const done = () => {
+          showToast('Answer copied');
+          if (btn) {
+            btn.classList.add('copied');
+            setTimeout(() => btn.classList.remove('copied'), 1200);
+          }
+        };
+        const fail = () => showToast('Copy failed');
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).then(done).catch(fail);
+        } else {
+          try {
+            const ta = document.createElement('textarea');
+            ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+            document.body.appendChild(ta); ta.select();
+            document.execCommand('copy'); document.body.removeChild(ta);
+            done();
+          } catch { fail(); }
+        }
       }
 
       function hostnameOf(url) {
@@ -2461,16 +2487,16 @@
         if (m.kind === 'assist') {
           const srcs = Array.isArray(m.sources) ? m.sources : [];
           return `
-            <div class="msg-wrap"><div class="chat-bubble chat-bot chat-md" style="padding-right:30px;white-space:normal">
+            <div class="msg-wrap"><div class="chat-bubble chat-bot chat-md" style="padding-right:38px;white-space:normal">
               <div class="assist-badge"><i data-lucide="ear" class="w-3 h-3"></i>Technical assist</div>
-              <div class="md-scroll">${mdToHtml(m.content)}</div>
+              ${mdToHtml(m.content)}
               ${srcs.length ? `<div class="src-chips">${srcs.map(u => `
                 <a href="${escAttr(u)}" target="_blank" rel="noopener noreferrer" title="${escAttr(u)}">
                   <i data-lucide="link" class="w-3 h-3"></i>${escHtml(hostnameOf(u))}
                 </a>`).join('')}</div>` : ''}
-            </div>${speakerBtnHtml(slotIdx, mi)}</div>`;
+            </div>${copyBtnHtml(slotIdx, mi)}${speakerBtnHtml(slotIdx, mi)}</div>`;
         }
-        return `<div class="msg-wrap"><div class="chat-bubble chat-bot" style="padding-right:28px">${escHtml(m.content).replace(/\n/g, '<br>')}</div>${speakerBtnHtml(slotIdx, mi)}</div>`;
+        return `<div class="msg-wrap"><div class="chat-bubble chat-bot" style="padding-right:38px">${escHtml(m.content).replace(/\n/g, '<br>')}</div>${copyBtnHtml(slotIdx, mi)}${speakerBtnHtml(slotIdx, mi)}</div>`;
       }
 
       function renderUserMessage(m) {
@@ -2478,6 +2504,10 @@
           ? '<span style="display:inline-flex;align-items:center;gap:4px;font-size:9.5px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;opacity:0.75;margin-bottom:4px"><i data-lucide="ear" class="w-3 h-3"></i>Overheard</span><br>'
           : '';
         return `<div class="chat-bubble chat-user">${badge}${escHtml(m.content)}</div>`;
+      }
+
+      function copyBtnHtml(slotIdx, msgIdx) {
+        return `<button class="msg-copy" title="Copy answer" aria-label="Copy answer" data-action="copy-msg" data-slot="${slotIdx}" data-msg="${msgIdx}"><i data-lucide="copy" class="w-3 h-3"></i></button>`;
       }
 
       function speakerBtnHtml(slotIdx, msgIdx) {
@@ -2966,25 +2996,16 @@
               const h = getHistory().find(x => x.id === act.dataset.id);
               const pi = parseInt(act.dataset.pair, 10);
               if (!h || !h.pairs[pi]) break;
-              const text = h.pairs[pi].answer || '';
-              const btn = act;
-              const done = () => {
-                showToast('Answer copied');
-                btn.classList.add('copied');
-                setTimeout(() => btn.classList.remove('copied'), 1200);
-              };
-              const fail = () => showToast('Copy failed');
-              if (navigator.clipboard && navigator.clipboard.writeText) {
-                navigator.clipboard.writeText(text).then(done).catch(fail);
-              } else {
-                try {
-                  const ta = document.createElement('textarea');
-                  ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
-                  document.body.appendChild(ta); ta.select();
-                  document.execCommand('copy'); document.body.removeChild(ta);
-                  done();
-                } catch { fail(); }
-              }
+              copyTextToClipboard(h.pairs[pi].answer || '', act);
+              break;
+            }
+            case 'copy-msg': {
+              const slot = STATE.slots[parseInt(act.dataset.slot, 10)];
+              const m = slot && slot.messages[parseInt(act.dataset.msg, 10)];
+              if (!m || !m.content) break;
+              // Plain text, not markdown source — pastes cleanly into
+              // chat/email mid-call.
+              copyTextToClipboard(stripMarkdown(m.content), act);
               break;
             }
             case 'noop': break;
