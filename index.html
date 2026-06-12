@@ -83,9 +83,6 @@
       .history-rail:hover, .history-rail:focus-visible { background: #fff; color: var(--navy); outline: none; }
       .history-rail-badge { position: absolute; top: 6px; right: 4px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9999px; background: var(--primary); color: #fff; font-size: 10px; font-weight: 700; display: grid; place-items: center; line-height: 1; }
       .history-panel-open { width: 280px; flex-shrink: 0; display: flex; flex-direction: column; gap: 8px; overflow-y: auto; max-height: calc(100dvh - 120px); }
-      @keyframes railSpin { to { transform: rotate(360deg); } }
-      .rail-spin { animation: railSpin 0.9s linear infinite; transform-origin: center; }
-      @media (prefers-reduced-motion: reduce) { .rail-spin { animation: none; } }
 
       .chat-avatar { position: relative; width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; color: #fff; font-weight: 700; font-size: 14px; flex-shrink: 0; box-shadow: 0 2px 6px rgba(15,23,42,0.12); }
       .chat-avatar .status-dot { position: absolute; bottom: 0; right: 0; width: 12px; height: 12px; border-radius: 50%; background: #10b981; border: 2px solid #fff; box-shadow: 0 0 0 0 rgba(16,185,129,0.55); animation: statusPulse 2.2s ease-out infinite; }
@@ -583,6 +580,8 @@
       let SESSION_ID = genSessionId();
 
       const SETTINGS_KEY = 'recast_chatbot_settings';
+      // Legacy key from when history was cached on disk. Never written
+      // anymore — kept only so startup can clear stale data from old builds.
       const HISTORY_KEY  = 'recast_chat_history';
 
       /* ================================================================
@@ -624,6 +623,10 @@
         historyOpen: false,
         historyConfirmDeleteId: null,
         historyQuery: '',
+        // This visit's archived conversations, newest first. MEMORY ONLY by
+        // design: any refresh or tab close wipes it, so visitors never see
+        // each other's chats. (Q&As still log silently to the sheet.)
+        sessionHistory: [],
         composerExpanded: false,
         cardMenuOpen: false,
         settingsUnlocked: false,
@@ -745,27 +748,18 @@
       }
 
       /* ================================================================
-       * HISTORY (Google Sheet is source of truth; localStorage = fallback)
+       * HISTORY (memory-only, this visit only)
+       *
+       * STATE.sessionHistory is the sole source for the side panel. Nothing
+       * is ever fetched back from the sheet and nothing is persisted to
+       * disk, so each device/session only ever sees its own conversations
+       * and a refresh or tab close starts clean. Q&As still flow UP to the
+       * sheet (postChat / postSaveToSheet) as a silent per-session log.
        * ================================================================ */
 
-      const HISTORY_CACHE = { loaded: false, loading: false, error: null, entries: null };
-
-      function readLocalHistory() {
-        try { return JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]'); } catch { return []; }
-      }
-      function writeLocalHistory(entries) {
-        try { localStorage.setItem(HISTORY_KEY, JSON.stringify(entries)); } catch {}
-      }
-      function getHistory() {
-        if (HISTORY_CACHE.loaded && Array.isArray(HISTORY_CACHE.entries)) return HISTORY_CACHE.entries;
-        return readLocalHistory();
-      }
-
-      // Strip the ===SPOKEN=== voice-summary section that assist answers carry
-      // (it's saved to the sheet as part of the raw reply).
-      function stripSpokenSection(text) {
-        return String(text || '').split(/\n?=+\s*SPOKEN\s*=+\s*\n?/i)[0].trim();
-      }
+      // One-time cleanup: older builds cached synced history on disk under
+      // HISTORY_KEY. Clear it so returning devices don't keep stale chats.
+      try { localStorage.removeItem(HISTORY_KEY); } catch {}
 
       // Assist answers must open with "**Bottom line:**". Models occasionally
       // ad-lib a fake-out first ("Great question! ... Just kidding. Here's
@@ -787,19 +781,6 @@
         const m = t.match(/\*\*\s*bottom\s+line\s*:?\s*\*\*/i);
         if (m && m.index > 0 && m.index < 200) t = t.slice(m.index).trim();
         return t || String(text || '').trim();
-      }
-
-      function normalizeHistoryEntry(e) {
-        const pairs = Array.isArray(e.pairs) ? e.pairs : [];
-        const ts = e.timestamp || 0;
-        return {
-          id: (e.session_id || 'unknown') + '-' + (ts || Date.now()),
-          session_id: e.session_id || '',
-          date: e.date || (ts ? new Date(ts).toLocaleDateString('en-US') : ''),
-          timestamp: ts,
-          pairs: pairs.map(p => ({ question: String(p.question || ''), answer: sanitizeAssistAnswer(stripSpokenSection(p.answer)) })),
-          preview: (pairs[0] && pairs[0].question ? String(pairs[0].question).substring(0, 120) : '') || (e.preview || '')
-        };
       }
 
       function entryMs(entry) {
@@ -880,37 +861,10 @@
           .map(k => ({ label: k, items: groups[k] }));
       }
 
-      async function fetchHistoryFromSheet({ silent = false } = {}) {
-        if (!GSHEET_WEBHOOK) return;
-        HISTORY_CACHE.loading = true;
-        HISTORY_CACHE.error = null;
-        if (!silent) render();
-        try {
-          const url = GSHEET_WEBHOOK + (GSHEET_WEBHOOK.includes('?') ? '&' : '?') + 'action=list_history';
-          const resp = await fetch(url);
-          if (!resp.ok) throw new Error('HTTP ' + resp.status);
-          const data = await resp.json();
-          const list = Array.isArray(data) ? data : (Array.isArray(data.history) ? data.history : []);
-          const normalized = list.map(normalizeHistoryEntry).sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
-          HISTORY_CACHE.entries = normalized;
-          HISTORY_CACHE.loaded = true;
-          writeLocalHistory(normalized);
-        } catch (err) {
-          HISTORY_CACHE.error = err && err.message ? err.message : 'Failed to load history';
-          console.warn('fetchHistoryFromSheet failed:', err);
-        } finally {
-          HISTORY_CACHE.loading = false;
-          render();
-        }
-      }
-
-      // Optimistic local insert; the next sheet refetch reconciles.
-      function saveLocalHistoryEntry(entry) {
-        const history = getHistory().slice();
-        history.unshift(entry);
-        if (history.length > 50) history.length = 50;
-        if (HISTORY_CACHE.loaded) HISTORY_CACHE.entries = history;
-        writeLocalHistory(history);
+      // Newest first; capped so a marathon visit can't grow memory unbounded.
+      function addSessionHistoryEntry(entry) {
+        STATE.sessionHistory.unshift(entry);
+        if (STATE.sessionHistory.length > 50) STATE.sessionHistory.length = 50;
       }
 
       function collectPairs(slot) {
@@ -925,17 +879,16 @@
         return pairs;
       }
 
-      // Tuck the current conversation into History and reset the chat to
-      // empty. The sheet already has every answered Q&A (the client saves
-      // each one in the background), so this is instant and nothing is lost.
-      // Rotating the
-      // session id keeps the sheet's grouping in step with the local entry.
-      // Returns true when something was actually archived.
+      // Tuck the current conversation into this visit's History panel and
+      // reset the chat to empty. The sheet already has every answered Q&A
+      // (the client saves each one in the background), so nothing is lost.
+      // Rotating the session id keeps the sheet's grouping in step with the
+      // local entry. Returns true when something was actually archived.
       function archiveChatToHistory(slot) {
         const pairs = collectPairs(slot);
         if (!pairs.length) return false;
         const ts = Date.now();
-        saveLocalHistoryEntry({
+        addSessionHistoryEntry({
           id: SESSION_ID + '-' + ts,
           session_id: SESSION_ID,
           date: new Date(ts).toLocaleDateString('en-US'),
@@ -945,7 +898,6 @@
         });
         slot.messages = [];
         SESSION_ID = genSessionId();
-        setTimeout(() => fetchHistoryFromSheet({ silent: true }), 800);
         return true;
       }
 
@@ -967,27 +919,10 @@
         render();
       }
 
-      async function deleteHistoryEntry(id) {
-        const entry = getHistory().find(h => h.id === id) || readLocalHistory().find(h => h.id === id);
-        // Optimistic local removal so the UI feels instant.
-        const remaining = getHistory().filter(h => h.id !== id);
-        if (HISTORY_CACHE.loaded) HISTORY_CACHE.entries = remaining;
-        writeLocalHistory(remaining);
-        if (GSHEET_WEBHOOK) {
-          try {
-            await fetch(GSHEET_WEBHOOK, {
-              method: 'POST',
-              mode: 'no-cors',
-              headers: { 'Content-Type': 'application/json' },
-              // Entry ids are session_id + '-' + timestamp, and session ids
-              // contain hyphens themselves — strip only the trailing timestamp.
-              body: JSON.stringify({ action: 'delete_history', id, session_id: entry ? entry.session_id : id.replace(/-\d+$/, '') })
-            });
-          } catch (err) {
-            console.warn('Remote delete failed:', err);
-          }
-        }
-        setTimeout(() => fetchHistoryFromSheet({ silent: true }), 600);
+      // Local-only: removes the entry from this visit's panel. The sheet log
+      // is an untouched audit record — no delete request is ever sent.
+      function deleteHistoryEntry(id) {
+        STATE.sessionHistory = STATE.sessionHistory.filter(h => h.id !== id);
       }
 
       /* ================================================================
@@ -2168,8 +2103,8 @@
       // send save:false so the proxy skips its synchronous sheet append —
       // that append cost ~0.5-2s of SpreadsheetApp time on every answer's
       // critical path. Saving from here instead happens after the answer is
-      // already on screen. Returns the fetch promise so callers can chain
-      // the history refresh behind the completed save.
+      // already on screen. This is the silent per-session log: rows go UP to
+      // the sheet tagged with session_id, and nothing is ever read back.
       function postSaveToSheet({ question, answer, sources, model, sessionId }) {
         if (!GSHEET_WEBHOOK || !question || !answer) return Promise.resolve();
         return fetch(GSHEET_WEBHOOK, {
@@ -2271,7 +2206,7 @@
             sources: data.sources,
             model: body.model,
             sessionId: sessionIdAtSend
-          }).then(() => fetchHistoryFromSheet({ silent: true }));
+          });
         } catch (err) {
           if (err && err.name === 'AbortError') {
             const placeholder = slot.messages[assistantMsgIdx];
@@ -2379,14 +2314,14 @@
           while (TECH.recentPairs.length > ASSIST.HISTORY_PAIRS) TECH.recentPairs.shift();
 
           // Save the raw reply (same text the proxy used to append) in the
-          // background, then refresh history once the row actually exists.
+          // background.
           postSaveToSheet({
             question,
             answer: String(data.reply || ''),
             sources: data.sources,
             model: MODELS.assist,
             sessionId: sessionIdAtSend
-          }).then(() => fetchHistoryFromSheet({ silent: true }));
+          });
         } catch (err) {
           if (err && err.name === 'AbortError') {
             const placeholder = slot.messages[assistantMsgIdx];
@@ -2427,18 +2362,6 @@
         STATE.slots[idx].inputText = '';
         STATE.slots[idx].loading = false;
         render();
-      }
-
-      // The proxy auto-saves every Q&A; this just confirms and refreshes.
-      async function saveToSheet(slotIdx) {
-        const slot = STATE.slots[slotIdx];
-        if (!slot) return;
-        const pairs = slot.messages.filter((m, i) =>
-          m.role === 'user' && slot.messages[i + 1]?.role === 'assistant'
-        ).length;
-        if (pairs === 0) { showToast('No Q&A pairs yet'); return; }
-        showToast('Auto-saved ' + pairs + ' Q&A pair' + (pairs !== 1 ? 's' : '') + ' to the sheet');
-        fetchHistoryFromSheet({ silent: true });
       }
 
       /* ================================================================
@@ -2617,7 +2540,7 @@
       /* ---------- home grid ---------- */
 
       function renderHome() {
-        const history = getHistory();
+        const history = STATE.sessionHistory;
         const filtered = filterHistory(history, STATE.historyQuery);
         const open = STATE.historyOpen;
         return `
@@ -2627,11 +2550,8 @@
             ${open ? `
               <div class="history-panel history-panel-open">
                 <div class="flex items-center justify-between" style="margin-bottom:4px">
-                  <h3 class="saved-head">Saved Conversations${HISTORY_CACHE.loading ? ' <span style=\"font-weight:400;color:#94a3b8\">· loading…</span>' : ''}</h3>
+                  <h3 class="saved-head">Saved Conversations</h3>
                   <div class="flex items-center gap-1">
-                    <button class="card-icon-btn" title="Refresh" aria-label="Refresh saved conversations" data-action="refresh-history" ${HISTORY_CACHE.loading ? 'disabled' : ''}>
-                      <i data-lucide="refresh-cw" class="w-4 h-4"></i>
-                    </button>
                     <button class="card-icon-btn" title="Collapse" aria-label="Collapse saved conversations" data-action="toggle-history">
                       <i data-lucide="chevron-right" class="w-4 h-4"></i>
                     </button>
@@ -2648,14 +2568,8 @@
                     ` : ''}
                   </div>
                 ` : ''}
-                ${HISTORY_CACHE.error && history.length === 0 ? `
-                  <div style="text-align:center;padding:24px 12px;color:#ef4444;font-size:12px">
-                    Couldn't load from Google Sheet.<br>
-                    <span style="color:#94a3b8">${escHtml(HISTORY_CACHE.error)}</span><br>
-                    <button class="btn-outline" style="margin-top:10px;padding:6px 12px;min-height:auto;font-size:12px" data-action="refresh-history">Retry</button>
-                  </div>
-                ` : history.length === 0 ? `
-                  <div class="saved-empty">${HISTORY_CACHE.loading ? 'Loading from Google Sheet…' : 'No saved conversations yet.<br>Every answered question is saved automatically.'}</div>
+                ${history.length === 0 ? `
+                  <div class="saved-empty">Conversations from this visit appear here.<br>History clears when you close or refresh the page.</div>
                 ` : filtered.length === 0 ? `
                   <div class="saved-empty">No conversations match “${escHtml(truncate(STATE.historyQuery.trim(), 40))}”.</div>
                 ` : `
@@ -2700,8 +2614,8 @@
                 `}
               </div>
             ` : `
-              <div class="history-rail" role="button" tabindex="0" title="Saved conversations (${history.length})${HISTORY_CACHE.loading ? ' — loading…' : ''}" aria-label="Show saved conversations" data-action="toggle-history">
-                <i data-lucide="${HISTORY_CACHE.loading ? 'loader' : 'history'}" class="w-5 h-5${HISTORY_CACHE.loading ? ' rail-spin' : ''}"></i>
+              <div class="history-rail" role="button" tabindex="0" title="Saved conversations (${history.length})" aria-label="Show saved conversations" data-action="toggle-history">
+                <i data-lucide="history" class="w-5 h-5"></i>
                 ${history.length > 0 ? `<span class="history-rail-badge">${history.length}</span>` : ''}
               </div>
             `}
@@ -2786,9 +2700,6 @@
               </button>
               ${STATE.cardMenuOpen ? `
                 <div class="overflow-menu" data-menu="card">
-                  <button data-action="save-to-sheet" data-idx="${idx}" ${slot.messages.length === 0 ? 'disabled' : ''}>
-                    <i data-lucide="download" class="w-4 h-4"></i> Save conversation
-                  </button>
                   <button data-action="expand-slot" data-idx="${idx}">
                     <i data-lucide="maximize-2" class="w-4 h-4"></i> Open fullscreen
                   </button>
@@ -2834,8 +2745,7 @@
 
       function renderHistoryPopout() {
         if (!HISTORY_VIEW.open) return '';
-        const history = getHistory();
-        const entry = history.find(h => h.id === HISTORY_VIEW.open);
+        const entry = STATE.sessionHistory.find(h => h.id === HISTORY_VIEW.open);
         if (!entry) return '';
         const pairCount = entry.pairs.length;
         const pairLabel = pairCount === 1 ? '1 Q&A pair' : pairCount + ' Q&A pairs';
@@ -2925,9 +2835,6 @@
                 ` : ''}
                 <button style="background:transparent;border:1px solid rgba(255,255,255,0.25);color:#fff;font-size:11px;padding:5px 10px;border-radius:6px;cursor:pointer;font-weight:600" data-action="new-chat">
                   <i data-lucide="plus" class="w-3 h-3 inline mr-1"></i>New chat
-                </button>
-                <button style="background:transparent;border:1px solid rgba(255,255,255,0.25);color:var(--cyan);font-size:11px;padding:5px 10px;border-radius:6px;cursor:pointer;font-weight:600" data-action="save-to-sheet" data-idx="${idx}" ${slot.messages.length === 0 ? 'disabled' : ''}>
-                  <i data-lucide="download" class="w-3 h-3 inline mr-1"></i>Save
                 </button>
                 <button style="background:transparent;border:1px solid rgba(255,255,255,0.25);color:rgba(255,255,255,0.7);font-size:11px;padding:5px 10px;border-radius:6px;cursor:pointer;font-weight:600" data-action="clear-chat" data-idx="${idx}">
                   <i data-lucide="trash-2" class="w-3 h-3 inline mr-1"></i>Clear
@@ -3420,7 +3327,6 @@
               if (si) si.focus();
               break;
             }
-            case 'refresh-history': fetchHistoryFromSheet(); break;
             case 'toggle-composer': {
               const cur = document.getElementById('home-input-' + (idx !== null ? idx : 0));
               if (cur && STATE.slots[idx !== null ? idx : 0]) STATE.slots[idx !== null ? idx : 0].inputText = cur.value;
@@ -3437,7 +3343,6 @@
             case 'expand-slot': STATE.expandedSlot = idx; render(); scrollChat(); setTimeout(()=>document.getElementById('expanded-input')?.focus(),100); break;
             case 'close-expanded': STATE.expandedSlot = null; render(); break;
             case 'clear-chat': clearChat(idx !== null ? idx : 0); break;
-            case 'save-to-sheet': saveToSheet(idx !== null ? idx : 0); break;
             case 'send-expanded': {
               const inp = document.getElementById('expanded-input');
               if (inp) STATE.slots[STATE.expandedSlot].inputText = inp.value;
@@ -3532,7 +3437,7 @@
               break;
             }
             case 'copy-answer': {
-              const h = getHistory().find(x => x.id === act.dataset.id);
+              const h = STATE.sessionHistory.find(x => x.id === act.dataset.id);
               const pi = parseInt(act.dataset.pair, 10);
               if (!h || !h.pairs[pi]) break;
               copyTextToClipboard(h.pairs[pi].answer || '', act);
@@ -3549,7 +3454,7 @@
             }
             case 'noop': break;
             case 'load-history': {
-              const hist = getHistory().find(h => h.id === act.dataset.id);
+              const hist = STATE.sessionHistory.find(h => h.id === act.dataset.id);
               if (hist) {
                 const slot = STATE.slots[0];
                 const transcript = hist.pairs.map(p => 'User: ' + p.question + '\nRandy: ' + stripMarkdown(p.answer)).join('\n\n');
@@ -3670,7 +3575,6 @@
       document.addEventListener('DOMContentLoaded', () => {
         render();
         loadRemoteConfig().then(render);
-        fetchHistoryFromSheet();
         // Re-render once the browser loads its speech voice list (async in Chrome).
         if (VOICE.ttsSupported && typeof speechSynthesis.onvoiceschanged !== 'undefined') {
           window.speechSynthesis.onvoiceschanged = () => {
