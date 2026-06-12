@@ -426,7 +426,11 @@
         CONTEXT_LEN: 3,           // recent utterances passed to the classifier
         DECISIONS_KEEP: 8,        // ring buffer for the status UI
         MAX_BUFFER_CHARS: 420,    // cap the join buffer so run-on speech still flushes
-        MAX_DEFERRALS: 4,         // re-checks while a prior classify/answer is busy
+        MAX_DEFERRALS: 4,         // holds while interim speech is still flowing
+        // Holds while a prior classify/answer is in flight. Answers with web
+        // search take 5-15s, so this budget (x 1500ms) must outlast them —
+        // otherwise a question asked while Randy is answering gets dropped.
+        BUSY_MAX_DEFERRALS: 20,
         INTERIM_FRESH_MS: 1500,   // interim words newer than this mean speech is still flowing
         INTERIM_RECHECK_MS: 700,  // re-check cadence while waiting for a sentence to finish
         SEARCH_MAX_USES: 2,       // web searches per answer (latency budget)
@@ -675,7 +679,9 @@
         resumeRecognitionId: null,
         recentTtsText: '',        // rolling buffer of spoken text for echo matching
         srRunning: false,         // recognizer actually running (onstart..onend)
-        watchdogId: null          // background-tab restart watchdog interval
+        watchdogId: null,         // background-tab restart watchdog interval
+        lastSrEventAt: 0,         // last recognizer activity (wedge detection)
+        micStream: null           // held open while listening — see startListening()
       };
 
       // Listening runtime state. Randy listens through the microphone only —
@@ -688,6 +694,7 @@
         bufferTimerId: null,
         deferrals: 0,
         pending: false,           // classifier call in flight
+        busyDeferrals: 0,         // flush holds while a classify/answer is in flight
         context: [],              // recent utterances for the classifier
         lastSubmitted: '',
         lastSubmittedAt: 0,
@@ -1221,6 +1228,13 @@
       // lag). Beyond that, overlap with shared vocabulary — product names
       // come up in every question — must not swallow genuine speech.
       const TTS_ECHO_TEXT_WINDOW_MS = 8000;
+      // The fuzzy word-overlap echo test only runs while Randy's audio is
+      // playing or just stopped. On a technical call the NEXT question
+      // naturally reuses the vocabulary of the answer Randy just gave, so a
+      // long fuzzy window makes him deaf to follow-ups — exactly the
+      // "doesn't hear the question" failure. Exact-substring matches keep
+      // the full TTS_ECHO_TEXT_WINDOW_MS (real echo lags a few seconds).
+      const TTS_ECHO_FUZZY_WINDOW_MS = 2500;
       function ttsEchoActive() {
         if (STATE.slots.some(s => s.isSpeaking)) return true;
         if (VOICE.ttsPaused) return true;
@@ -1248,6 +1262,9 @@
         if (!VOICE.recentTtsText) return false;
         if (!ttsEchoActive() && (Date.now() - VOICE.lastTtsEndAt) > TTS_ECHO_TEXT_WINDOW_MS) return false;
         if (VOICE.recentTtsText.indexOf(n) !== -1) return true;
+        // Shared-vocabulary (fuzzy) matching is only trustworthy while the
+        // audio is actually playing — past that, treat it as real speech.
+        if (!ttsEchoActive() && (Date.now() - VOICE.lastTtsEndAt) > TTS_ECHO_FUZZY_WINDOW_MS) return false;
         const words = n.split(' ').filter(w => w.length >= 3);
         if (words.length < 2) return false;
         const ttsWords = new Set(VOICE.recentTtsText.split(' '));
@@ -1280,7 +1297,9 @@
           VOICE.ttsPaused = false;
           markTtsEnded();
           if (VOICE.wantRunning && recognitionWanted()) {
-            startRecognitionNow();
+            // In passive mode the recognizer never stopped — start() throws
+            // InvalidStateError; the watchdog covers any other failure.
+            try { startRecognitionNow(); } catch {}
           }
         }, TTS_ECHO_GRACE_MS);
       }
@@ -1466,6 +1485,7 @@
         // for on-device recognition; on cloud recognition it can error the
         // recognizer into a silent restart loop ("phrases-not-supported").
         r.onresult = (e) => {
+          VOICE.lastSrEventAt = Date.now();
           let interim = '';
           let finalChunk = '';
           for (let i = e.resultIndex; i < e.results.length; i++) {
@@ -1482,6 +1502,7 @@
           }
         };
         r.onerror = (e) => {
+          VOICE.lastSrEventAt = Date.now();
           if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
             VOICE.permissionDenied = true;
             stopListening({ silent: true });
@@ -1500,9 +1521,10 @@
           // Transient errors (no-speech, aborted, network) fall through to
           // onend, which restarts as needed.
         };
-        r.onstart = () => { VOICE.srRunning = true; };
+        r.onstart = () => { VOICE.srRunning = true; VOICE.lastSrEventAt = Date.now(); };
         r.onend = () => {
           VOICE.srRunning = false;
+          VOICE.lastSrEventAt = Date.now();
           // Intentionally paused for TTS — scheduleRecognitionResume restarts.
           if (VOICE.ttsPaused) return;
           if (!VOICE.wantRunning || !recognitionWanted()) return;
@@ -1537,24 +1559,47 @@
         startRecognitionWatchdog();
       }
 
+      // How long the recognizer may sit "running" with zero events before
+      // it's presumed wedged. Chrome's cloud recognizer occasionally stops
+      // delivering results without firing onend during long sessions; an
+      // abort() + restart costs under a second and un-sticks it.
+      const SR_STALL_MS = 60000;
+
       // Background-tab insurance. Chrome throttles timers in hidden tabs
       // (e.g. while the user works beside the pop-out chat), so the onend
       // retry chain can run out of attempts and strand the recognizer in a
       // dead state after a long silence. This notices "should be listening
-      // but isn't" and kicks it. The live mic capture keeps the tab exempt
-      // from intensive throttling, so the interval still fires while hidden.
+      // but isn't" and kicks it. The mic stream held by startListening()
+      // keeps the tab exempt from intensive throttling, so the interval
+      // still fires while hidden. It also catches a recognizer that is
+      // nominally running but silently wedged (no events for SR_STALL_MS).
       function startRecognitionWatchdog() {
         if (VOICE.watchdogId) return;
         VOICE.watchdogId = setInterval(() => {
-          if (!VOICE.wantRunning || !recognitionWanted()) return;
-          if (VOICE.ttsPaused || VOICE.srRunning) return;
-          try { startRecognitionNow(); } catch {}
+          if (!VOICE.wantRunning || !recognitionWanted() || VOICE.ttsPaused) return;
+          if (!VOICE.srRunning) {
+            try { startRecognitionNow(); } catch {}
+            return;
+          }
+          if (Date.now() - VOICE.lastSrEventAt > SR_STALL_MS) {
+            // abort() fires onend, which restarts cleanly.
+            try { VOICE.recognition.abort(); } catch {}
+          }
         }, 5000);
       }
 
       function stopRecognitionWatchdog() {
         if (VOICE.watchdogId) { clearInterval(VOICE.watchdogId); VOICE.watchdogId = null; }
       }
+
+      // Coming back to the foreground is a free chance to revive a
+      // recognizer that died while the tab was throttled in the background.
+      document.addEventListener('visibilitychange', () => {
+        if (document.hidden) return;
+        if (VOICE.wantRunning && recognitionWanted() && !VOICE.ttsPaused && !VOICE.srRunning) {
+          try { startRecognitionNow(); } catch {}
+        }
+      });
 
       // Restart the recognizer so a source change (mic ↔ desktop track) takes
       // effect. abort() triggers onend, which restarts with the new source.
@@ -1864,10 +1909,18 @@
 
         // Ask for the mic up front so a denial fails loudly here, with a
         // clear message, instead of dying quietly inside the recognizer.
+        // The stream is HELD for the whole listening session, not stopped:
+        // an active capture exempts the tab from Chrome's intensive timer
+        // throttling, which is what keeps the restart watchdog alive while
+        // the user works beside the docked pop-out with this tab hidden.
+        // (The recognizer captures on its own; this stream is the cheap
+        // keep-alive that covers the gaps between recognition sessions.)
         if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
           try {
-            const probe = await navigator.mediaDevices.getUserMedia({ audio: true });
-            probe.getTracks().forEach(t => { try { t.stop(); } catch {} });
+            VOICE.micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            VOICE.micStream.getTracks().forEach(t => {
+              t.onended = () => { VOICE.micStream = null; };
+            });
           } catch (err) {
             showToast('Randy needs the microphone. Click Allow and try again.');
             render();
@@ -1894,6 +1947,10 @@
         const slot = STATE.slots[0];
         const wasOn = slot.listenOn;
         slot.listenOn = false;
+        if (VOICE.micStream) {
+          try { VOICE.micStream.getTracks().forEach(t => t.stop()); } catch {}
+          VOICE.micStream = null;
+        }
         clearAssistBuffer();
         clearConvAutoExit();
         TECH.pending = false;
@@ -1908,6 +1965,7 @@
       function clearAssistBuffer() {
         TECH.buffer = '';
         TECH.deferrals = 0;
+        TECH.busyDeferrals = 0;
         if (TECH.bufferTimerId) { clearTimeout(TECH.bufferTimerId); TECH.bufferTimerId = null; }
       }
 
@@ -1942,11 +2000,14 @@
           return;
         }
 
-        // Busy with a previous classify/answer — defer briefly so we don't
-        // pile up; give up after a few tries to stay current with the call.
+        // Busy with a previous classify/answer — hold the question until
+        // Randy frees up. The budget is generous on purpose: dropping here
+        // means a question asked during an answer silently vanishes, which
+        // reads as "Randy didn't hear me". MAX_BUFFER_CHARS keeps the held
+        // buffer from growing unboundedly while we wait.
         if (TECH.pending || slot.loading) {
-          if (TECH.deferrals < ASSIST.MAX_DEFERRALS) {
-            TECH.deferrals++;
+          if (TECH.busyDeferrals < ASSIST.BUSY_MAX_DEFERRALS) {
+            TECH.busyDeferrals++;
             TECH.bufferTimerId = setTimeout(flushAssistBuffer, 1500);
           } else {
             clearAssistBuffer();
@@ -1955,6 +2016,7 @@
         }
         TECH.buffer = '';
         TECH.deferrals = 0;
+        TECH.busyDeferrals = 0;
         if (!candidate) return;
 
         const words = candidate.split(/\s+/).filter(Boolean);
