@@ -643,7 +643,9 @@
         window: null,     // the open PiP window, or null
         slotIdx: null,    // slot the pop-out is pinned to
         opening: false,   // requestWindow() in flight — ignore re-clicks
-        lastHtml: ''      // last message-list HTML, to skip no-op rebuilds
+        lastHtml: '',     // last message-list HTML, to skip no-op rebuilds
+        collapsed: false, // minimized to the floating blue "R" icon
+        restoreSize: null // outer window size to bring back on expand
       };
 
       const VOICE = {
@@ -2932,6 +2934,15 @@
         .pip-titles { min-width: 0; }
         .pip-name { font-size: 13px; font-weight: 600; line-height: 1.2; }
         .pip-sub { font-size: 10.5px; color: rgba(255,255,255,0.6); line-height: 1.3; }
+        .pip-min { margin-left: auto; width: 26px; height: 26px; border-radius: 7px; border: none; background: rgba(255,255,255,0.12); color: #fff; display: grid; place-items: center; cursor: pointer; flex-shrink: 0; transition: background 0.15s; }
+        .pip-min:hover { background: rgba(255,255,255,0.26); }
+        .pip-mini { display: none; position: relative; width: 72px; height: 72px; border-radius: 50%; border: none; background: var(--primary); color: #fff; font-size: 26px; font-weight: 700; font-family: inherit; place-items: center; cursor: pointer; box-shadow: 0 8px 24px rgba(3,114,255,0.35); transition: transform 0.15s, background 0.15s; }
+        .pip-mini:hover { transform: scale(1.05); background: var(--primary-hover); }
+        .pip-mini-dot { position: absolute; bottom: 2px; right: 2px; width: 15px; height: 15px; border-radius: 50%; background: #94a3b8; border: 3px solid var(--row); }
+        .pip-mini-dot.live { background: #10b981; animation: pipPulse 2.2s ease-out infinite; }
+        body.pip-collapsed { justify-content: center; align-items: center; }
+        body.pip-collapsed .pip-head, body.pip-collapsed .pip-msgs, body.pip-collapsed .pip-inputrow { display: none; }
+        body.pip-collapsed .pip-mini { display: grid; }
         .pip-msgs { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
         .pip-empty { margin: auto; max-width: 250px; text-align: center; color: #64748b; font-size: 12.5px; line-height: 1.6; }
         .pip-row { display: flex; justify-content: flex-start; }
@@ -2970,7 +2981,7 @@
         .pip-send { width: 38px; height: 38px; border-radius: 50%; background: var(--primary); color: #fff; border: none; display: grid; place-items: center; cursor: pointer; flex-shrink: 0; transition: background 0.15s; }
         .pip-send:hover { background: var(--primary-hover); }
         .pip-send:disabled { background: #cbd5e1; cursor: not-allowed; }
-        @media (prefers-reduced-motion: reduce) { .pip-dot.live, .pip-tdot { animation: none; } }
+        @media (prefers-reduced-motion: reduce) { .pip-dot.live, .pip-mini-dot.live, .pip-tdot { animation: none; } }
       `;
 
       // Toggle the floating window. Must run from a real user click —
@@ -2984,6 +2995,8 @@
           const pipWindow = await window.documentPictureInPicture.requestWindow({ width: 380, height: 560 });
           PIP.window = pipWindow;
           PIP.slotIdx = idx;
+          PIP.collapsed = false;
+          PIP.restoreSize = null;
           setupPipWindow(pipWindow);
           showToast('Chat popped out — it stays on top while you work');
           render();
@@ -3026,6 +3039,9 @@
               <div class="pip-name">${escHtml(label)}</div>
               <div class="pip-sub" id="pip-sub">Online</div>
             </div>
+            <button class="pip-min" data-action="pip-minimize" title="Minimize to a floating icon" aria-label="Minimize to a floating icon">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/></svg>
+            </button>
           </div>
           <div class="pip-msgs" id="pip-msgs"></div>
           <div class="pip-inputrow">
@@ -3033,13 +3049,18 @@
             <button class="pip-send" id="pip-send" data-action="pip-send" title="Send message" aria-label="Send message">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>
             </button>
-          </div>`;
+          </div>
+          <button class="pip-mini" data-action="pip-expand" title="Open the chat" aria-label="Open the chat">
+            ${escHtml(label.charAt(0))}<span class="pip-mini-dot" id="pip-mini-dot"></span>
+          </button>`;
 
         // The main page's delegated listeners are bound to the MAIN document
         // and never fire here — the PiP document needs its own.
         doc.addEventListener('click', e => {
           if (!e.target.closest) return;
           if (e.target.closest('[data-action="pip-send"]')) { sendFromPip(); return; }
+          if (e.target.closest('[data-action="pip-minimize"]')) { collapsePip(); return; }
+          if (e.target.closest('[data-action="pip-expand"]')) { expandPip(); return; }
           const cp = e.target.closest('[data-action="pip-copy"]');
           if (cp) copyFromPip(cp);
         });
@@ -3054,6 +3075,8 @@
             PIP.window = null;
             PIP.slotIdx = null;
             PIP.lastHtml = '';
+            PIP.collapsed = false;
+            PIP.restoreSize = null;
             render(); // put the pop-out buttons back in their closed state
           }
         });
@@ -3105,6 +3128,36 @@
         if (w.navigator.clipboard && w.navigator.clipboard.writeText) {
           w.navigator.clipboard.writeText(text).then(done).catch(fallback);
         } else fallback();
+      }
+
+      // Minimize the pop-out down to a floating blue "R" icon (green dot =
+      // voice on, same as everywhere else); clicking the icon brings the
+      // full chat back. resizeTo() needs a user gesture — both paths are
+      // clicks inside the PiP window, so Chrome allows it (and clamps the
+      // collapsed size to its own minimum, which is fine: the icon just
+      // sits centered in whatever window Chrome grants).
+      function collapsePip() {
+        const w = PIP.window;
+        if (!w || w.closed || PIP.collapsed) return;
+        PIP.collapsed = true;
+        PIP.restoreSize = (w.outerWidth > 0 && w.outerHeight > 0)
+          ? { width: w.outerWidth, height: w.outerHeight }
+          : null;
+        try { w.document.body.classList.add('pip-collapsed'); } catch {}
+        try { w.resizeTo(180, 170); } catch (err) { console.warn('PiP collapse resize failed:', err); }
+        renderPip();
+      }
+
+      function expandPip() {
+        const w = PIP.window;
+        if (!w || w.closed || !PIP.collapsed) return;
+        PIP.collapsed = false;
+        const size = PIP.restoreSize || { width: 380, height: 560 };
+        PIP.restoreSize = null;
+        try { w.document.body.classList.remove('pip-collapsed'); } catch {}
+        try { w.resizeTo(size.width, size.height); } catch (err) { console.warn('PiP expand resize failed:', err); }
+        renderPip();
+        setTimeout(() => { try { w.document.getElementById('pip-input').focus(); } catch {} }, 50);
       }
 
       // Status line + listening dot, mirroring the conv-sub logic in
@@ -3172,6 +3225,8 @@
           if (sub && sub.textContent !== st.text) sub.textContent = st.text;
           const dot = doc.getElementById('pip-dot');
           if (dot) dot.className = 'pip-dot' + (st.live ? ' live' : '');
+          const miniDot = doc.getElementById('pip-mini-dot');
+          if (miniDot) miniDot.className = 'pip-mini-dot' + (st.live ? ' live' : '');
           const name = doc.querySelector('.pip-name');
           if (name && name.textContent !== slot.label) {
             name.textContent = slot.label;
