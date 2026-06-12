@@ -645,7 +645,10 @@
         opening: false,   // requestWindow() in flight — ignore re-clicks
         lastHtml: '',     // last message-list HTML, to skip no-op rebuilds
         collapsed: false, // minimized to the floating blue "R" icon
-        restoreSize: null // outer window size to bring back on expand
+        restoreSize: null,// outer window size to bring back on expand
+        unseen: 0,        // answers that landed while collapsed (badge count)
+        flashNext: false, // auto-expanded mid-answer — flash the reply when it lands
+        flashNow: false   // flash the newest answer on the next message rebuild
       };
 
       const VOICE = {
@@ -2156,6 +2159,9 @@
 
         if (viaVoice) initTtsQueue(idx, controller.signal, assistantMsgIdx);
 
+        // If the pop-out is sitting collapsed, a new question should bring
+        // it back so the reply is visible.
+        pipAutoExpand();
         render();
         scrollChat();
 
@@ -2188,6 +2194,7 @@
           if (Array.isArray(data.sources) && data.sources.length) {
             slot.messages[assistantMsgIdx].sources = data.sources.slice(0, 6);
           }
+          notePipAnswerArrived();
 
           if (viaVoice && slot.ttsQueue) {
             const sentenceRe = /[^.!?]+[.!?]+(?:\s+|$)|[^.!?]+$/g;
@@ -2220,6 +2227,7 @@
             if (placeholder && placeholder.role === 'assistant') placeholder.content = errMsg;
             else slot.messages.push({ role: 'assistant', content: errMsg });
             if (viaVoice) teardownTtsQueue(idx);
+            notePipAnswerArrived();
           }
         }
 
@@ -2256,6 +2264,9 @@
         slot.messages.push({ role: 'assistant', content: '', kind: 'assist' });
         const assistantMsgIdx = slot.messages.length - 1;
 
+        // A question was overheard — bring the collapsed pop-out icon back
+        // so the user watches the answer arrive.
+        pipAutoExpand();
         render();
         scrollChat();
 
@@ -2310,6 +2321,7 @@
           if (slot.speakAnswers && spoken) {
             speakText(spoken, idx, assistantMsgIdx);
           }
+          notePipAnswerArrived();
           TECH.answered++;
           TECH.recentPairs.push({ question, answer: msg.content });
           while (TECH.recentPairs.length > ASSIST.HISTORY_PAIRS) TECH.recentPairs.shift();
@@ -2335,6 +2347,7 @@
             const placeholder = slot.messages[assistantMsgIdx];
             const errMsg = '⚠️ ' + (err.message || 'Connection failed. Check your internet connection and try again.');
             if (placeholder && placeholder.role === 'assistant') placeholder.content = errMsg;
+            notePipAnswerArrived();
           }
         }
 
@@ -2919,6 +2932,19 @@
        * of every render(). It has its own document, so the main page's
        * Tailwind classes and delegated listeners don't reach it: it gets a
        * self-contained stylesheet and listeners bound to its own document.
+       *
+       * Two modes: the full chat, and a collapsed "listening" icon (the
+       * minimize button shrinks the window down to a small badge; Chrome
+       * decides the actual minimum size and the window's position — PiP
+       * windows can't be moved programmatically, but Chrome places them
+       * in the bottom-right corner by default and remembers where the
+       * user drags them). When a question arrives while collapsed, the
+       * code immediately tries to grow the window back so the answer
+       * lands in view. Chrome only honors a programmatic resize during a
+       * user gesture; when the gesture-less attempt is refused, the icon
+       * runs a status sequence instead — thinking dots while answering,
+       * then a glowing badge — and one click anywhere on it reopens the
+       * full chat with the newest answer highlighted.
        * ================================================================ */
 
       const PIP_CSS = `
@@ -2936,13 +2962,35 @@
         .pip-sub { font-size: 10.5px; color: rgba(255,255,255,0.6); line-height: 1.3; }
         .pip-min { margin-left: auto; width: 26px; height: 26px; border-radius: 7px; border: none; background: rgba(255,255,255,0.12); color: #fff; display: grid; place-items: center; cursor: pointer; flex-shrink: 0; transition: background 0.15s; }
         .pip-min:hover { background: rgba(255,255,255,0.26); }
-        .pip-mini { display: none; position: relative; width: 72px; height: 72px; border-radius: 50%; border: none; background: var(--primary); color: #fff; font-size: 26px; font-weight: 700; font-family: inherit; place-items: center; cursor: pointer; box-shadow: 0 8px 24px rgba(3,114,255,0.35); transition: transform 0.15s, background 0.15s; }
-        .pip-mini:hover { transform: scale(1.05); background: var(--primary-hover); }
+        /* Collapsed mode — the floating "listening" icon. The whole window
+           is one click target; the orb carries the state: green dot while
+           listening, white dots while answering, badge + glow when an
+           answer is waiting. */
+        .pip-mini { display: none; position: relative; flex-direction: column; align-items: center; justify-content: center; gap: 9px; width: 100%; height: 100%; padding: 0; border: none; background: transparent; cursor: pointer; font-family: inherit; }
+        body.pip-collapsed .pip-head, body.pip-collapsed .pip-msgs, body.pip-collapsed .pip-inputrow { display: none; }
+        body.pip-collapsed .pip-mini { display: flex; }
+        .pip-mini-stage { position: relative; width: 72px; height: 72px; }
+        .pip-mini-ring { position: absolute; inset: 0; border-radius: 50%; border: 2px solid var(--cyan); opacity: 0; pointer-events: none; }
+        .pip-mini.is-live .pip-mini-ring { animation: pipRing 2s ease-out infinite; }
+        @keyframes pipRing { 0% { transform: scale(1); opacity: 0.5; } 100% { transform: scale(1.55); opacity: 0; } }
+        .pip-mini-orb { position: relative; width: 72px; height: 72px; border-radius: 50%; background: var(--primary); color: #fff; display: grid; place-items: center; font-size: 26px; font-weight: 700; box-shadow: 0 8px 24px rgba(3,114,255,0.35); transition: transform 0.15s, background 0.15s; }
+        .pip-mini:hover .pip-mini-orb { transform: scale(1.05); background: var(--primary-hover); }
+        .pip-mini-dots { display: none; gap: 5px; }
+        .pip-mini-dots i { width: 8px; height: 8px; border-radius: 50%; background: #fff; animation: pipDot 1.4s infinite ease-in-out both; }
+        .pip-mini-dots i:nth-child(1) { animation-delay: -0.32s; }
+        .pip-mini-dots i:nth-child(2) { animation-delay: -0.16s; }
+        .pip-mini.is-thinking .pip-mini-letter { display: none; }
+        .pip-mini.is-thinking .pip-mini-dots { display: inline-flex; }
         .pip-mini-dot { position: absolute; bottom: 2px; right: 2px; width: 15px; height: 15px; border-radius: 50%; background: #94a3b8; border: 3px solid var(--row); }
         .pip-mini-dot.live { background: #10b981; animation: pipPulse 2.2s ease-out infinite; }
-        body.pip-collapsed { justify-content: center; align-items: center; }
-        body.pip-collapsed .pip-head, body.pip-collapsed .pip-msgs, body.pip-collapsed .pip-inputrow { display: none; }
-        body.pip-collapsed .pip-mini { display: grid; }
+        .pip-mini-badge { position: absolute; top: -5px; right: -5px; min-width: 22px; height: 22px; padding: 0 5px; border-radius: 999px; background: #fff; color: var(--primary); border: 2px solid var(--primary); font-size: 11px; font-weight: 800; display: none; place-items: center; box-shadow: 0 2px 8px rgba(22,31,91,0.25); }
+        .pip-mini.has-unseen .pip-mini-badge { display: grid; }
+        .pip-mini.has-unseen .pip-mini-orb { animation: pipGlow 1.6s ease-in-out infinite; }
+        @keyframes pipGlow { 0%, 100% { box-shadow: 0 8px 24px rgba(3,114,255,0.35); } 50% { box-shadow: 0 0 0 9px rgba(3,114,255,0.16), 0 8px 28px rgba(3,114,255,0.5); } }
+        .pip-mini-label { font-size: 10.5px; font-weight: 600; color: #6B7693; letter-spacing: 0.01em; }
+        .pip-mini.has-unseen .pip-mini-label { color: var(--primary); font-weight: 700; }
+        .pip-new { animation: pipNewFlash 1.8s ease-out 1; }
+        @keyframes pipNewFlash { 0% { box-shadow: 0 0 0 3px rgba(3,114,255,0.5); } 100% { box-shadow: 0 0 0 3px rgba(3,114,255,0); } }
         .pip-msgs { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
         .pip-empty { margin: auto; max-width: 250px; text-align: center; color: #64748b; font-size: 12.5px; line-height: 1.6; }
         .pip-row { display: flex; justify-content: flex-start; }
@@ -2981,7 +3029,7 @@
         .pip-send { width: 38px; height: 38px; border-radius: 50%; background: var(--primary); color: #fff; border: none; display: grid; place-items: center; cursor: pointer; flex-shrink: 0; transition: background 0.15s; }
         .pip-send:hover { background: var(--primary-hover); }
         .pip-send:disabled { background: #cbd5e1; cursor: not-allowed; }
-        @media (prefers-reduced-motion: reduce) { .pip-dot.live, .pip-mini-dot.live, .pip-tdot { animation: none; } }
+        @media (prefers-reduced-motion: reduce) { .pip-dot.live, .pip-mini-dot.live, .pip-mini.is-live .pip-mini-ring, .pip-mini.has-unseen .pip-mini-orb, .pip-mini-dots i, .pip-new, .pip-tdot { animation: none; } }
       `;
 
       // Toggle the floating window. Must run from a real user click —
@@ -2997,6 +3045,9 @@
           PIP.slotIdx = idx;
           PIP.collapsed = false;
           PIP.restoreSize = null;
+          PIP.unseen = 0;
+          PIP.flashNext = false;
+          PIP.flashNow = false;
           setupPipWindow(pipWindow);
           showToast('Chat popped out — it stays on top while you work');
           render();
@@ -3050,8 +3101,17 @@
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>
             </button>
           </div>
-          <button class="pip-mini" data-action="pip-expand" title="Open the chat" aria-label="Open the chat">
-            ${escHtml(label.charAt(0))}<span class="pip-mini-dot" id="pip-mini-dot"></span>
+          <button class="pip-mini" id="pip-mini" data-action="pip-expand" title="Randy is listening — click to open the chat" aria-label="Open the chat">
+            <span class="pip-mini-stage">
+              <span class="pip-mini-ring"></span>
+              <span class="pip-mini-orb">
+                <span class="pip-mini-letter">${escHtml(label.charAt(0))}</span>
+                <span class="pip-mini-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+                <span class="pip-mini-dot" id="pip-mini-dot"></span>
+                <span class="pip-mini-badge" id="pip-mini-badge">1</span>
+              </span>
+            </span>
+            <span class="pip-mini-label" id="pip-mini-label">Listening…</span>
           </button>`;
 
         // The main page's delegated listeners are bound to the MAIN document
@@ -3077,6 +3137,9 @@
             PIP.lastHtml = '';
             PIP.collapsed = false;
             PIP.restoreSize = null;
+            PIP.unseen = 0;
+            PIP.flashNext = false;
+            PIP.flashNow = false;
             render(); // put the pop-out buttons back in their closed state
           }
         });
@@ -3130,34 +3193,90 @@
         } else fallback();
       }
 
-      // Minimize the pop-out down to a floating blue "R" icon (green dot =
-      // voice on, same as everywhere else); clicking the icon brings the
-      // full chat back. resizeTo() needs a user gesture — both paths are
-      // clicks inside the PiP window, so Chrome allows it (and clamps the
-      // collapsed size to its own minimum, which is fine: the icon just
-      // sits centered in whatever window Chrome grants).
+      // Minimize the pop-out down to a small floating "R" icon that keeps
+      // listening (green dot = voice on, same as everywhere else). Chrome
+      // clamps the collapsed window to its own minimum size and the icon
+      // centers in whatever it grants.
       function collapsePip() {
         const w = PIP.window;
         if (!w || w.closed || PIP.collapsed) return;
         PIP.collapsed = true;
+        PIP.unseen = 0;
+        PIP.flashNext = false;
+        PIP.flashNow = false;
         PIP.restoreSize = (w.outerWidth > 0 && w.outerHeight > 0)
           ? { width: w.outerWidth, height: w.outerHeight }
           : null;
         try { w.document.body.classList.add('pip-collapsed'); } catch {}
-        try { w.resizeTo(180, 170); } catch (err) { console.warn('PiP collapse resize failed:', err); }
+        try { w.resizeTo(240, 152); } catch (err) { console.warn('PiP collapse resize failed:', err); }
         renderPip();
       }
 
-      function expandPip() {
+      // Bring the full chat back. Manual path = a click inside the PiP
+      // window, so resizeTo() has the user gesture it needs. The auto path
+      // (a question just came in) has no gesture; Chrome may refuse the
+      // resize, in which case we stay collapsed and the icon flips to its
+      // thinking / answer-ready state instead — returns false so callers
+      // know the window didn't grow.
+      function expandPip({ auto = false } = {}) {
         const w = PIP.window;
-        if (!w || w.closed || !PIP.collapsed) return;
-        PIP.collapsed = false;
+        if (!w || w.closed || !PIP.collapsed) return false;
         const size = PIP.restoreSize || { width: 380, height: 560 };
+        try {
+          w.resizeTo(size.width, size.height);
+        } catch (err) {
+          if (auto) return false;
+          // A manual click should always carry a gesture; if the resize
+          // still failed, show the chat anyway rather than leaving the
+          // user stuck on the icon.
+          console.warn('PiP expand resize failed:', err);
+        }
+        const hadUnseen = PIP.unseen > 0;
+        PIP.collapsed = false;
+        PIP.unseen = 0;
         PIP.restoreSize = null;
         try { w.document.body.classList.remove('pip-collapsed'); } catch {}
-        try { w.resizeTo(size.width, size.height); } catch (err) { console.warn('PiP expand resize failed:', err); }
         renderPip();
-        setTimeout(() => { try { w.document.getElementById('pip-input').focus(); } catch {} }, 50);
+        try {
+          const doc = w.document;
+          const msgs = doc.getElementById('pip-msgs');
+          if (msgs) msgs.scrollTop = msgs.scrollHeight;
+          if (auto || hadUnseen) {
+            // The typing indicator doesn't count — highlight real answers only.
+            const bots = doc.querySelectorAll('.pip-bubble.pip-bot:not(.pip-typing)');
+            if (bots.length) bots[bots.length - 1].classList.add('pip-new');
+            // Auto-expanded for a question that's still being answered —
+            // there's no answer bubble to highlight yet; flag the reply so
+            // it flashes the moment it lands.
+            else if (auto) PIP.flashNext = true;
+          }
+          // Don't steal OS focus on the auto path — the user is mid-call
+          // in another app; only a deliberate click refocuses the input.
+          if (!auto) setTimeout(() => { try { doc.getElementById('pip-input').focus(); } catch {} }, 50);
+        } catch {}
+        return true;
+      }
+
+      // A question just came in — pop the collapsed icon back out so the
+      // answer lands in view. If Chrome refuses the gesture-less resize,
+      // renderPip() shows the thinking state on the icon instead.
+      function pipAutoExpand() {
+        if (!PIP.window || PIP.window.closed || !PIP.collapsed) return;
+        expandPip({ auto: true });
+      }
+
+      // An answer just finished. Collapsed: try once more to pop out with
+      // the result, badge the icon if the resize is refused. Expanded
+      // because of an earlier auto-expand: highlight the reply when the
+      // message list next rebuilds (the render that paints it).
+      function notePipAnswerArrived() {
+        const w = PIP.window;
+        if (!w || w.closed) return;
+        if (PIP.collapsed) {
+          if (!expandPip({ auto: true })) PIP.unseen++;
+          return;
+        }
+        if (PIP.flashNext) { PIP.flashNext = false; PIP.flashNow = true; }
       }
 
       // Status line + listening dot, mirroring the conv-sub logic in
@@ -3200,7 +3319,7 @@
           return '<div class="pip-row"><div class="pip-bubble pip-bot">' + escHtml(m.content).replace(/\n/g, '<br>') + '</div></div>';
         });
         if (slot.loading) {
-          out.push('<div class="pip-row"><div class="pip-bubble pip-bot"><span class="pip-tdot"></span><span class="pip-tdot"></span><span class="pip-tdot"></span></div></div>');
+          out.push('<div class="pip-row"><div class="pip-bubble pip-bot pip-typing"><span class="pip-tdot"></span><span class="pip-tdot"></span><span class="pip-tdot"></span></div></div>');
         }
         return out.join('');
       }
@@ -3225,8 +3344,31 @@
           if (sub && sub.textContent !== st.text) sub.textContent = st.text;
           const dot = doc.getElementById('pip-dot');
           if (dot) dot.className = 'pip-dot' + (st.live ? ' live' : '');
-          const miniDot = doc.getElementById('pip-mini-dot');
-          if (miniDot) miniDot.className = 'pip-mini-dot' + (st.live ? ' live' : '');
+
+          // Collapsed icon: listening → answering → answer-ready.
+          const mini = doc.getElementById('pip-mini');
+          if (mini) {
+            const thinking = !!slot.loading;
+            const unseen = !thinking && PIP.unseen > 0;
+            mini.classList.toggle('is-live', st.live);
+            mini.classList.toggle('is-thinking', thinking);
+            mini.classList.toggle('has-unseen', unseen);
+            const miniDot = doc.getElementById('pip-mini-dot');
+            if (miniDot) miniDot.className = 'pip-mini-dot' + (st.live ? ' live' : '');
+            const badge = doc.getElementById('pip-mini-badge');
+            if (badge) badge.textContent = PIP.unseen > 9 ? '9+' : String(PIP.unseen || 1);
+            const lbl = doc.getElementById('pip-mini-label');
+            const lblText = thinking ? 'Answering…'
+              : unseen ? (PIP.unseen === 1 ? 'Answer ready' : PIP.unseen + ' answers ready')
+              : st.live ? 'Listening…' : 'Online';
+            if (lbl && lbl.textContent !== lblText) lbl.textContent = lblText;
+            const t = thinking ? 'Randy is answering — click to open the chat'
+              : unseen ? 'Answer ready — click to view it'
+              : st.live ? 'Randy is listening — click to open the chat'
+              : 'Click to open the chat';
+            if (mini.title !== t) mini.title = t;
+          }
+
           const name = doc.querySelector('.pip-name');
           if (name && name.textContent !== slot.label) {
             name.textContent = slot.label;
@@ -3241,6 +3383,11 @@
             msgs.innerHTML = html;
             PIP.lastHtml = html;
             if (atBottom) msgs.scrollTop = msgs.scrollHeight;
+            if (PIP.flashNow) {
+              PIP.flashNow = false;
+              const bots = msgs.querySelectorAll('.pip-bubble.pip-bot:not(.pip-typing)');
+              if (bots.length) bots[bots.length - 1].classList.add('pip-new');
+            }
           }
 
           const sendBtn = doc.getElementById('pip-send');
