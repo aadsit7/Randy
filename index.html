@@ -632,6 +632,18 @@
 
       let HISTORY_VIEW = { open: null };
 
+      // Floating pop-out chat (Chrome's Document Picture-in-Picture).
+      // The pop-out gets its own compact DOM built from STATE — nothing is
+      // ever moved out of #app, since render() rebuilds #app's innerHTML
+      // constantly and would orphan any adopted nodes.
+      const PIP = {
+        supported: 'documentPictureInPicture' in window,
+        window: null,     // the open PiP window, or null
+        slotIdx: null,    // slot the pop-out is pinned to
+        opening: false,   // requestWindow() in flight — ignore re-clicks
+        lastHtml: ''      // last message-list HTML, to skip no-op rebuilds
+      };
+
       const VOICE = {
         srSupported: !!(window.SpeechRecognition || window.webkitSpeechRecognition),
         ttsSupported: !!window.speechSynthesis,
@@ -653,7 +665,9 @@
         lastTtsEndAt: 0,          // for the post-playback echo grace window
         ttsPaused: false,         // recognition paused because TTS is playing
         resumeRecognitionId: null,
-        recentTtsText: ''         // rolling buffer of spoken text for echo matching
+        recentTtsText: '',        // rolling buffer of spoken text for echo matching
+        srRunning: false,         // recognizer actually running (onstart..onend)
+        watchdogId: null          // background-tab restart watchdog interval
       };
 
       // Listening runtime state. Randy listens through the microphone only —
@@ -1546,7 +1560,9 @@
           // Transient errors (no-speech, aborted, network) fall through to
           // onend, which restarts as needed.
         };
+        r.onstart = () => { VOICE.srRunning = true; };
         r.onend = () => {
+          VOICE.srRunning = false;
           // Intentionally paused for TTS — scheduleRecognitionResume restarts.
           if (VOICE.ttsPaused) return;
           if (!VOICE.wantRunning || !recognitionWanted()) return;
@@ -1578,6 +1594,26 @@
         VOICE.wantRunning = true;
         try { startRecognitionNow(); }
         catch (e) { /* already started — ignore */ }
+        startRecognitionWatchdog();
+      }
+
+      // Background-tab insurance. Chrome throttles timers in hidden tabs
+      // (e.g. while the user works beside the pop-out chat), so the onend
+      // retry chain can run out of attempts and strand the recognizer in a
+      // dead state after a long silence. This notices "should be listening
+      // but isn't" and kicks it. The live mic capture keeps the tab exempt
+      // from intensive throttling, so the interval still fires while hidden.
+      function startRecognitionWatchdog() {
+        if (VOICE.watchdogId) return;
+        VOICE.watchdogId = setInterval(() => {
+          if (!VOICE.wantRunning || !recognitionWanted()) return;
+          if (VOICE.ttsPaused || VOICE.srRunning) return;
+          try { startRecognitionNow(); } catch {}
+        }, 5000);
+      }
+
+      function stopRecognitionWatchdog() {
+        if (VOICE.watchdogId) { clearInterval(VOICE.watchdogId); VOICE.watchdogId = null; }
       }
 
       // Restart the recognizer so a source change (mic ↔ desktop track) takes
@@ -1597,6 +1633,7 @@
 
       function stopRecognition() {
         VOICE.wantRunning = false;
+        stopRecognitionWatchdog();
         if (VOICE.recognition) {
           try { VOICE.recognition.stop(); } catch {}
         }
@@ -2468,6 +2505,7 @@
         if (window.lucide?.createIcons) try { window.lucide.createIcons(); } catch {}
         restoreScroll(scroll);
         bindEvents();
+        if (PIP.window) renderPip();
       }
 
       /* ---------- left panel: orb + technical assistance ---------- */
@@ -2738,6 +2776,11 @@
               <button class="new-chat-btn" title="Start a new chat — this one is saved in History" data-action="new-chat">
                 <i data-lucide="plus" class="w-3.5 h-3.5"></i>New chat
               </button>
+              ${PIP.supported ? `
+                <button class="card-icon-btn" title="${PIP.window ? 'Close the pop-out chat window' : 'Pop out chat — floats on top while you use other apps'}" aria-label="${PIP.window ? 'Close pop-out chat' : 'Pop out chat'}" data-action="pop-out-chat" data-idx="${idx}" ${PIP.window ? 'style="color:var(--primary);background:#dbeafe"' : ''}>
+                  <i data-lucide="picture-in-picture-2" class="w-4 h-4"></i>
+                </button>
+              ` : ''}
               <button class="overflow-btn" title="More actions" aria-label="More actions" aria-haspopup="true" aria-expanded="${STATE.cardMenuOpen ? 'true' : 'false'}" data-action="toggle-card-menu" data-idx="${idx}">
                 <i data-lucide="more-vertical" class="w-5 h-5"></i>
               </button>
@@ -2889,6 +2932,11 @@
                 <button style="background:transparent;border:1px solid rgba(255,255,255,0.25);color:rgba(255,255,255,0.7);font-size:11px;padding:5px 10px;border-radius:6px;cursor:pointer;font-weight:600" data-action="clear-chat" data-idx="${idx}">
                   <i data-lucide="trash-2" class="w-3 h-3 inline mr-1"></i>Clear
                 </button>
+                ${PIP.supported ? `
+                  <button style="background:${PIP.window ? 'rgba(0,191,255,0.18)' : 'transparent'};border:1px solid rgba(255,255,255,0.25);color:${PIP.window ? 'var(--cyan)' : '#fff'};font-size:11px;padding:5px 10px;border-radius:6px;cursor:pointer;font-weight:600" data-action="pop-out-chat" data-idx="${idx}" title="${PIP.window ? 'Close the pop-out chat window' : 'Pop out chat — floats on top while you use other apps'}">
+                    <i data-lucide="picture-in-picture-2" class="w-3 h-3 inline mr-1"></i>${PIP.window ? 'Pop in' : 'Pop out'}
+                  </button>
+                ` : ''}
                 <button style="background:transparent;border:1px solid rgba(255,255,255,0.25);color:#fff;font-size:11px;padding:5px 10px;border-radius:6px;cursor:pointer;font-weight:600" data-action="close-expanded">
                   <i data-lucide="x" class="w-3 h-3 inline mr-1"></i>Close
                 </button>
@@ -3026,6 +3074,249 @@
       }
 
       /* ================================================================
+       * POP-OUT CHAT (Document Picture-in-Picture, Chrome 116+)
+       *
+       * A compact always-on-top chat window that stays visible while the
+       * user works in other tabs/apps. All voice code (recognition, wake
+       * word, TTS) keeps running in THIS tab — the pop-out is a dumb view
+       * over STATE.slots[PIP.slotIdx], refreshed by renderPip() at the end
+       * of every render(). It has its own document, so the main page's
+       * Tailwind classes and delegated listeners don't reach it: it gets a
+       * self-contained stylesheet and listeners bound to its own document.
+       * ================================================================ */
+
+      const PIP_CSS = `
+        :root { --primary:#0000CC; --primary-hover:#00009E; --navy:#141B4D; --cyan:#00BFFF; --dark:#1A1A2E; --divider:#DDDDEE; --row:#FAFAFE; --quote:#F6F8FF; }
+        * { box-sizing: border-box; }
+        html, body { height: 100%; }
+        body { margin: 0; display: flex; flex-direction: column; background: var(--row); color: var(--dark); font-family: Inter, system-ui, sans-serif; }
+        .pip-head { display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: var(--navy); color: #fff; flex-shrink: 0; }
+        .pip-avatar { position: relative; width: 30px; height: 30px; border-radius: 50%; background: var(--primary); display: grid; place-items: center; font-weight: 700; font-size: 13px; flex-shrink: 0; }
+        .pip-dot { position: absolute; bottom: -1px; right: -1px; width: 10px; height: 10px; border-radius: 50%; background: #94a3b8; border: 2px solid var(--navy); }
+        .pip-dot.live { background: #10b981; animation: pipPulse 2.2s ease-out infinite; }
+        @keyframes pipPulse { 0% { box-shadow: 0 0 0 0 rgba(16,185,129,0.55); } 70% { box-shadow: 0 0 0 6px rgba(16,185,129,0); } 100% { box-shadow: 0 0 0 0 rgba(16,185,129,0); } }
+        .pip-titles { min-width: 0; }
+        .pip-name { font-size: 13px; font-weight: 600; line-height: 1.2; }
+        .pip-sub { font-size: 10.5px; color: rgba(255,255,255,0.6); line-height: 1.3; }
+        .pip-msgs { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+        .pip-empty { margin: auto; max-width: 250px; text-align: center; color: #64748b; font-size: 12.5px; line-height: 1.6; }
+        .pip-row { display: flex; justify-content: flex-start; }
+        .pip-row.user { justify-content: flex-end; }
+        .pip-bubble { max-width: 88%; padding: 8px 12px; border-radius: 12px; font-size: 13px; line-height: 1.5; overflow-wrap: break-word; white-space: pre-wrap; }
+        .pip-user { background: var(--primary); color: #fff; border-radius: 12px 12px 4px 12px; }
+        .pip-bot { background: #fff; color: var(--dark); border: 1px solid var(--divider); border-radius: 4px 12px 12px 12px; }
+        .pip-md { white-space: normal; }
+        .pip-md p { margin: 0 0 7px; }
+        .pip-md p:last-child { margin-bottom: 0; }
+        .pip-md ul, .pip-md ol { margin: 4px 0 8px; padding-left: 18px; }
+        .pip-md li { margin-bottom: 4px; }
+        .pip-md strong { color: var(--navy); }
+        .pip-md code { background: #f1f5f9; padding: 1px 4px; border-radius: 4px; font-size: 12px; }
+        .pip-md a { color: var(--primary); }
+        .pip-md .md-h { font-weight: 700; color: var(--navy); margin: 8px 0 5px; font-size: 12.5px; }
+        .pip-badge { display: block; font-size: 9px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; opacity: 0.75; margin-bottom: 3px; }
+        .pip-badge.assist { color: var(--primary); opacity: 1; }
+        .pip-src { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; padding-top: 7px; border-top: 1px dashed #e2e8f0; }
+        .pip-src a { font-size: 10px; font-weight: 600; color: #475569; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 999px; padding: 2px 8px; text-decoration: none; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .pip-src a:hover { color: var(--primary); border-color: var(--cyan); background: var(--quote); }
+        .pip-tdot { width: 7px; height: 7px; border-radius: 50%; background: #94a3b8; display: inline-block; margin-right: 3px; animation: pipDot 1.4s infinite ease-in-out both; }
+        .pip-tdot:nth-child(1) { animation-delay: -0.32s; }
+        .pip-tdot:nth-child(2) { animation-delay: -0.16s; }
+        @keyframes pipDot { 0%, 80%, 100% { transform: scale(0); } 40% { transform: scale(1); } }
+        .pip-inputrow { display: flex; gap: 8px; align-items: center; padding: 10px; border-top: 1px solid var(--divider); background: #fff; flex-shrink: 0; }
+        .pip-inputrow input { flex: 1; min-width: 0; border: 1.5px solid var(--divider); border-radius: 9999px; padding: 9px 14px; font-size: 13px; outline: none; color: var(--navy); font-family: inherit; }
+        .pip-inputrow input:focus { border-color: var(--cyan); box-shadow: 0 0 0 3px rgba(0,191,255,0.16); }
+        .pip-send { width: 38px; height: 38px; border-radius: 50%; background: var(--primary); color: #fff; border: none; display: grid; place-items: center; cursor: pointer; flex-shrink: 0; transition: background 0.15s; }
+        .pip-send:hover { background: var(--primary-hover); }
+        .pip-send:disabled { background: #cbd5e1; cursor: not-allowed; }
+        @media (prefers-reduced-motion: reduce) { .pip-dot.live, .pip-tdot { animation: none; } }
+      `;
+
+      // Toggle the floating window. Must run from a real user click —
+      // requestWindow() requires a user gesture.
+      async function togglePipWindow(idx) {
+        if (!PIP.supported) return;
+        if (PIP.window) { try { PIP.window.close(); } catch {} return; } // pagehide does the cleanup
+        if (PIP.opening) return;
+        PIP.opening = true;
+        try {
+          const pipWindow = await window.documentPictureInPicture.requestWindow({ width: 380, height: 560 });
+          PIP.window = pipWindow;
+          PIP.slotIdx = idx;
+          setupPipWindow(pipWindow);
+          showToast('Chat popped out — it stays on top while you work');
+          render();
+        } catch (err) {
+          console.warn('Pop-out window failed:', err);
+          showToast("Couldn't open the pop-out window");
+        } finally {
+          PIP.opening = false;
+        }
+      }
+
+      // One-time scaffold of the PiP document: stylesheet, static skeleton
+      // (header / message list / composer) and its own event listeners.
+      // renderPip() only ever rewrites #pip-msgs and the header status — the
+      // input element is never rebuilt, so its text and focus survive
+      // re-renders (the PiP-side answer to isComposerFocused()).
+      function setupPipWindow(w) {
+        const doc = w.document;
+        const slot = STATE.slots[PIP.slotIdx];
+        const label = slot ? slot.label : 'Randy';
+        doc.title = label + ' — pop-out chat';
+
+        // The PiP document doesn't inherit page resources: bring the brand
+        // font along, then the self-contained styles.
+        const font = document.querySelector('link[rel="stylesheet"][href*="fonts.googleapis.com"]');
+        if (font) {
+          const l = doc.createElement('link');
+          l.rel = 'stylesheet';
+          l.href = font.href;
+          doc.head.appendChild(l);
+        }
+        const style = doc.createElement('style');
+        style.textContent = PIP_CSS;
+        doc.head.appendChild(style);
+
+        doc.body.innerHTML = `
+          <div class="pip-head">
+            <div class="pip-avatar">${escHtml(label.charAt(0))}<span class="pip-dot" id="pip-dot"></span></div>
+            <div class="pip-titles">
+              <div class="pip-name">${escHtml(label)}</div>
+              <div class="pip-sub" id="pip-sub">Online</div>
+            </div>
+          </div>
+          <div class="pip-msgs" id="pip-msgs"></div>
+          <div class="pip-inputrow">
+            <input type="text" id="pip-input" placeholder="Message ${escAttr(label)}…" autocomplete="off" />
+            <button class="pip-send" id="pip-send" data-action="pip-send" title="Send message" aria-label="Send message">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>
+            </button>
+          </div>`;
+
+        // The main page's delegated listeners are bound to the MAIN document
+        // and never fire here — the PiP document needs its own.
+        doc.addEventListener('click', e => {
+          if (e.target.closest && e.target.closest('[data-action="pip-send"]')) sendFromPip();
+        });
+        doc.addEventListener('keydown', e => {
+          if (e.key === 'Enter' && !e.shiftKey && e.target && e.target.id === 'pip-input') {
+            e.preventDefault();
+            sendFromPip();
+          }
+        });
+        w.addEventListener('pagehide', () => {
+          if (PIP.window === w) {
+            PIP.window = null;
+            PIP.slotIdx = null;
+            PIP.lastHtml = '';
+            render(); // put the pop-out buttons back in their closed state
+          }
+        });
+
+        PIP.lastHtml = '';
+        renderPip();
+        setTimeout(() => { try { doc.getElementById('pip-input').focus(); } catch {} }, 50);
+      }
+
+      function sendFromPip() {
+        const w = PIP.window;
+        if (!w || w.closed) return;
+        const slot = STATE.slots[PIP.slotIdx];
+        const input = w.document.getElementById('pip-input');
+        if (!slot || !input) return;
+        const text = input.value.trim();
+        if (!text || slot.loading) return;
+        slot.inputText = text;
+        input.value = '';
+        sendMessage(PIP.slotIdx); // its render() syncs the pop-out too
+      }
+
+      // Status line + listening dot, mirroring the conv-sub logic in
+      // renderCard so the pop-out reflects the main tab's voice state.
+      function pipStatus(slot) {
+        const on = !!slot.listenOn;
+        const inConvo = on && VOICE.activeSlot === PIP.slotIdx && !slot.loading && !slot.isSpeaking &&
+          (VOICE.conversationMode || VOICE.awaitingCommand);
+        if (slot.isSpeaking) return { text: 'Talking…', live: true };
+        if (slot.loading) return { text: 'Thinking…', live: on };
+        if (inConvo) return { text: 'Listening to you…', live: true };
+        if (on) return { text: 'Listening for tech questions', live: true };
+        return { text: 'Online', live: false };
+      }
+
+      function pipMessagesHtml(slot) {
+        const msgs = slot.messages;
+        if (msgs.length === 0 && !slot.loading) {
+          return '<div class="pip-empty">No messages yet — say “Hey ' + escHtml(slot.voiceName || slot.label) + '” in the main tab or type below.</div>';
+        }
+        const out = msgs.map(m => {
+          if (m.role === 'user') {
+            const badge = m.kind === 'assist-q' ? '<span class="pip-badge">Overheard</span>' : '';
+            return '<div class="pip-row user"><div class="pip-bubble pip-user">' + badge + escHtml(m.content) + '</div></div>';
+          }
+          if (!m.content) return ''; // in-flight placeholder — the typing dots cover it
+          if (m.kind === 'assist') {
+            const srcs = Array.isArray(m.sources) ? m.sources : [];
+            return '<div class="pip-row"><div class="pip-bubble pip-bot pip-md">' +
+              '<span class="pip-badge assist">Technical assist</span>' +
+              mdToHtml(m.content) +
+              (srcs.length ? '<div class="pip-src">' + srcs.map(u =>
+                '<a href="' + escAttr(u) + '" target="_blank" rel="noopener noreferrer" title="' + escAttr(u) + '">' + escHtml(hostnameOf(u)) + '</a>').join('') + '</div>' : '') +
+              '</div></div>';
+          }
+          return '<div class="pip-row"><div class="pip-bubble pip-bot">' + escHtml(m.content).replace(/\n/g, '<br>') + '</div></div>';
+        });
+        if (slot.loading) {
+          out.push('<div class="pip-row"><div class="pip-bubble pip-bot"><span class="pip-tdot"></span><span class="pip-tdot"></span><span class="pip-tdot"></span></div></div>');
+        }
+        return out.join('');
+      }
+
+      // Refresh the pop-out from STATE. Runs at the end of every render()
+      // while the window is open, which is what makes voice answers landing
+      // in the main tab appear here in real time. Must never throw — the
+      // window can vanish between the .closed check and the DOM writes, and
+      // a PiP hiccup must not break the main render cycle.
+      function renderPip() {
+        const w = PIP.window;
+        if (!w || w.closed) return;
+        const slot = STATE.slots[PIP.slotIdx];
+        if (!slot) return;
+        try {
+          const doc = w.document;
+          const msgs = doc.getElementById('pip-msgs');
+          if (!msgs) return;
+
+          const st = pipStatus(slot);
+          const sub = doc.getElementById('pip-sub');
+          if (sub && sub.textContent !== st.text) sub.textContent = st.text;
+          const dot = doc.getElementById('pip-dot');
+          if (dot) dot.className = 'pip-dot' + (st.live ? ' live' : '');
+          const name = doc.querySelector('.pip-name');
+          if (name && name.textContent !== slot.label) {
+            name.textContent = slot.label;
+            doc.title = slot.label + ' — pop-out chat';
+          }
+
+          // Skip no-op rebuilds (toasts and interim updates re-render the
+          // main app constantly) so text selection in the pop-out survives.
+          const html = pipMessagesHtml(slot);
+          if (PIP.lastHtml !== html) {
+            const atBottom = msgs.scrollTop + msgs.clientHeight >= msgs.scrollHeight - 48;
+            msgs.innerHTML = html;
+            PIP.lastHtml = html;
+            if (atBottom) msgs.scrollTop = msgs.scrollHeight;
+          }
+
+          const sendBtn = doc.getElementById('pip-send');
+          if (sendBtn && sendBtn.disabled !== !!slot.loading) sendBtn.disabled = !!slot.loading;
+        } catch (err) {
+          console.warn('renderPip failed:', err);
+        }
+      }
+
+      /* ================================================================
        * EVENTS
        * ================================================================ */
 
@@ -3097,6 +3388,7 @@
               break;
             }
             case 'toggle-card-menu': STATE.cardMenuOpen = !STATE.cardMenuOpen; render(); break;
+            case 'pop-out-chat': togglePipWindow(idx !== null ? idx : 0); break;
             case 'expand-slot': STATE.expandedSlot = idx; render(); scrollChat(); setTimeout(()=>document.getElementById('expanded-input')?.focus(),100); break;
             case 'close-expanded': STATE.expandedSlot = null; render(); break;
             case 'clear-chat': clearChat(idx !== null ? idx : 0); break;
