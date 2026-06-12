@@ -645,7 +645,8 @@
         opening: false,   // requestWindow() in flight — ignore re-clicks
         lastHtml: '',     // last message-list HTML, to skip no-op rebuilds
         collapsed: false, // minimized to the floating blue "R" icon
-        restoreSize: null,// outer window size to bring back on expand
+        swapping: false,  // mid window-swap — ignore the doomed pagehide
+        restoreSize: null,// window size to bring back on expand
         unseen: 0,        // answers that landed while collapsed (badge count)
         flashNext: false, // auto-expanded mid-answer — flash the reply when it lands
         flashNow: false   // flash the newest answer on the next message rebuild
@@ -2933,18 +2934,23 @@
        * Tailwind classes and delegated listeners don't reach it: it gets a
        * self-contained stylesheet and listeners bound to its own document.
        *
-       * Two modes: the full chat, and a collapsed "listening" icon (the
-       * minimize button shrinks the window down to a small badge; Chrome
-       * decides the actual minimum size and the window's position — PiP
-       * windows can't be moved programmatically, but Chrome places them
-       * in the bottom-right corner by default and remembers where the
-       * user drags them). When a question arrives while collapsed, the
-       * code immediately tries to grow the window back so the answer
-       * lands in view. Chrome only honors a programmatic resize during a
-       * user gesture; when the gesture-less attempt is refused, the icon
-       * runs a status sequence instead — thinking dots while answering,
-       * then a glowing badge — and one click anywhere on it reopens the
-       * full chat with the newest answer highlighted.
+       * Two modes: the full chat, and a collapsed "listening" icon docked
+       * in the bottom-right corner of the screen. PiP windows can't be
+       * moved programmatically, so the dock works the only way Chrome
+       * allows: minimize/expand close the current window and request a
+       * fresh one with preferInitialWindowPlacement, which Chrome places
+       * at its default spot — the bottom-right corner of the work area.
+       * requestWindow() needs transient user activation on this (main)
+       * window; clicks inside the PiP window propagate activation here,
+       * so the swap works for real clicks, and falls back to reshaping
+       * the current window in place when no activation exists.
+       *
+       * When a question arrives while collapsed, the code immediately
+       * tries to bring the chat back so the answer lands in view. With no
+       * gesture anywhere Chrome refuses, and the icon runs a status
+       * sequence instead — thinking dots while answering, then a glowing
+       * badge — and one click anywhere on it reopens the full chat with
+       * the newest answer highlighted.
        * ================================================================ */
 
       const PIP_CSS = `
@@ -3040,7 +3046,10 @@
         if (PIP.opening) return;
         PIP.opening = true;
         try {
-          const pipWindow = await window.documentPictureInPicture.requestWindow({ width: 380, height: 560 });
+          // preferInitialWindowPlacement: always dock at Chrome's default
+          // spot (bottom-right of the screen) instead of wherever a past
+          // PiP window was left.
+          const pipWindow = await window.documentPictureInPicture.requestWindow({ width: 380, height: 560, preferInitialWindowPlacement: true });
           PIP.window = pipWindow;
           PIP.slotIdx = idx;
           PIP.collapsed = false;
@@ -3059,12 +3068,15 @@
         }
       }
 
-      // One-time scaffold of the PiP document: stylesheet, static skeleton
-      // (header / message list / composer) and its own event listeners.
-      // renderPip() only ever rewrites #pip-msgs and the header status — the
-      // input element is never rebuilt, so its text and focus survive
-      // re-renders (the PiP-side answer to isComposerFocused()).
-      function setupPipWindow(w) {
+      // One-time scaffold of a PiP document: stylesheet, static skeleton
+      // (header / message list / composer / collapsed icon) and its own
+      // event listeners. Both modes get the full skeleton — `collapsed`
+      // just decides which half shows, so renderPip() works unchanged on
+      // either window. renderPip() only ever rewrites #pip-msgs and the
+      // status bits — the input element is never rebuilt, so its text and
+      // focus survive re-renders (the PiP-side answer to
+      // isComposerFocused()).
+      function setupPipWindow(w, { collapsed = false } = {}) {
         const doc = w.document;
         const slot = STATE.slots[PIP.slotIdx];
         const label = slot ? slot.label : 'Randy';
@@ -3131,6 +3143,7 @@
           }
         });
         w.addEventListener('pagehide', () => {
+          if (PIP.swapping) return; // window replaced by a swap, not closed
           if (PIP.window === w) {
             PIP.window = null;
             PIP.slotIdx = null;
@@ -3144,9 +3157,10 @@
           }
         });
 
+        if (collapsed) doc.body.classList.add('pip-collapsed');
         PIP.lastHtml = '';
         renderPip();
-        setTimeout(() => { try { doc.getElementById('pip-input').focus(); } catch {} }, 50);
+        if (!collapsed) setTimeout(() => { try { doc.getElementById('pip-input').focus(); } catch {} }, 50);
       }
 
       function sendFromPip() {
@@ -3193,56 +3207,76 @@
         } else fallback();
       }
 
-      // Minimize the pop-out down to a small floating "R" icon that keeps
-      // listening (green dot = voice on, same as everywhere else). Chrome
-      // clamps the collapsed window to its own minimum size and the icon
-      // centers in whatever it grants.
-      function collapsePip() {
+      // True when the main window holds transient user activation — clicks
+      // inside the PiP window propagate it here, which is exactly what
+      // requestWindow() and resizeTo() need.
+      function canSwapPipWindow() {
+        return !!(navigator.userActivation && navigator.userActivation.isActive);
+      }
+
+      // PiP windows can't be moved programmatically, so changing where one
+      // sits means replacing it: request a fresh window with
+      // preferInitialWindowPlacement and Chrome docks it at its default
+      // spot — the bottom-right corner of the screen. Chrome closes the
+      // old window itself (one PiP window at a time); the swapping flag
+      // keeps that pagehide from being mistaken for the user closing it.
+      async function swapPipWindow({ width, height }) {
+        const old = PIP.window;
+        PIP.swapping = true;
+        try {
+          const next = await window.documentPictureInPicture.requestWindow({
+            width, height, preferInitialWindowPlacement: true
+          });
+          if (old && old !== next) { try { old.close(); } catch {} }
+          PIP.window = next;
+          PIP.lastHtml = '';
+          return next;
+        } finally {
+          PIP.swapping = false;
+        }
+      }
+
+      // Minimize the pop-out down to the small "R" icon, docked at the
+      // bottom-right of the screen, that keeps listening (green dot =
+      // voice on, same as everywhere else). Without activation to swap
+      // windows, shrink the current one where it sits instead.
+      async function collapsePip() {
         const w = PIP.window;
-        if (!w || w.closed || PIP.collapsed) return;
+        if (!w || w.closed || PIP.collapsed || PIP.swapping) return;
         PIP.collapsed = true;
         PIP.unseen = 0;
         PIP.flashNext = false;
         PIP.flashNow = false;
-        PIP.restoreSize = (w.outerWidth > 0 && w.outerHeight > 0)
-          ? { width: w.outerWidth, height: w.outerHeight }
-          : null;
+        PIP.restoreSize = {
+          width: w.innerWidth > 0 ? w.innerWidth : 380,
+          height: w.innerHeight > 0 ? w.innerHeight : 560,
+          outerWidth: w.outerWidth || 0,
+          outerHeight: w.outerHeight || 0
+        };
+        if (canSwapPipWindow()) {
+          try {
+            const mini = await swapPipWindow({ width: 240, height: 130 });
+            setupPipWindow(mini, { collapsed: true });
+            return;
+          } catch (err) {
+            console.warn('PiP swap to icon failed, resizing in place:', err);
+          }
+        }
         try { w.document.body.classList.add('pip-collapsed'); } catch {}
         try { w.resizeTo(240, 152); } catch (err) { console.warn('PiP collapse resize failed:', err); }
         renderPip();
       }
 
-      // Bring the full chat back. Manual path = a click inside the PiP
-      // window, so resizeTo() has the user gesture it needs. The auto path
-      // (a question just came in) has no gesture; Chrome may refuse the
-      // resize, in which case we stay collapsed and the icon flips to its
-      // thinking / answer-ready state instead — returns false so callers
-      // know the window didn't grow.
-      function expandPip({ auto = false } = {}) {
-        const w = PIP.window;
-        if (!w || w.closed || !PIP.collapsed) return false;
-        const size = PIP.restoreSize || { width: 380, height: 560 };
-        try {
-          w.resizeTo(size.width, size.height);
-        } catch (err) {
-          if (auto) return false;
-          // A manual click should always carry a gesture; if the resize
-          // still failed, show the chat anyway rather than leaving the
-          // user stuck on the icon.
-          console.warn('PiP expand resize failed:', err);
-        }
-        const hadUnseen = PIP.unseen > 0;
-        PIP.collapsed = false;
-        PIP.unseen = 0;
-        PIP.restoreSize = null;
-        try { w.document.body.classList.remove('pip-collapsed'); } catch {}
-        renderPip();
+      // Post-expand touches shared by both expand paths: land on the
+      // newest answer, highlight it (the typing indicator doesn't count),
+      // and only refocus the input on a deliberate click — never steal OS
+      // focus while the user is mid-call in another app.
+      function finishPipExpand(w, { auto, hadUnseen }) {
         try {
           const doc = w.document;
           const msgs = doc.getElementById('pip-msgs');
           if (msgs) msgs.scrollTop = msgs.scrollHeight;
           if (auto || hadUnseen) {
-            // The typing indicator doesn't count — highlight real answers only.
             const bots = doc.querySelectorAll('.pip-bubble.pip-bot:not(.pip-typing)');
             if (bots.length) bots[bots.length - 1].classList.add('pip-new');
             // Auto-expanded for a question that's still being answered —
@@ -3250,15 +3284,52 @@
             // it flashes the moment it lands.
             else if (auto) PIP.flashNext = true;
           }
-          // Don't steal OS focus on the auto path — the user is mid-call
-          // in another app; only a deliberate click refocuses the input.
           if (!auto) setTimeout(() => { try { doc.getElementById('pip-input').focus(); } catch {} }, 50);
         } catch {}
+      }
+
+      // Bring the full chat back at its previous size. Manual path = a
+      // click inside the PiP window, which propagates the activation the
+      // window swap needs. The auto path (a question just came in) has no
+      // gesture; Chrome refuses the swap, we stay collapsed, and the icon
+      // flips to its thinking / answer-ready state instead — returns false
+      // so callers know the chat didn't come back.
+      async function expandPip({ auto = false } = {}) {
+        const w = PIP.window;
+        if (!w || w.closed || !PIP.collapsed || PIP.swapping) return false;
+        const size = PIP.restoreSize || { width: 380, height: 560 };
+        const hadUnseen = PIP.unseen > 0;
+        if (canSwapPipWindow()) {
+          try {
+            const big = await swapPipWindow({ width: size.width, height: size.height });
+            PIP.collapsed = false;
+            PIP.unseen = 0;
+            PIP.restoreSize = null;
+            setupPipWindow(big, { collapsed: false });
+            finishPipExpand(big, { auto, hadUnseen });
+            return true;
+          } catch (err) {
+            if (auto) return false;
+            console.warn('PiP swap to chat failed, expanding in place:', err);
+          }
+        } else if (auto) {
+          return false;
+        }
+        // In-place fallback (manual click without a usable swap): grow the
+        // current window where it sits rather than leaving the user stuck.
+        PIP.collapsed = false;
+        PIP.unseen = 0;
+        PIP.restoreSize = null;
+        try { w.document.body.classList.remove('pip-collapsed'); } catch {}
+        try { w.resizeTo(size.outerWidth || size.width, size.outerHeight || size.height); }
+        catch (err) { console.warn('PiP expand resize failed:', err); }
+        renderPip();
+        finishPipExpand(w, { auto: false, hadUnseen });
         return true;
       }
 
       // A question just came in — pop the collapsed icon back out so the
-      // answer lands in view. If Chrome refuses the gesture-less resize,
+      // answer lands in view. If Chrome refuses the gesture-less swap,
       // renderPip() shows the thinking state on the icon instead.
       function pipAutoExpand() {
         if (!PIP.window || PIP.window.closed || !PIP.collapsed) return;
@@ -3266,14 +3337,18 @@
       }
 
       // An answer just finished. Collapsed: try once more to pop out with
-      // the result, badge the icon if the resize is refused. Expanded
-      // because of an earlier auto-expand: highlight the reply when the
-      // message list next rebuilds (the render that paints it).
-      function notePipAnswerArrived() {
+      // the result, badge the icon if that's refused. Expanded because of
+      // an earlier auto-expand: highlight the reply when the message list
+      // next rebuilds (the render that paints it).
+      async function notePipAnswerArrived() {
         const w = PIP.window;
         if (!w || w.closed) return;
         if (PIP.collapsed) {
-          if (!expandPip({ auto: true })) PIP.unseen++;
+          const expanded = await expandPip({ auto: true });
+          if (!expanded && PIP.collapsed) {
+            PIP.unseen++;
+            renderPip();
+          }
           return;
         }
         if (PIP.flashNext) { PIP.flashNext = false; PIP.flashNow = true; }
