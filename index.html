@@ -1488,6 +1488,19 @@
         render();
       }
 
+      // Read a saved/overheard answer out loud — lets a rep click an "answered"
+      // notification on the left and just listen to it. Reads the most recent
+      // real answer in the entry; a no-op while it's still being researched or
+      // if it only holds an error. speakText() strips the markdown for us.
+      function speakAnswerEntry(entry) {
+        if (!entry || entry.pending || !VOICE.ttsSupported) return false;
+        const pairs = Array.isArray(entry.pairs) ? entry.pairs : [];
+        const pair = pairs.slice().reverse().find(p => p && p.answer && !/^⚠️/.test(p.answer));
+        if (!pair) return false;
+        speakText(pair.answer, 0);
+        return true;
+      }
+
       /* ================================================================
        * SPEECH RECOGNITION — one engine, two sources (mic | desktop track)
        * ================================================================ */
@@ -2099,19 +2112,24 @@
       }
 
       // ---- Overheard-answer queue -----------------------------------------
-      // Randy answers the FIRST overheard question on screen. Every other
-      // question he hears while that answer is up (or while he's researching) is
-      // added to the left "Conversations" list right away — the question text is
-      // visible immediately, flagged unread — and researched in the background,
-      // one at a time. Clicking the item shows its answer (or a "researching"
-      // note until it lands). One model call at a time, so the on-screen answer
-      // is never slowed by the queue. Entirely client-side.
+      // Randy works one question at a time and advances from one to the next:
+      // when he finishes the on-screen answer and falls idle, the next question
+      // he hears opens a fresh chat and takes over the main screen — the way he
+      // moved between questions before the queue existed. A question overheard
+      // while he's STILL answering can't wait its turn on a live call, so it's
+      // added to the left "Conversations" list right away — visible immediately,
+      // flagged unread — and researched in the background, one at a time. When a
+      // background answer lands it shows as an "answered" notification on the
+      // left; clicking it reads the answer aloud. One model call at a time, so
+      // the on-screen answer is never slowed by the queue. Entirely client-side.
 
-      // The first idle question answers on screen; anything heard while an
-      // answer is up / in flight / already queued goes to the left list.
+      // Park a question on the left only while Randy is busy (still answering on
+      // screen, or still chewing through a research backlog). The moment he's
+      // idle, the next question he hears takes over the main chat instead — so
+      // the on-screen conversation keeps moving forward with the call.
       function shouldQueueAnswer() {
         const slot = STATE.slots[0];
-        return slot.loading || collectPairs(slot).length > 0 || TECH.queue.length > 0;
+        return slot.loading || TECH.queue.length > 0;
       }
 
       function dispatchAssistQuestion(question) {
@@ -2205,6 +2223,9 @@
         const caret = focusId ? document.activeElement.selectionStart : null;
         render();
         if (focusId) { const el = document.getElementById(focusId); if (el) { el.focus(); try { el.setSelectionRange(caret, caret); } catch {} } }
+        // Opened this one while it was still researching? Read it aloud the
+        // moment the answer lands, so the click that opened it pays off.
+        if (HISTORY_VIEW.open === entry.id) speakAnswerEntry(entry);
         if (owns) pumpAssistQueue();
       }
 
@@ -2706,7 +2727,7 @@
         const confirming = STATE.historyConfirmDeleteId === h.id;
         const active = HISTORY_VIEW.open === h.id;
         return `
-          <div class="sb-item ${active ? 'active' : ''}${confirming ? ' confirming' : ''}${h.unread ? ' unread' : ''}" role="button" tabindex="0" data-action="${confirming ? 'noop' : 'view-history'}" data-id="${escAttr(h.id)}" title="${h.unread ? 'New answer — click to read' : 'Open saved conversation'}">
+          <div class="sb-item ${active ? 'active' : ''}${confirming ? ' confirming' : ''}${h.unread ? ' unread' : ''}" role="button" tabindex="0" data-action="${confirming ? 'noop' : 'view-history'}" data-id="${escAttr(h.id)}" title="${h.unread ? 'Answered — click to hear it read aloud' : 'Open saved conversation'}">
             <div class="sb-item-body">
               <div class="sb-item-title">${h.unread ? '<span class="sb-unread-dot" aria-hidden="true"></span>' : ''}${escHtml(h.preview || 'Untitled conversation')}</div>
               <div class="sb-item-meta">${h.pending ? '<span class="sb-researching">Researching…</span>' : escHtml(formatHistoryTime(h)) + (h.pairs.length > 1 ? ' · ' + h.pairs.length + ' Q&amp;As' : '')}</div>
@@ -2971,6 +2992,8 @@
       function renderSavedView(entry) {
         const confirming = STATE.historyConfirmDeleteId === entry.id;
         const pairCount = entry.pairs.length;
+        const canSpeak = VOICE.ttsSupported && !entry.pending && (entry.pairs || []).some(p => p && p.answer && !/^⚠️/.test(p.answer));
+        const speakingNow = !!STATE.slots[0].isSpeaking;
         return `
           <div class="saved-view history-popout">
             <header class="chat-head">
@@ -2990,6 +3013,9 @@
                   <button class="btn-ghost" data-action="cancel-delete-history" data-id="${escAttr(entry.id)}">Cancel</button>
                   <button class="btn-danger-solid" data-action="confirm-delete-history-popout" data-id="${escAttr(entry.id)}">Delete</button>
                 ` : `
+                  ${canSpeak ? `<button class="btn-ghost" data-action="speak-entry" data-id="${escAttr(entry.id)}" title="${speakingNow ? 'Stop reading' : 'Read this answer aloud'}" aria-label="${speakingNow ? 'Stop reading' : 'Read this answer aloud'}">
+                    <i data-lucide="${speakingNow ? 'volume-x' : 'volume-2'}" class="w-4 h-4"></i>${speakingNow ? 'Stop' : 'Read aloud'}
+                  </button>` : ''}
                   <button class="btn-primary" style="min-height:40px;padding:8px 18px" data-action="load-history" data-id="${escAttr(entry.id)}">
                     <i data-lucide="message-circle-plus" class="w-4 h-4"></i>Continue in chat
                   </button>
@@ -3830,11 +3856,22 @@
             case 'view-history': {
               HISTORY_VIEW.open = act.dataset.id;
               const viewed = STATE.sessionHistory.find(h => h.id === act.dataset.id);
-              if (viewed) viewed.unread = false;   // opened — clear its notification
+              if (viewed) {
+                viewed.unread = false;     // opened — clear its notification
+                speakAnswerEntry(viewed);  // ...and read the answer aloud
+              }
               STATE.historyConfirmDeleteId = null;
               STATE.activeTab = 'home';
               STATE.historyOpen = false;
               render();
+              break;
+            }
+            case 'speak-entry': {
+              const entry = STATE.sessionHistory.find(h => h.id === act.dataset.id);
+              if (!entry) break;
+              // Toggle: if Randy is already reading, stop; otherwise read it.
+              if (STATE.slots[0].isSpeaking) stopSpeaking();
+              else speakAnswerEntry(entry);
               break;
             }
             case 'close-history':
