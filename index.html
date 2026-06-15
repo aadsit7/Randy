@@ -2576,7 +2576,17 @@
           slot.loading = false;
           slot.abortController = null;
         }
-        render();   // surface the new unread item + its badge in the sidebar
+        // Surface the new unread item + its badge — but a background answer is
+        // not something the rep triggered, so don't yank the caret out of the
+        // composer if they're mid-type. Preserve focus + selection across the
+        // rebuild (same pattern the search box uses).
+        const focusId = isComposerFocused() ? document.activeElement.id : null;
+        const caret = focusId ? document.activeElement.selectionStart : null;
+        render();
+        if (focusId) {
+          const el = document.getElementById(focusId);
+          if (el) { el.focus(); try { el.setSelectionRange(caret, caret); } catch {} }
+        }
         if (owns) pumpAssistQueue();
       }
 
