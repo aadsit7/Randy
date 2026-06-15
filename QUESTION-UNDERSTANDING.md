@@ -1,12 +1,20 @@
 # Improving Randy's Question Understanding
 
-How to make Randy reliably tell a **real, in-scope technical question** apart from
-**unrelated chatter**, and stay accurate when the same question is **reworded,
-garbled by speech-to-text, or asked as a follow-up**.
+How to make Randy reliably tell a **real, in-scope technical information need**
+apart from **unrelated chatter**, and stay accurate when that need is **phrased
+as a statement, reworded, garbled by speech-to-text, or asked as a follow-up**.
 
-This is a design proposal, not a shipped change. It is grounded in the current
-classifier code (`index.html`) and recent research on intent/out-of-scope
-detection.
+> **Status (2026-06):** the Tier 1 changes below are now **shipped** in
+> `index.html`. The gate detects a technical *information need* — an explicit
+> question **or** a statement of a problem/goal/pain involving in-scope tech —
+> instead of requiring interrogative form. The classifier returns a split
+> verdict (`needs_answer`, `is_question`, `in_scope`, `normalized_question`,
+> `confidence`, `topic`, `reason`) with few-shot examples, and Randy answers the
+> classifier's `normalized_question` rewrite so statements and garbled/follow-up
+> utterances get researched as clean explicit questions. The regex fast path
+> stays interrogative-only (precision on a live call); statement-form needs are
+> judged by the LLM, with a broadened `looksLikeTechQuestion()` fallback for the
+> classifier-down case. Tiers 2–3 remain proposals.
 
 ---
 
