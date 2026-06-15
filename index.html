@@ -206,6 +206,10 @@
       .ls-last span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .ls-last .ok { color: var(--brand-green); }
       .ls-last .skip { color: var(--n400); }
+      .sb-item.unread .sb-item-title { color: var(--navy); font-weight: 700; }
+      .sb-unread-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--primary); margin-right: 7px; vertical-align: middle; flex-shrink: 0; box-shadow: 0 0 0 3px rgba(3,114,255,0.14); }
+      .sb-toggle { position: relative; }
+      .sb-toggle-badge { position: absolute; top: -3px; right: -3px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 999px; background: var(--primary); color: #fff; font-size: 10px; font-weight: 800; line-height: 16px; text-align: center; box-shadow: 0 1px 4px rgba(22,31,91,0.3); }
       .ls-controls { display: flex; align-items: center; gap: 14px; flex-shrink: 0; }
       .ls-speak { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; color: var(--n600); cursor: default; }
       .ls-off { background: transparent; border: 1.5px solid var(--n300); color: var(--n600); font-size: 12px; font-weight: 600; padding: 6px 14px; border-radius: 999px; cursor: pointer; transition: border-color 0.12s, color 0.12s; }
@@ -913,6 +917,37 @@
         slot.messages = [];
         SESSION_ID = genSessionId();
         return true;
+      }
+
+      // A question Randy answered in the background (while the user was still
+      // reading an earlier answer) lands here: straight into the left
+      // Conversations list, flagged unread so it shows a notification badge to
+      // click into — without disturbing whatever is on screen. The sheet still
+      // gets the Q&A from the background answer's own save call.
+      function addUnreadAssistEntry(question, answer, sources) {
+        const ts = Date.now();
+        const pair = { question: String(question || ''), answer: String(answer || '') };
+        if (Array.isArray(sources) && sources.length) pair.sources = sources.slice(0, 6);
+        addSessionHistoryEntry({
+          id: 'bg-' + ts + '-' + Math.random().toString(36).slice(2, 7),
+          session_id: SESSION_ID,
+          date: new Date(ts).toLocaleDateString('en-US'),
+          timestamp: ts,
+          pairs: [pair],
+          preview: pair.question.substring(0, 120),
+          unread: true
+        });
+      }
+
+      function unreadAssistCount() {
+        return STATE.sessionHistory.reduce((n, h) => n + (h.unread ? 1 : 0), 0);
+      }
+
+      // Notification badge for the "Conversations" (sidebar) toggle button, so
+      // unread background answers are visible even while the sidebar is closed.
+      function sbToggleBadgeHtml() {
+        const n = unreadAssistCount();
+        return n ? `<span class="sb-toggle-badge">${n > 9 ? '9+' : n}</span>` : '';
       }
 
       // "New chat": archive and start fresh.
@@ -2130,7 +2165,12 @@
         const next = TECH.queue.shift();
         TECH.lastSubmitted = next;
         TECH.lastSubmittedAt = Date.now();
-        runAssistAnswer(0, next);
+        // If the panel already holds an answer the user may still be reading,
+        // answer this one in the background and surface it as an unread item in
+        // the left list — don't yank the panel to the new question. Only a
+        // fresh/empty panel takes the answer on screen.
+        if (collectPairs(STATE.slots[0]).length > 0) runAssistAnswerBackground(next);
+        else runAssistAnswer(0, next);
       }
 
       function pushAssistContext(text) {
@@ -2371,6 +2411,45 @@
 
       /* ---------- technical-assist answers ---------- */
 
+      // The model call shared by the on-screen answer and the background
+      // (queued) answer: same model, same doc-grounded web_search, same
+      // search-failed fallback. Returns the proxy's data ({ reply, sources }).
+      async function requestAssistAnswer(question, signal) {
+        const slot = STATE.slots[0];
+        // Context: the last few assist Q&A pairs keep follow-up questions
+        // coherent ("and what about Intune?") without dragging latency.
+        const prior = [];
+        for (const p of TECH.recentPairs.slice(-ASSIST.HISTORY_PAIRS)) {
+          prior.push({ role: 'user', content: p.question });
+          prior.push({ role: 'assistant', content: p.answer });
+        }
+        const domains = (slot.allowedDomains || []).filter(Boolean);
+        const tool = { type: SEARCH_TOOL, name: 'web_search', max_uses: ASSIST.SEARCH_MAX_USES };
+        if (domains.length) tool.allowed_domains = domains;
+        const baseBody = {
+          model: MODELS.assist,
+          max_tokens: 1100,
+          // Medium effort trades a sliver of depth for noticeably faster
+          // answers — right for a live call. (Older proxy deployments drop
+          // this field harmlessly.)
+          output_config: { effort: 'medium' },
+          system: systemBlocks(slot.prompt + '\n\n' + ASSIST_STYLE),
+          messages: prior.concat([{ role: 'user', content: question }]),
+          // The proxy's synchronous sheet append would sit on the answer's
+          // critical path — skip it and save from the client afterwards.
+          save: false
+        };
+        try {
+          return await postChat(Object.assign({ tools: [tool] }, baseBody), signal);
+        } catch (err) {
+          if (err && err.name === 'AbortError') throw err;
+          // Web search failed (tool rejected, timeout, transient error) —
+          // answer from knowledge rather than staying silent.
+          console.error('search-enabled answer failed, retrying without tools:', err);
+          return await postChat(baseBody, signal);
+        }
+      }
+
       async function runAssistAnswer(idx, question) {
         const slot = STATE.slots[idx];
         if (slot.loading) return;
@@ -2398,44 +2477,8 @@
         scrollChat();
 
         try {
-          // Context: the last few assist Q&A pairs keep follow-up questions
-          // coherent ("and what about Intune?") without dragging latency.
-          // Pulled from TECH.recentPairs, not the chat — the chat is archived
-          // to History before each new question.
-          const prior = [];
-          for (const p of TECH.recentPairs.slice(-ASSIST.HISTORY_PAIRS)) {
-            prior.push({ role: 'user', content: p.question });
-            prior.push({ role: 'assistant', content: p.answer });
-          }
-
-          const domains = (slot.allowedDomains || []).filter(Boolean);
-          const tool = { type: SEARCH_TOOL, name: 'web_search', max_uses: ASSIST.SEARCH_MAX_USES };
-          if (domains.length) tool.allowed_domains = domains;
-
           const sessionIdAtSend = SESSION_ID;
-          const baseBody = {
-            model: MODELS.assist,
-            max_tokens: 1100,
-            // Medium effort trades a sliver of depth for noticeably faster
-            // answers — right for a live call. (Older proxy deployments drop
-            // this field harmlessly.)
-            output_config: { effort: 'medium' },
-            system: systemBlocks(slot.prompt + '\n\n' + ASSIST_STYLE),
-            messages: prior.concat([{ role: 'user', content: question }]),
-            // The proxy's synchronous sheet append would sit on the answer's
-            // critical path — skip it and save from the client afterwards.
-            save: false
-          };
-          let data;
-          try {
-            data = await postChat(Object.assign({ tools: [tool] }, baseBody), controller.signal);
-          } catch (err) {
-            if (err && err.name === 'AbortError') throw err;
-            // Web search failed (tool rejected, timeout, transient error) —
-            // answer from knowledge rather than staying silent.
-            console.error('search-enabled answer failed, retrying without tools:', err);
-            data = await postChat(baseBody, controller.signal);
-          }
+          const data = await requestAssistAnswer(question, controller.signal);
 
           const { main, spoken } = splitSpoken(String(data.reply || ''));
           const msg = slot.messages[assistantMsgIdx];
@@ -2488,6 +2531,52 @@
         // This answer is finished — pull the next queued question, if any. Only
         // when this call still owns the slot: if something newer took over
         // (a wake-word turn, a stop), that flow now controls what plays next.
+        if (owns) pumpAssistQueue();
+      }
+
+      // Answer a queued question WITHOUT touching the panel: the user is still
+      // reading the current answer, so this one is researched quietly and
+      // dropped into the left Conversations list as an unread notification. No
+      // TTS, no pop-out expand, no chat archiving — nothing that would disrupt
+      // the answer on screen. Same one-answer-at-a-time lock and queue drain as
+      // the on-screen path.
+      async function runAssistAnswerBackground(question) {
+        const slot = STATE.slots[0];
+        if (slot.loading) return;
+        slot.loading = true;
+        const controller = new AbortController();
+        slot.abortController = controller;
+
+        const sessionIdAtSend = SESSION_ID;
+        try {
+          const data = await requestAssistAnswer(question, controller.signal);
+          const { main } = splitSpoken(String(data.reply || ''));
+          const answer = sanitizeAssistAnswer(main) || 'No response.';
+          const sources = Array.isArray(data.sources) ? data.sources.slice(0, 6) : [];
+          addUnreadAssistEntry(question, answer, sources);
+          TECH.answered++;
+          TECH.recentPairs.push({ question, answer });
+          while (TECH.recentPairs.length > ASSIST.HISTORY_PAIRS) TECH.recentPairs.shift();
+          postSaveToSheet({
+            question,
+            answer: String(data.reply || ''),
+            sources: data.sources,
+            model: MODELS.assist,
+            sessionId: sessionIdAtSend
+          });
+        } catch (err) {
+          if (!(err && err.name === 'AbortError')) {
+            console.error('background assist answer failed:', err);
+            toastPipelineError("Randy couldn't answer a queued question", err);
+          }
+        }
+
+        const owns = slot.abortController === controller;
+        if (owns) {
+          slot.loading = false;
+          slot.abortController = null;
+        }
+        render();   // surface the new unread item + its badge in the sidebar
         if (owns) pumpAssistQueue();
       }
 
@@ -2616,9 +2705,9 @@
         const confirming = STATE.historyConfirmDeleteId === h.id;
         const active = HISTORY_VIEW.open === h.id;
         return `
-          <div class="sb-item ${active ? 'active' : ''}${confirming ? ' confirming' : ''}" role="button" tabindex="0" data-action="${confirming ? 'noop' : 'view-history'}" data-id="${escAttr(h.id)}" title="Open saved conversation">
+          <div class="sb-item ${active ? 'active' : ''}${confirming ? ' confirming' : ''}${h.unread ? ' unread' : ''}" role="button" tabindex="0" data-action="${confirming ? 'noop' : 'view-history'}" data-id="${escAttr(h.id)}" title="${h.unread ? 'New answer — click to read' : 'Open saved conversation'}">
             <div class="sb-item-body">
-              <div class="sb-item-title">${escHtml(h.preview || 'Untitled conversation')}</div>
+              <div class="sb-item-title">${h.unread ? '<span class="sb-unread-dot" aria-hidden="true"></span>' : ''}${escHtml(h.preview || 'Untitled conversation')}</div>
               <div class="sb-item-meta">${escHtml(formatHistoryTime(h))}${h.pairs.length > 1 ? ' · ' + h.pairs.length + ' Q&amp;As' : ''}</div>
               ${confirming ? `
                 <div class="sb-confirm">
@@ -2715,7 +2804,7 @@
         return `
           <header class="chat-head">
             <button class="icon-btn sb-toggle" data-action="toggle-history" title="Conversations" aria-label="Open conversations">
-              <i data-lucide="panel-left" class="w-5 h-5"></i>
+              <i data-lucide="panel-left" class="w-5 h-5"></i>${sbToggleBadgeHtml()}
             </button>
             <div class="chat-avatar ${on ? '' : 'muted'}">${escHtml(slot.label.charAt(0))}<span class="status-dot"></span></div>
             <div class="head-titles">
@@ -2885,7 +2974,7 @@
           <div class="saved-view history-popout">
             <header class="chat-head">
               <button class="icon-btn sb-toggle" data-action="toggle-history" title="Conversations" aria-label="Open conversations">
-                <i data-lucide="panel-left" class="w-5 h-5"></i>
+                <i data-lucide="panel-left" class="w-5 h-5"></i>${sbToggleBadgeHtml()}
               </button>
               <button class="icon-btn" data-action="close-history" title="Back to current chat" aria-label="Back to current chat">
                 <i data-lucide="arrow-left" class="w-5 h-5"></i>
@@ -2935,7 +3024,7 @@
         return `
           <header class="chat-head">
             <button class="icon-btn sb-toggle" data-action="toggle-history" title="Conversations" aria-label="Open conversations">
-              <i data-lucide="panel-left" class="w-5 h-5"></i>
+              <i data-lucide="panel-left" class="w-5 h-5"></i>${sbToggleBadgeHtml()}
             </button>
             <button class="icon-btn" data-action="switch-tab" data-tab="home" title="Back to chat" aria-label="Back to chat">
               <i data-lucide="arrow-left" class="w-5 h-5"></i>
@@ -3739,6 +3828,8 @@
             }
             case 'view-history': {
               HISTORY_VIEW.open = act.dataset.id;
+              const viewed = STATE.sessionHistory.find(h => h.id === act.dataset.id);
+              if (viewed) viewed.unread = false;   // opened — clear its notification
               STATE.historyConfirmDeleteId = null;
               STATE.activeTab = 'home';
               STATE.historyOpen = false;
@@ -3796,6 +3887,7 @@
             case 'load-history': {
               const hist = STATE.sessionHistory.find(h => h.id === act.dataset.id);
               if (hist) {
+                hist.unread = false;   // opened — clear its notification
                 const slot = STATE.slots[0];
                 const transcript = hist.pairs.map(p => 'User: ' + p.question + '\nRandy: ' + stripMarkdown(p.answer)).join('\n\n');
                 slot.inputText = 'Here is a previous conversation for context:\n\n' + transcript + '\n\nBased on this conversation, ';
