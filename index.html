@@ -2248,7 +2248,13 @@
             save: false
           };
           if (needsSearch) {
-            body.tools = [{ type: SEARCH_TOOL, name: 'web_search', max_uses: viaVoice ? 2 : 3 }];
+            const tool = { type: SEARCH_TOOL, name: 'web_search', max_uses: viaVoice ? 2 : 3 };
+            // Ground typed-chat and wake-word voice answers in the same product
+            // docs the passive-assist path uses, instead of the open web. Falls
+            // back to an unrestricted search only if Settings has no domains.
+            const domains = (slot.allowedDomains || []).filter(Boolean);
+            if (domains.length) tool.allowed_domains = domains;
+            body.tools = [tool];
           }
 
           const data = await postChat(body, controller.signal);
