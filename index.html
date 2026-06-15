@@ -527,14 +527,32 @@
         '',
         'OUT OF SCOPE: small talk, pleasantries, scheduling, status updates, contract / pricing / legal questions, anything not endpoint-management adjacent.',
         '',
-        'Set is_question=true only when ALL hold:',
-        '1. The latest utterance functions as a question (interrogative form or a clear ask like "walk me through how X handles Y").',
-        '2. The question is in scope per the lists above.',
-        '3. An SE could plausibly answer it now without asking anything back.',
+        'Judge three things independently:',
+        '- is_question: the latest utterance functions as a question — interrogative form OR a clear ask like "walk me through how X handles Y". A statement, status update, or aside is NOT a question.',
+        '- in_scope: the subject is a Recast product or adjacent endpoint-management territory per the lists above. Mentioning a product does NOT make it in scope if the ask is about pricing, scheduling, contracts, or logistics.',
+        '- answerable_now: an SE could plausibly answer it right now without asking anything back.',
         '',
-        'confidence is your 0-to-1 certainty that auto-answering helps. Below 0.6 means do not act. Be conservative; false positives interrupt a live call. Speech-to-text may garble product names ("in tune" = Intune, "config manager"/"SCCM" = ConfigMgr, "liquid" = Liquit) — interpret charitably but do not invent a question that is not there.',
+        'is_garbled: true when speech-to-text clearly mangled the words but the intent is recoverable. Product names get garbled often ("in tune" = Intune, "config manager"/"sccm" = ConfigMgr, "liquid" = Liquit, "right click tools" may arrive as "right clip tools").',
         '',
-        'Respond with ONLY a JSON object — no prose, no code fences: {"is_question": boolean, "confidence": number 0-1, "topic": "short phrase", "reason": "max 12 words"}'
+        'normalized_question: rewrite the utterance as ONE clean, standalone technical question — fix garbled product names, resolve references to earlier turns ("the second one", "that", "it") using the recent context, and drop filler. If is_question is false, return an empty string. Keep it under 25 words. This rewrite is what actually gets answered, so it must stand on its own without the surrounding conversation.',
+        '',
+        'confidence is your 0-to-1 certainty that auto-answering helps (is_question AND in_scope AND answerable_now all true). Below 0.6 means do not act. Be conservative; false positives interrupt a live call.',
+        '',
+        '# Examples',
+        'IN SCOPE questions (is_question, in_scope, answerable_now all true):',
+        '- "How does Right Click Tools handle BitLocker key recovery?" -> normalized: "How does Right Click Tools handle BitLocker key recovery?"',
+        '- "so what happens to app deployments when a device is only Intune managed" -> in scope; normalized: "What happens to app deployments on Intune-only managed devices?"',
+        '- "how do you push apps to machines that never touch the domain" -> in scope (App Workspace / Intune) even with no product name; normalized: "How do you deploy applications to non-domain-joined machines?"',
+        '- "can in tune do patching for third party apps" -> garbled; normalized: "Can Intune patch third-party applications?"',
+        '',
+        'HARD NEGATIVES — out of scope or not a question even though a product is named:',
+        '- "Can you email me the Intune pricing breakdown?" -> in_scope false (pricing/logistics, not technical).',
+        '- "Let\'s schedule the ConfigMgr migration call for next week." -> is_question false (scheduling).',
+        '- "Yeah, we run SCCM today." -> is_question false (statement, not an ask).',
+        '- "Our Autopilot rollout has been painful." -> is_question false (status update, no ask).',
+        '- "What\'s your timeline on the contract?" -> in_scope false (commercial).',
+        '',
+        'Respond with ONLY a JSON object — no prose, no code fences: {"is_question": boolean, "in_scope": boolean, "answerable_now": boolean, "is_garbled": boolean, "normalized_question": "clean standalone question or empty", "confidence": number 0-1, "topic": "short phrase", "reason": "max 12 words"}'
       ].join('\n');
 
       // JSON schema enforced via structured outputs — the classifier reply is
@@ -543,12 +561,16 @@
       const CLASSIFIER_SCHEMA = {
         type: 'object',
         properties: {
-          is_question: { type: 'boolean', description: 'True only if the latest utterance is an in-scope technical question an SE should answer now.' },
-          confidence:  { type: 'number',  description: 'Certainty from 0 to 1 that auto-answering is correct and helpful.' },
-          topic:       { type: 'string',  description: 'Two-to-four word topic, e.g. "Intune app deployment".' },
-          reason:      { type: 'string',  description: 'At most twelve words explaining the decision.' }
+          is_question:    { type: 'boolean', description: 'True only if the latest utterance functions as a question, not a statement or aside.' },
+          in_scope:       { type: 'boolean', description: 'True if the subject is a Recast product or adjacent endpoint-management topic (not pricing/scheduling/contracts).' },
+          answerable_now: { type: 'boolean', description: 'True if an SE could answer it now without asking anything back.' },
+          is_garbled:     { type: 'boolean', description: 'True if speech-to-text clearly mangled the words but the intent is recoverable.' },
+          normalized_question: { type: 'string', description: 'The utterance rewritten as one clean standalone question (garble fixed, references resolved); empty string if not a question.' },
+          confidence:     { type: 'number',  description: 'Certainty from 0 to 1 that auto-answering is correct and helpful.' },
+          topic:          { type: 'string',  description: 'Two-to-four word topic, e.g. "Intune app deployment".' },
+          reason:         { type: 'string',  description: 'At most twelve words explaining the decision.' }
         },
-        required: ['is_question', 'confidence', 'topic', 'reason'],
+        required: ['is_question', 'in_scope', 'answerable_now', 'is_garbled', 'normalized_question', 'confidence', 'topic', 'reason'],
         additionalProperties: false
       };
 
@@ -2089,11 +2111,17 @@
             TECH.pending = false;
             const accepted =
               decision.is_question === true &&
+              decision.in_scope === true &&
+              decision.answerable_now === true &&
               typeof decision.confidence === 'number' &&
               decision.confidence >= ASSIST.CONF_THRESHOLD;
             recordAssistDecision(candidate, accepted, decision.confidence || 0, decision.topic || '');
             if (!accepted) { renderAssistStatus(); return; }
-            dispatchAssistQuestion(candidate);
+            // Answer the cleaned, standalone rewrite when the classifier
+            // produced one (fixes garbled product names and resolves
+            // follow-up references); fall back to the raw utterance.
+            const toAnswer = decision.normalized_question || candidate;
+            dispatchAssistQuestion(toAnswer);
           })
           .catch(err => {
             TECH.pending = false;
@@ -2269,15 +2297,22 @@
         if (!isComposerFocused()) render();
       }
 
+      // Shared "not a question" verdict — keeps every early-out and parse
+      // failure on the same shape the acceptance logic expects.
+      const EMPTY_CLASSIFICATION = {
+        is_question: false, in_scope: false, answerable_now: false,
+        is_garbled: false, normalized_question: '', confidence: 0, topic: '', reason: ''
+      };
+
       async function classifyUtterance(text, contextArr) {
-        if (!GSHEET_WEBHOOK) return { is_question: false, confidence: 0 };
+        if (!GSHEET_WEBHOOK) return EMPTY_CLASSIFICATION;
         const ctxLines = (contextArr || []).map((u, i) => (i + 1) + '. ' + u).join('\n');
         const userContent =
           (ctxLines ? 'Recent context (older first):\n' + ctxLines + '\n\n' : '') +
           'Latest utterance:\n' + text;
         const data = await postChat({
           model: MODELS.classifier,
-          max_tokens: 200,
+          max_tokens: 320,
           system: CLASSIFIER_SYSTEM,
           messages: [{ role: 'user', content: userContent }],
           output_config: { format: { type: 'json_schema', schema: CLASSIFIER_SCHEMA } },
@@ -2290,17 +2325,24 @@
       // (older proxy deployments may not forward output_config).
       function parseClassifierReply(reply) {
         const m = reply.match(/\{[\s\S]*\}/);
-        if (!m) return { is_question: false, confidence: 0 };
+        if (!m) return EMPTY_CLASSIFICATION;
         try {
           const j = JSON.parse(m[0]);
+          // Older proxy deployments may omit the split fields; default the
+          // scope gates to true so a plain {is_question, confidence} reply
+          // still behaves like the pre-split classifier.
           return {
             is_question: !!j.is_question,
+            in_scope: j.in_scope === undefined ? true : !!j.in_scope,
+            answerable_now: j.answerable_now === undefined ? true : !!j.answerable_now,
+            is_garbled: !!j.is_garbled,
+            normalized_question: typeof j.normalized_question === 'string' ? j.normalized_question.trim() : '',
             confidence: typeof j.confidence === 'number' ? j.confidence : 0,
             topic: j.topic || '',
             reason: j.reason || ''
           };
         } catch {
-          return { is_question: false, confidence: 0 };
+          return EMPTY_CLASSIFICATION;
         }
       }
 
