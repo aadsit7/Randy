@@ -2349,7 +2349,20 @@
             save: false
           };
           if (needsSearch) {
-            body.tools = [{ type: SEARCH_TOOL, name: 'web_search', max_uses: viaVoice ? 2 : 3 }];
+            // Strictly source only from the approved doc URLs. Without this,
+            // chat/voice web_search ran against the open web and could surface
+            // facts from unvetted sites — the cause of inaccurate answers.
+            // Mirror the technical-assist path: restrict to the allow-list, and
+            // fall back to the default research domains so a wiped Settings box
+            // can never silently re-open the whole web.
+            const domains = (slot.allowedDomains || []).filter(Boolean);
+            const allowed = domains.length ? domains : DEFAULT_RESEARCH_DOMAINS.slice();
+            body.tools = [{
+              type: SEARCH_TOOL,
+              name: 'web_search',
+              max_uses: viaVoice ? 2 : 3,
+              allowed_domains: allowed
+            }];
           }
 
           const data = await postChat(body, controller.signal);
