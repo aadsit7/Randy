@@ -435,7 +435,8 @@
         INTERIM_RECHECK_MS: 700,  // re-check cadence while waiting for a sentence to finish
         SEARCH_MAX_USES: 2,       // web searches per answer (latency budget)
         HISTORY_PAIRS: 2,         // prior assist Q&A pairs sent as context
-        CONV_EXIT_MS: 20000       // follow-up window after a voice answer
+        CONV_EXIT_MS: 20000,      // follow-up window after a voice answer
+        QUEUE_MAX: 4              // questions parked behind the one being answered
       };
 
       /* ================================================================
@@ -700,6 +701,7 @@
         lastSubmittedAt: 0,
         decisions: [],            // ring buffer {text, accepted, confidence, topic, ts}
         recentPairs: [],          // last assist Q&As — API context that survives chat archiving
+        queue: [],                // FIFO of accepted questions waiting their turn (one answer at a time)
         heard: 0,
         answered: 0
       };
@@ -1658,6 +1660,7 @@
           s.loading = false;
           s.isListening = false;
         });
+        TECH.queue.length = 0;   // drop questions parked behind the cancelled answer
         stopSpeaking();
         clearInterim();
         if (VOICE.wakeTimeoutId) { clearTimeout(VOICE.wakeTimeoutId); VOICE.wakeTimeoutId = null; }
@@ -1690,6 +1693,7 @@
           slot.messages.pop();
         }
         slot.loading = false;
+        TECH.queue.length = 0;   // a fresh utterance is taking over — drop the old line
       }
 
       // After Randy answers a spoken question, he keeps listening for a
@@ -1985,7 +1989,7 @@
       function flushAssistBuffer() {
         TECH.bufferTimerId = null;
         const slot = STATE.slots[0];
-        if (!slot.listenOn) { clearAssistBuffer(); return; }
+        if (!slot.listenOn) { clearAssistBuffer(); TECH.queue.length = 0; return; }
         const candidate = TECH.buffer.trim();
 
         // The speaker is still mid-sentence (fresh interim words are
@@ -2006,6 +2010,29 @@
         // reads as "Randy didn't hear me". MAX_BUFFER_CHARS keeps the held
         // buffer from growing unboundedly while we wait.
         if (TECH.pending || slot.loading) {
+          // A clearly-formed question heard while Randy is mid-answer is
+          // captured as its own item in the queue (and the buffer reset), so it
+          // isn't merged into the next utterance or lost — it's answered the
+          // moment the current answer finishes. Only no-wait questions (the same
+          // bar the classifier-free fast path trusts) are queued this way, so the
+          // gate is never loosened, and a classifier round-trip is never started
+          // while one is already pending. Anything ambiguous falls through to the
+          // unchanged hold-and-recheck below.
+          if (slot.loading && !TECH.pending && TECH.queue.length < ASSIST.QUEUE_MAX && isInstantTechQuestion(candidate)) {
+            const qWords = candidate.split(/\s+/).filter(Boolean);
+            const dup = TECH.lastSubmitted &&
+              Date.now() - TECH.lastSubmittedAt < ASSIST.DEDUPE_MS &&
+              fuzzyEqual(candidate, TECH.lastSubmitted);
+            if (candidate.length >= ASSIST.MIN_CHARS && qWords.length >= ASSIST.MIN_WORDS && !dup) {
+              TECH.buffer = '';
+              TECH.deferrals = 0;
+              TECH.busyDeferrals = 0;
+              pushAssistContext(candidate);
+              recordAssistDecision(candidate, true, 0.85, 'queued');
+              enqueueAssistQuestion(candidate);
+              return;
+            }
+          }
           if (TECH.busyDeferrals < ASSIST.BUSY_MAX_DEFERRALS) {
             TECH.busyDeferrals++;
             TECH.bufferTimerId = setTimeout(flushAssistBuffer, 1500);
@@ -2036,9 +2063,7 @@
         // answer — no classifier round-trip (saves a couple of seconds).
         if (isInstantTechQuestion(candidate)) {
           recordAssistDecision(candidate, true, 0.85, 'instant');
-          TECH.lastSubmitted = candidate;
-          TECH.lastSubmittedAt = Date.now();
-          runAssistAnswer(0, candidate);
+          enqueueAssistQuestion(candidate);
           return;
         }
 
@@ -2053,9 +2078,7 @@
               decision.confidence >= ASSIST.CONF_THRESHOLD;
             recordAssistDecision(candidate, accepted, decision.confidence || 0, decision.topic || '');
             if (!accepted) { renderAssistStatus(); return; }
-            TECH.lastSubmitted = candidate;
-            TECH.lastSubmittedAt = Date.now();
-            runAssistAnswer(0, candidate);
+            enqueueAssistQuestion(candidate);
           })
           .catch(err => {
             TECH.pending = false;
@@ -2065,14 +2088,49 @@
             // even when the classifier service is down.
             if (looksLikeTechQuestion(candidate)) {
               recordAssistDecision(candidate, true, 0.7, 'fallback match');
-              TECH.lastSubmitted = candidate;
-              TECH.lastSubmittedAt = Date.now();
-              runAssistAnswer(0, candidate);
+              enqueueAssistQuestion(candidate);
             } else {
               recordAssistDecision(candidate, false, 0, 'check failed');
               renderAssistStatus();
             }
           });
+      }
+
+      // ---- Overheard-answer queue -----------------------------------------
+      // Randy answers one overheard question at a time (one model call, one TTS
+      // stream). A second question that clears the bar while the first is still
+      // being researched is parked here and answered the moment the current one
+      // finishes — instead of being merged into the first question or dropped.
+      // Everything stays client-side: no extra service, key, or call is added
+      // beyond the one answer Randy was always going to make.
+      function enqueueAssistQuestion(question) {
+        const q = String(question || '').trim();
+        if (!q) return;
+        const now = Date.now();
+        // Never double-answer the question already in flight / just answered…
+        if (TECH.lastSubmitted && now - TECH.lastSubmittedAt < ASSIST.DEDUPE_MS && fuzzyEqual(q, TECH.lastSubmitted)) return;
+        // …or one already waiting in line.
+        if (TECH.queue.some(item => fuzzyEqual(item, q))) return;
+        // Bounded backlog: keep the earliest questions and let the newest
+        // overflow rather than stacking an endless queue on a busy call.
+        if (TECH.queue.length >= ASSIST.QUEUE_MAX) return;
+        TECH.queue.push(q);
+        renderAssistStatus();
+        pumpAssistQueue();
+      }
+
+      // Start the next queued question if Randy is free. Called when a question
+      // is queued and again each time an answer finishes, so the line drains
+      // itself one answer at a time. Guarantees at most one in-flight answer —
+      // exactly the single-answer invariant the pipeline already relied on.
+      function pumpAssistQueue() {
+        const slot = STATE.slots[0];
+        if (!slot || !slot.listenOn) { TECH.queue.length = 0; return; }
+        if (slot.loading || TECH.queue.length === 0) return;
+        const next = TECH.queue.shift();
+        TECH.lastSubmitted = next;
+        TECH.lastSubmittedAt = Date.now();
+        runAssistAnswer(0, next);
       }
 
       function pushAssistContext(text) {
@@ -2420,12 +2478,17 @@
           }
         }
 
-        if (slot.abortController === controller) {
+        const owns = slot.abortController === controller;
+        if (owns) {
           slot.loading = false;
           slot.abortController = null;
         }
         render();
         scrollChat();
+        // This answer is finished — pull the next queued question, if any. Only
+        // when this call still owns the slot: if something newer took over
+        // (a wake-word turn, a stop), that flow now controls what plays next.
+        if (owns) pumpAssistQueue();
       }
 
       function scrollChat() {
@@ -2696,14 +2759,17 @@
       function renderLiveStrip(slot, idx) {
         const inConvo = VOICE.awaitingCommand || VOICE.conversationMode;
         const last = TECH.decisions[TECH.decisions.length - 1];
-        const stats = TECH.pending ? 'Checking a question…' : TECH.answered + ' answered · ' + TECH.heard + ' heard';
+        const queued = TECH.queue.length;
+        const stats = TECH.pending ? 'Checking a question…'
+          : queued ? queued + (queued === 1 ? ' question' : ' questions') + ' queued'
+          : TECH.answered + ' answered · ' + TECH.heard + ' heard';
         return `
           <div class="live-strip">
             <span class="sound-wave ls-wave" aria-hidden="true"><span class="sound-wave-bar"></span><span class="sound-wave-bar"></span><span class="sound-wave-bar"></span></span>
             <div class="ls-body">
               <div class="ls-top">
                 <span class="ls-title">${inConvo ? 'Listening to you' : 'Listening for tech questions'}</span>
-                <span class="ls-stats ${TECH.pending ? 'busy' : ''}">${escHtml(stats)}</span>
+                <span class="ls-stats ${TECH.pending || queued ? 'busy' : ''}">${escHtml(stats)}</span>
               </div>
               <div class="ls-live ac-live ${VOICE.interimText ? 'hearing' : ''}" id="live-transcript">
                 <span class="ls-live-text"><span id="live-transcript-text">${escHtml(VOICE.interimText || '')}</span><span class="interim-caret">▊</span></span>
