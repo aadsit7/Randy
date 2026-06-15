@@ -2458,9 +2458,13 @@
             prior.push({ role: 'assistant', content: p.answer });
           }
 
+          // Strictly source only from the approved doc URLs. Fall back to the
+          // default research domains when the Settings box is empty so a wiped
+          // allow-list can never silently re-open the whole web — same hard
+          // enforcement the chat/voice path uses.
           const domains = (slot.allowedDomains || []).filter(Boolean);
-          const tool = { type: SEARCH_TOOL, name: 'web_search', max_uses: ASSIST.SEARCH_MAX_USES };
-          if (domains.length) tool.allowed_domains = domains;
+          const allowed = domains.length ? domains : DEFAULT_RESEARCH_DOMAINS.slice();
+          const tool = { type: SEARCH_TOOL, name: 'web_search', max_uses: ASSIST.SEARCH_MAX_USES, allowed_domains: allowed };
 
           const sessionIdAtSend = SESSION_ID;
           const baseBody = {
