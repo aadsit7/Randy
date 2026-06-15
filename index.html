@@ -206,13 +206,6 @@
       .ls-last span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .ls-last .ok { color: var(--brand-green); }
       .ls-last .skip { color: var(--n400); }
-      .sb-item.unread { background: rgba(3,114,255,0.12); }
-      .sb-item.unread .sb-item-title { color: #fff; font-weight: 700; }
-      .sb-researching { color: #6cc6ff; font-style: italic; font-weight: 600; }
-      .saved-researching { color: var(--n500); font-style: italic; }
-      .sb-unread-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--primary); margin-right: 7px; vertical-align: middle; flex-shrink: 0; box-shadow: 0 0 0 3px rgba(3,114,255,0.14); }
-      .sb-toggle { position: relative; }
-      .sb-toggle-badge { position: absolute; top: -3px; right: -3px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 999px; background: var(--primary); color: #fff; font-size: 10px; font-weight: 800; line-height: 16px; text-align: center; box-shadow: 0 1px 4px rgba(22,31,91,0.3); }
       .ls-controls { display: flex; align-items: center; gap: 14px; flex-shrink: 0; }
       .ls-speak { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; color: var(--n600); cursor: default; }
       .ls-off { background: transparent; border: 1.5px solid var(--n300); color: var(--n600); font-size: 12px; font-weight: 600; padding: 6px 14px; border-radius: 999px; cursor: pointer; transition: border-color 0.12s, color 0.12s; }
@@ -442,8 +435,7 @@
         INTERIM_RECHECK_MS: 700,  // re-check cadence while waiting for a sentence to finish
         SEARCH_MAX_USES: 2,       // web searches per answer (latency budget)
         HISTORY_PAIRS: 2,         // prior assist Q&A pairs sent as context
-        CONV_EXIT_MS: 20000,      // follow-up window after a voice answer
-        QUEUE_MAX: 4              // questions parked behind the one being answered
+        CONV_EXIT_MS: 20000       // follow-up window after a voice answer
       };
 
       /* ================================================================
@@ -527,32 +519,14 @@
         '',
         'OUT OF SCOPE: small talk, pleasantries, scheduling, status updates, contract / pricing / legal questions, anything not endpoint-management adjacent.',
         '',
-        'Judge three things independently:',
-        '- is_question: the latest utterance functions as a question — interrogative form OR a clear ask like "walk me through how X handles Y". A statement, status update, or aside is NOT a question.',
-        '- in_scope: the subject is a Recast product or adjacent endpoint-management territory per the lists above. Mentioning a product does NOT make it in scope if the ask is about pricing, scheduling, contracts, or logistics.',
-        '- answerable_now: an SE could plausibly answer it right now without asking anything back.',
+        'Set is_question=true only when ALL hold:',
+        '1. The latest utterance functions as a question (interrogative form or a clear ask like "walk me through how X handles Y").',
+        '2. The question is in scope per the lists above.',
+        '3. An SE could plausibly answer it now without asking anything back.',
         '',
-        'is_garbled: true when speech-to-text clearly mangled the words but the intent is recoverable. Product names get garbled often ("in tune" = Intune, "config manager"/"sccm" = ConfigMgr, "liquid" = Liquit, "right click tools" may arrive as "right clip tools").',
+        'confidence is your 0-to-1 certainty that auto-answering helps. Below 0.6 means do not act. Be conservative; false positives interrupt a live call. Speech-to-text may garble product names ("in tune" = Intune, "config manager"/"SCCM"/"MECM" = ConfigMgr, "liquid" = Liquit, "auto pilot" = Autopilot, "right click tools" = Right Click Tools) — interpret charitably but do not invent a question that is not there.',
         '',
-        'normalized_question: rewrite the utterance as ONE clean, standalone technical question — fix garbled product names, resolve references to earlier turns ("the second one", "that", "it") using the recent context, and drop filler. If is_question is false, return an empty string. Keep it under 25 words. This rewrite is what actually gets answered, so it must stand on its own without the surrounding conversation.',
-        '',
-        'confidence is your 0-to-1 certainty that auto-answering helps (is_question AND in_scope AND answerable_now all true). Below 0.6 means do not act. Be conservative; false positives interrupt a live call.',
-        '',
-        '# Examples',
-        'IN SCOPE questions (is_question, in_scope, answerable_now all true):',
-        '- "How does Right Click Tools handle BitLocker key recovery?" -> normalized: "How does Right Click Tools handle BitLocker key recovery?"',
-        '- "so what happens to app deployments when a device is only Intune managed" -> in scope; normalized: "What happens to app deployments on Intune-only managed devices?"',
-        '- "how do you push apps to machines that never touch the domain" -> in scope (App Workspace / Intune) even with no product name; normalized: "How do you deploy applications to non-domain-joined machines?"',
-        '- "can in tune do patching for third party apps" -> garbled; normalized: "Can Intune patch third-party applications?"',
-        '',
-        'HARD NEGATIVES — out of scope or not a question even though a product is named:',
-        '- "Can you email me the Intune pricing breakdown?" -> in_scope false (pricing/logistics, not technical).',
-        '- "Let\'s schedule the ConfigMgr migration call for next week." -> is_question false (scheduling).',
-        '- "Yeah, we run SCCM today." -> is_question false (statement, not an ask).',
-        '- "Our Autopilot rollout has been painful." -> is_question false (status update, no ask).',
-        '- "What\'s your timeline on the contract?" -> in_scope false (commercial).',
-        '',
-        'Respond with ONLY a JSON object — no prose, no code fences: {"is_question": boolean, "in_scope": boolean, "answerable_now": boolean, "is_garbled": boolean, "normalized_question": "clean standalone question or empty", "confidence": number 0-1, "topic": "short phrase", "reason": "max 12 words"}'
+        'Respond with ONLY a JSON object — no prose, no code fences: {"is_question": boolean, "confidence": number 0-1, "topic": "short phrase", "reason": "max 12 words"}'
       ].join('\n');
 
       // JSON schema enforced via structured outputs — the classifier reply is
@@ -561,16 +535,12 @@
       const CLASSIFIER_SCHEMA = {
         type: 'object',
         properties: {
-          is_question:    { type: 'boolean', description: 'True only if the latest utterance functions as a question, not a statement or aside.' },
-          in_scope:       { type: 'boolean', description: 'True if the subject is a Recast product or adjacent endpoint-management topic (not pricing/scheduling/contracts).' },
-          answerable_now: { type: 'boolean', description: 'True if an SE could answer it now without asking anything back.' },
-          is_garbled:     { type: 'boolean', description: 'True if speech-to-text clearly mangled the words but the intent is recoverable.' },
-          normalized_question: { type: 'string', description: 'The utterance rewritten as one clean standalone question (garble fixed, references resolved); empty string if not a question.' },
-          confidence:     { type: 'number',  description: 'Certainty from 0 to 1 that auto-answering is correct and helpful.' },
-          topic:          { type: 'string',  description: 'Two-to-four word topic, e.g. "Intune app deployment".' },
-          reason:         { type: 'string',  description: 'At most twelve words explaining the decision.' }
+          is_question: { type: 'boolean', description: 'True only if the latest utterance is an in-scope technical question an SE should answer now.' },
+          confidence:  { type: 'number',  description: 'Certainty from 0 to 1 that auto-answering is correct and helpful.' },
+          topic:       { type: 'string',  description: 'Two-to-four word topic, e.g. "Intune app deployment".' },
+          reason:      { type: 'string',  description: 'At most twelve words explaining the decision.' }
         },
-        required: ['is_question', 'in_scope', 'answerable_now', 'is_garbled', 'normalized_question', 'confidence', 'topic', 'reason'],
+        required: ['is_question', 'confidence', 'topic', 'reason'],
         additionalProperties: false
       };
 
@@ -588,6 +558,43 @@
       const INSTANT_QUESTION_RE = /^(how|what|why|when|where|which|who|can|could|does|do|did|is|are|will|would|should|tell me|walk me through|explain|show me)\b|\b(how (do|does|did|can|could|would|will)|what (is|are|about|does|happens)|can (it|you|we|they)|does (it|that|this)|is there|are there)\b/i;
       function isInstantTechQuestion(t) {
         return TECH_TOPIC_RE.test(t) && INSTANT_QUESTION_RE.test(t);
+      }
+
+      // Commercial / non-technical asks an SE shouldn't auto-answer on a live
+      // call even when they name an in-scope product ("what's Application
+      // Workspace cost per seat?"). These bypass the no-classifier fast path
+      // and fall through to the classifier, which already treats pricing,
+      // contracts, and scheduling as out of scope. The guard only ever ADDS a
+      // classifier round-trip — it never drops a question on its own.
+      const OUT_OF_SCOPE_RE = /\bhow much (?:do(?:es)?|is|are|would|will)\b|\b(pric(?:e|ing|ed)|quote|discount|per[\s-]?(?:seat|device|user)|license(?:s|ing)? (?:cost|fee|price|pricing)|renewal|contract|invoice|proposal|budget|sales ?rep|account (?:manager|exec))\b/i;
+
+      // Common speech-to-text garbles of endpoint-management product names.
+      // Applied to overheard utterances before they're classified, answered,
+      // and logged, so Randy reasons over "Intune", not "in tune", and the
+      // tech-topic detector and saved Q&A read cleanly. Kept tight: each
+      // pattern targets a phrase that is overwhelmingly the product on these
+      // calls. Correction never feeds the no-classifier fast path (that still
+      // runs on the raw text), so a wrong guess can only route to the
+      // classifier — it can never auto-answer on its own.
+      const TRANSCRIPT_FIXES = [
+        [/\bin\s?tune\b/gi, 'Intune'],
+        [/\bend[\s-]?point(s)?\b/gi, 'endpoint$1'],
+        [/\bauto[\s-]?pilot\b/gi, 'Autopilot'],
+        [/\bco[\s-]?management\b/gi, 'co-management'],
+        [/\bconfig(?:uration)?[\s-]?manager\b/gi, 'ConfigMgr'],
+        [/\bconfig\s?mgr\b/gi, 'ConfigMgr'],
+        [/\bright[\s-]?click tools\b/gi, 'Right Click Tools'],
+        [/\bapp(?:lication)? workspace\b/gi, 'Application Workspace'],
+        [/\bapplication manager\b/gi, 'Application Manager'],
+        [/\bprivilege manager\b/gi, 'Privilege Manager'],
+        [/\bendpoint insights\b/gi, 'Endpoint Insights'],
+        [/\bliqu(?:id|it|ot)\b/gi, 'Liquit'],
+        [/\bre[\s-]?cast\b/gi, 'Recast']
+      ];
+      function correctTranscript(text) {
+        let t = String(text || '');
+        for (const [re, sub] of TRANSCRIPT_FIXES) t = t.replace(re, sub);
+        return t.replace(/\s+/g, ' ').trim();
       }
 
       // Voice turns attach the (slower) web_search tool only when the prompt
@@ -730,7 +737,6 @@
         lastSubmittedAt: 0,
         decisions: [],            // ring buffer {text, accepted, confidence, topic, ts}
         recentPairs: [],          // last assist Q&As — API context that survives chat archiving
-        queue: [],                // FIFO of accepted questions waiting their turn (one answer at a time)
         heard: 0,
         answered: 0
       };
@@ -927,7 +933,7 @@
       // (the client saves each one in the background), so nothing is lost.
       // Rotating the session id keeps the sheet's grouping in step with the
       // local entry. Returns true when something was actually archived.
-      function archiveChatToHistory(slot, { unread = false } = {}) {
+      function archiveChatToHistory(slot) {
         const pairs = collectPairs(slot);
         if (!pairs.length) return false;
         const ts = Date.now();
@@ -937,23 +943,11 @@
           date: new Date(ts).toLocaleDateString('en-US'),
           timestamp: ts,
           pairs,
-          preview: pairs[0].question.substring(0, 120),
-          unread
+          preview: pairs[0].question.substring(0, 120)
         });
         slot.messages = [];
         SESSION_ID = genSessionId();
         return true;
-      }
-
-      function unreadAssistCount() {
-        return STATE.sessionHistory.reduce((n, h) => n + (h.unread ? 1 : 0), 0);
-      }
-
-      // Notification badge for the "Conversations" (sidebar) toggle button, so
-      // unread answers are visible even while the sidebar is closed.
-      function sbToggleBadgeHtml() {
-        const n = unreadAssistCount();
-        return n ? `<span class="sb-toggle-badge">${n > 9 ? '9+' : n}</span>` : '';
       }
 
       // "New chat": archive and start fresh.
@@ -1510,19 +1504,6 @@
         render();
       }
 
-      // Read a saved/overheard answer out loud — lets a rep click an "answered"
-      // notification on the left and just listen to it. Reads the most recent
-      // real answer in the entry; a no-op while it's still being researched or
-      // if it only holds an error. speakText() strips the markdown for us.
-      function speakAnswerEntry(entry) {
-        if (!entry || entry.pending || !VOICE.ttsSupported) return false;
-        const pairs = Array.isArray(entry.pairs) ? entry.pairs : [];
-        const pair = pairs.slice().reverse().find(p => p && p.answer && !/^⚠️/.test(p.answer));
-        if (!pair) return false;
-        speakText(pair.answer, 0);
-        return true;
-      }
-
       /* ================================================================
        * SPEECH RECOGNITION — one engine, two sources (mic | desktop track)
        * ================================================================ */
@@ -1714,7 +1695,6 @@
           s.loading = false;
           s.isListening = false;
         });
-        clearAssistQueue();   // drop questions parked behind the cancelled answer
         stopSpeaking();
         clearInterim();
         if (VOICE.wakeTimeoutId) { clearTimeout(VOICE.wakeTimeoutId); VOICE.wakeTimeoutId = null; }
@@ -1747,7 +1727,6 @@
           slot.messages.pop();
         }
         slot.loading = false;
-        clearAssistQueue();   // a fresh utterance is taking over — drop the old line
       }
 
       // After Randy answers a spoken question, he keeps listening for a
@@ -1921,6 +1900,11 @@
         VOICE.interimSlot = target;
         VOICE.interimAt = Date.now();
 
+        // Stream into the pop-out's live band too — patchLiveTranscript()
+        // below can short-circuit the main render, which would otherwise
+        // leave the pop-out transcript stale.
+        if (PIP.window) updatePipLive(STATE.slots[PIP.slotIdx]);
+
         if (patchLiveTranscript(trimmed)) return;
         // One render to mount the node — but never while the user is typing,
         // since render() rebuilds the DOM and would steal composer focus.
@@ -1939,6 +1923,7 @@
         if (!VOICE.interimText && VOICE.interimSlot === null) return;
         VOICE.interimText = '';
         VOICE.interimSlot = null;
+        if (PIP.window) updatePipLive(STATE.slots[PIP.slotIdx]);
         if (patchLiveTranscript('')) return;
         if (!isComposerFocused()) render();
       }
@@ -2043,7 +2028,7 @@
       function flushAssistBuffer() {
         TECH.bufferTimerId = null;
         const slot = STATE.slots[0];
-        if (!slot.listenOn) { clearAssistBuffer(); clearAssistQueue(); return; }
+        if (!slot.listenOn) { clearAssistBuffer(); return; }
         const candidate = TECH.buffer.trim();
 
         // The speaker is still mid-sentence (fresh interim words are
@@ -2063,13 +2048,7 @@
         // means a question asked during an answer silently vanishes, which
         // reads as "Randy didn't hear me". MAX_BUFFER_CHARS keeps the held
         // buffer from growing unboundedly while we wait.
-        // Only one classifier round-trip at a time: if one is in flight, hold
-        // briefly and re-check. An answer being in flight (slot.loading) does
-        // NOT block detection — a question heard while Randy researches is
-        // vetted now and added to the left queue, so nothing is missed. The
-        // buffer resets on each flush below, so it never accumulates a long run
-        // of call audio (which is what used to get misread as a question).
-        if (TECH.pending) {
+        if (TECH.pending || slot.loading) {
           if (TECH.busyDeferrals < ASSIST.BUSY_MAX_DEFERRALS) {
             TECH.busyDeferrals++;
             TECH.bufferTimerId = setTimeout(flushAssistBuffer, 1500);
@@ -2089,39 +2068,47 @@
           renderAssistStatus();
           return;
         }
+        // Repair common ASR garbles of product names ("in tune" → "Intune")
+        // so detection, the answer, and the saved log all read the real
+        // term. The fast-path test below still runs on the RAW candidate, so
+        // a correction can only ever route to the classifier, never create a
+        // new auto-answer.
+        const corrected = correctTranscript(candidate);
+
         const now = Date.now();
-        if (TECH.lastSubmitted && now - TECH.lastSubmittedAt < ASSIST.DEDUPE_MS && fuzzyEqual(candidate, TECH.lastSubmitted)) {
+        if (TECH.lastSubmitted && now - TECH.lastSubmittedAt < ASSIST.DEDUPE_MS && fuzzyEqual(corrected, TECH.lastSubmitted)) {
           return;
         }
 
-        pushAssistContext(candidate);
+        pushAssistContext(corrected);
 
         // Fast path: an obvious technical question goes straight to the
-        // answer — no classifier round-trip (saves a couple of seconds).
-        if (isInstantTechQuestion(candidate)) {
-          recordAssistDecision(candidate, true, 0.85, 'instant');
-          dispatchAssistQuestion(candidate);
+        // answer — no classifier round-trip (saves a couple of seconds). The
+        // out-of-scope guard keeps pricing/contract asks about in-scope
+        // products off the fast path; they fall to the classifier, which
+        // correctly declines them.
+        if (isInstantTechQuestion(candidate) && !OUT_OF_SCOPE_RE.test(candidate)) {
+          recordAssistDecision(corrected, true, 0.85, 'instant');
+          TECH.lastSubmitted = corrected;
+          TECH.lastSubmittedAt = Date.now();
+          runAssistAnswer(0, corrected);
           return;
         }
 
         TECH.pending = true;
         renderAssistStatus();
-        classifyUtterance(candidate, TECH.context.slice(0, -1))
+        classifyUtterance(corrected, TECH.context.slice(0, -1))
           .then(decision => {
             TECH.pending = false;
             const accepted =
               decision.is_question === true &&
-              decision.in_scope === true &&
-              decision.answerable_now === true &&
               typeof decision.confidence === 'number' &&
               decision.confidence >= ASSIST.CONF_THRESHOLD;
-            recordAssistDecision(candidate, accepted, decision.confidence || 0, decision.topic || '');
+            recordAssistDecision(corrected, accepted, decision.confidence || 0, decision.topic || '');
             if (!accepted) { renderAssistStatus(); return; }
-            // Answer the cleaned, standalone rewrite when the classifier
-            // produced one (fixes garbled product names and resolves
-            // follow-up references); fall back to the raw utterance.
-            const toAnswer = decision.normalized_question || candidate;
-            dispatchAssistQuestion(toAnswer);
+            TECH.lastSubmitted = corrected;
+            TECH.lastSubmittedAt = Date.now();
+            runAssistAnswer(0, corrected);
           })
           .catch(err => {
             TECH.pending = false;
@@ -2129,141 +2116,16 @@
             toastPipelineError("Randy couldn't check a question", err);
             // Keep the SE alive: obvious technical questions are answered
             // even when the classifier service is down.
-            if (looksLikeTechQuestion(candidate)) {
-              recordAssistDecision(candidate, true, 0.7, 'fallback match');
-              dispatchAssistQuestion(candidate);
+            if (looksLikeTechQuestion(corrected)) {
+              recordAssistDecision(corrected, true, 0.7, 'fallback match');
+              TECH.lastSubmitted = corrected;
+              TECH.lastSubmittedAt = Date.now();
+              runAssistAnswer(0, corrected);
             } else {
-              recordAssistDecision(candidate, false, 0, 'check failed');
+              recordAssistDecision(corrected, false, 0, 'check failed');
               renderAssistStatus();
             }
           });
-      }
-
-      // ---- Overheard-answer queue -----------------------------------------
-      // Randy works one question at a time and advances from one to the next:
-      // when he finishes the on-screen answer and falls idle, the next question
-      // he hears opens a fresh chat and takes over the main screen — the way he
-      // moved between questions before the queue existed. A question overheard
-      // while he's STILL answering can't wait its turn on a live call, so it's
-      // added to the left "Conversations" list right away — visible immediately,
-      // flagged unread — and researched in the background, one at a time. When a
-      // background answer lands it shows as an "answered" notification on the
-      // left; clicking it reads the answer aloud. One model call at a time, so
-      // the on-screen answer is never slowed by the queue. Entirely client-side.
-
-      // Park a question on the left only while Randy is busy (still answering on
-      // screen, or still chewing through a research backlog). The moment he's
-      // idle, the next question he hears takes over the main chat instead — so
-      // the on-screen conversation keeps moving forward with the call.
-      function shouldQueueAnswer() {
-        const slot = STATE.slots[0];
-        return slot.loading || TECH.queue.length > 0;
-      }
-
-      function dispatchAssistQuestion(question) {
-        if (shouldQueueAnswer()) {
-          enqueueAssistQuestion(question);
-        } else {
-          TECH.lastSubmitted = question;
-          TECH.lastSubmittedAt = Date.now();
-          runAssistAnswer(0, question);
-        }
-      }
-
-      function findQueueEntry(id) {
-        return STATE.sessionHistory.find(h => h.id === id);
-      }
-
-      // Add a heard question to the left list immediately (question visible,
-      // flagged unread + pending) and line it up for background research.
-      function enqueueAssistQuestion(question) {
-        const q = String(question || '').trim();
-        if (!q) return;
-        // Already waiting / researching with the same question?
-        if (TECH.queue.some(id => { const e = findQueueEntry(id); return e && fuzzyEqual(e.pairs[0].question, q); })) return;
-        // Bounded backlog: keep the earliest, let the newest overflow.
-        if (TECH.queue.length >= ASSIST.QUEUE_MAX) return;
-        TECH.lastSubmitted = q;
-        TECH.lastSubmittedAt = Date.now();
-        const ts = Date.now();
-        const id = 'q-' + ts + '-' + Math.random().toString(36).slice(2, 7);
-        addSessionHistoryEntry({
-          id,
-          session_id: SESSION_ID,
-          date: new Date(ts).toLocaleDateString('en-US'),
-          timestamp: ts,
-          pairs: [{ question: q, answer: '' }],
-          preview: q.substring(0, 120),
-          unread: true,
-          pending: true
-        });
-        renderAssistStatus();   // show the question in the left list now
-        pumpAssistQueue();
-      }
-
-      // Research the next queued question if Randy is free — one at a time, so
-      // it never competes with the on-screen answer.
-      function pumpAssistQueue() {
-        const slot = STATE.slots[0];
-        if (!slot || !slot.listenOn) { clearAssistQueue(); return; }
-        if (slot.loading || TECH.queue.length === 0) return;
-        const id = TECH.queue.shift();
-        const entry = findQueueEntry(id);
-        if (!entry) { pumpAssistQueue(); return; }
-        researchQueuedAnswer(entry);
-      }
-
-      // Background research for a queued question. Fills the answer into its
-      // left-list entry — never touches the on-screen panel or TTS.
-      async function researchQueuedAnswer(entry) {
-        const slot = STATE.slots[0];
-        if (slot.loading) { TECH.queue.unshift(entry.id); return; }
-        slot.loading = true;
-        const controller = new AbortController();
-        slot.abortController = controller;
-        const question = entry.pairs[0].question;
-        const sessionIdAtSend = SESSION_ID;
-        try {
-          const data = await requestAssistAnswer(question, controller.signal);
-          const { main } = splitSpoken(String(data.reply || ''));
-          entry.pairs[0].answer = sanitizeAssistAnswer(main) || 'No response.';
-          if (Array.isArray(data.sources) && data.sources.length) entry.pairs[0].sources = data.sources.slice(0, 6);
-          entry.pending = false;
-          entry.unread = HISTORY_VIEW.open !== entry.id;   // re-flag unless already open
-          TECH.answered++;
-          TECH.recentPairs.push({ question, answer: entry.pairs[0].answer });
-          while (TECH.recentPairs.length > ASSIST.HISTORY_PAIRS) TECH.recentPairs.shift();
-          postSaveToSheet({ question, answer: String(data.reply || ''), sources: data.sources, model: MODELS.assist, sessionId: sessionIdAtSend });
-        } catch (err) {
-          if (err && err.name === 'AbortError') {
-            const i = STATE.sessionHistory.indexOf(entry);   // cancelled — drop it
-            if (i !== -1) STATE.sessionHistory.splice(i, 1);
-          } else {
-            console.error('queued answer failed:', err);
-            entry.pairs[0].answer = '⚠️ ' + (err.message || 'Could not research this one.');
-            entry.pending = false;
-          }
-        }
-        const owns = slot.abortController === controller;
-        if (owns) { slot.loading = false; slot.abortController = null; }
-        // The rep may be typing — surface the answer without stealing the caret.
-        const focusId = isComposerFocused() ? document.activeElement.id : null;
-        const caret = focusId ? document.activeElement.selectionStart : null;
-        render();
-        if (focusId) { const el = document.getElementById(focusId); if (el) { el.focus(); try { el.setSelectionRange(caret, caret); } catch {} } }
-        // Opened this one while it was still researching? Read it aloud the
-        // moment the answer lands, so the click that opened it pays off.
-        if (HISTORY_VIEW.open === entry.id) speakAnswerEntry(entry);
-        if (owns) pumpAssistQueue();
-      }
-
-      // Drop everything waiting/researching (used on stop, or when a new
-      // utterance takes over) and remove the not-yet-answered left-list entries.
-      function clearAssistQueue() {
-        TECH.queue.length = 0;
-        for (let i = STATE.sessionHistory.length - 1; i >= 0; i--) {
-          if (STATE.sessionHistory[i].pending) STATE.sessionHistory.splice(i, 1);
-        }
       }
 
       function pushAssistContext(text) {
@@ -2297,22 +2159,15 @@
         if (!isComposerFocused()) render();
       }
 
-      // Shared "not a question" verdict — keeps every early-out and parse
-      // failure on the same shape the acceptance logic expects.
-      const EMPTY_CLASSIFICATION = {
-        is_question: false, in_scope: false, answerable_now: false,
-        is_garbled: false, normalized_question: '', confidence: 0, topic: '', reason: ''
-      };
-
       async function classifyUtterance(text, contextArr) {
-        if (!GSHEET_WEBHOOK) return EMPTY_CLASSIFICATION;
+        if (!GSHEET_WEBHOOK) return { is_question: false, confidence: 0 };
         const ctxLines = (contextArr || []).map((u, i) => (i + 1) + '. ' + u).join('\n');
         const userContent =
           (ctxLines ? 'Recent context (older first):\n' + ctxLines + '\n\n' : '') +
           'Latest utterance:\n' + text;
         const data = await postChat({
           model: MODELS.classifier,
-          max_tokens: 320,
+          max_tokens: 200,
           system: CLASSIFIER_SYSTEM,
           messages: [{ role: 'user', content: userContent }],
           output_config: { format: { type: 'json_schema', schema: CLASSIFIER_SCHEMA } },
@@ -2325,24 +2180,17 @@
       // (older proxy deployments may not forward output_config).
       function parseClassifierReply(reply) {
         const m = reply.match(/\{[\s\S]*\}/);
-        if (!m) return EMPTY_CLASSIFICATION;
+        if (!m) return { is_question: false, confidence: 0 };
         try {
           const j = JSON.parse(m[0]);
-          // Older proxy deployments may omit the split fields; default the
-          // scope gates to true so a plain {is_question, confidence} reply
-          // still behaves like the pre-split classifier.
           return {
             is_question: !!j.is_question,
-            in_scope: j.in_scope === undefined ? true : !!j.in_scope,
-            answerable_now: j.answerable_now === undefined ? true : !!j.answerable_now,
-            is_garbled: !!j.is_garbled,
-            normalized_question: typeof j.normalized_question === 'string' ? j.normalized_question.trim() : '',
             confidence: typeof j.confidence === 'number' ? j.confidence : 0,
             topic: j.topic || '',
             reason: j.reason || ''
           };
         } catch {
-          return EMPTY_CLASSIFICATION;
+          return { is_question: false, confidence: 0 };
         }
       }
 
@@ -2453,13 +2301,7 @@
             save: false
           };
           if (needsSearch) {
-            const tool = { type: SEARCH_TOOL, name: 'web_search', max_uses: viaVoice ? 2 : 3 };
-            // Ground typed-chat and wake-word voice answers in the same product
-            // docs the passive-assist path uses, instead of the open web. Falls
-            // back to an unrestricted search only if Settings has no domains.
-            const domains = (slot.allowedDomains || []).filter(Boolean);
-            if (domains.length) tool.allowed_domains = domains;
-            body.tools = [tool];
+            body.tools = [{ type: SEARCH_TOOL, name: 'web_search', max_uses: viaVoice ? 2 : 3 }];
           }
 
           const data = await postChat(body, controller.signal);
@@ -2518,45 +2360,6 @@
 
       /* ---------- technical-assist answers ---------- */
 
-      // The model call shared by the on-screen answer and the background
-      // (queued) answer: same model, same doc-grounded web_search, same
-      // search-failed fallback. Returns the proxy's data ({ reply, sources }).
-      async function requestAssistAnswer(question, signal) {
-        const slot = STATE.slots[0];
-        // Context: the last few assist Q&A pairs keep follow-up questions
-        // coherent ("and what about Intune?") without dragging latency.
-        const prior = [];
-        for (const p of TECH.recentPairs.slice(-ASSIST.HISTORY_PAIRS)) {
-          prior.push({ role: 'user', content: p.question });
-          prior.push({ role: 'assistant', content: p.answer });
-        }
-        const domains = (slot.allowedDomains || []).filter(Boolean);
-        const tool = { type: SEARCH_TOOL, name: 'web_search', max_uses: ASSIST.SEARCH_MAX_USES };
-        if (domains.length) tool.allowed_domains = domains;
-        const baseBody = {
-          model: MODELS.assist,
-          max_tokens: 1100,
-          // Medium effort trades a sliver of depth for noticeably faster
-          // answers — right for a live call. (Older proxy deployments drop
-          // this field harmlessly.)
-          output_config: { effort: 'medium' },
-          system: systemBlocks(slot.prompt + '\n\n' + ASSIST_STYLE),
-          messages: prior.concat([{ role: 'user', content: question }]),
-          // The proxy's synchronous sheet append would sit on the answer's
-          // critical path — skip it and save from the client afterwards.
-          save: false
-        };
-        try {
-          return await postChat(Object.assign({ tools: [tool] }, baseBody), signal);
-        } catch (err) {
-          if (err && err.name === 'AbortError') throw err;
-          // Web search failed (tool rejected, timeout, transient error) —
-          // answer from knowledge rather than staying silent.
-          console.error('search-enabled answer failed, retrying without tools:', err);
-          return await postChat(baseBody, signal);
-        }
-      }
-
       async function runAssistAnswer(idx, question) {
         const slot = STATE.slots[idx];
         if (slot.loading) return;
@@ -2565,13 +2368,10 @@
         // Every auto-answered question starts a visually fresh chat: the
         // previous Q&A slides into Saved Conversations so the panel always
         // shows just the question being answered now. Follow-up context is
-        // preserved separately in TECH.recentPairs. The bumped answer is
-        // flagged unread, so if a new question pushed it off screen before the
-        // rep finished reading, it shows a notification on the left to step
-        // back to (the badge clears the moment they open it).
+        // preserved separately in TECH.recentPairs.
         if (collectPairs(slot).length) {
           if (slot.isSpeaking) stopSpeaking();
-          archiveChatToHistory(slot, { unread: true });
+          archiveChatToHistory(slot);
         }
 
         slot.messages.push({ role: 'user', content: question, kind: 'assist-q' });
@@ -2587,8 +2387,44 @@
         scrollChat();
 
         try {
+          // Context: the last few assist Q&A pairs keep follow-up questions
+          // coherent ("and what about Intune?") without dragging latency.
+          // Pulled from TECH.recentPairs, not the chat — the chat is archived
+          // to History before each new question.
+          const prior = [];
+          for (const p of TECH.recentPairs.slice(-ASSIST.HISTORY_PAIRS)) {
+            prior.push({ role: 'user', content: p.question });
+            prior.push({ role: 'assistant', content: p.answer });
+          }
+
+          const domains = (slot.allowedDomains || []).filter(Boolean);
+          const tool = { type: SEARCH_TOOL, name: 'web_search', max_uses: ASSIST.SEARCH_MAX_USES };
+          if (domains.length) tool.allowed_domains = domains;
+
           const sessionIdAtSend = SESSION_ID;
-          const data = await requestAssistAnswer(question, controller.signal);
+          const baseBody = {
+            model: MODELS.assist,
+            max_tokens: 1100,
+            // Medium effort trades a sliver of depth for noticeably faster
+            // answers — right for a live call. (Older proxy deployments drop
+            // this field harmlessly.)
+            output_config: { effort: 'medium' },
+            system: systemBlocks(slot.prompt + '\n\n' + ASSIST_STYLE),
+            messages: prior.concat([{ role: 'user', content: question }]),
+            // The proxy's synchronous sheet append would sit on the answer's
+            // critical path — skip it and save from the client afterwards.
+            save: false
+          };
+          let data;
+          try {
+            data = await postChat(Object.assign({ tools: [tool] }, baseBody), controller.signal);
+          } catch (err) {
+            if (err && err.name === 'AbortError') throw err;
+            // Web search failed (tool rejected, timeout, transient error) —
+            // answer from knowledge rather than staying silent.
+            console.error('search-enabled answer failed, retrying without tools:', err);
+            data = await postChat(baseBody, controller.signal);
+          }
 
           const { main, spoken } = splitSpoken(String(data.reply || ''));
           const msg = slot.messages[assistantMsgIdx];
@@ -2631,17 +2467,12 @@
           }
         }
 
-        const owns = slot.abortController === controller;
-        if (owns) {
+        if (slot.abortController === controller) {
           slot.loading = false;
           slot.abortController = null;
         }
         render();
         scrollChat();
-        // This answer is finished — pull the next queued question, if any. Only
-        // when this call still owns the slot: if something newer took over
-        // (a wake-word turn, a stop), that flow now controls what plays next.
-        if (owns) pumpAssistQueue();
       }
 
       function scrollChat() {
@@ -2769,10 +2600,10 @@
         const confirming = STATE.historyConfirmDeleteId === h.id;
         const active = HISTORY_VIEW.open === h.id;
         return `
-          <div class="sb-item ${active ? 'active' : ''}${confirming ? ' confirming' : ''}${h.unread ? ' unread' : ''}" role="button" tabindex="0" data-action="${confirming ? 'noop' : 'view-history'}" data-id="${escAttr(h.id)}" title="${h.unread ? 'Answered — click to hear it read aloud' : 'Open saved conversation'}">
+          <div class="sb-item ${active ? 'active' : ''}${confirming ? ' confirming' : ''}" role="button" tabindex="0" data-action="${confirming ? 'noop' : 'view-history'}" data-id="${escAttr(h.id)}" title="Open saved conversation">
             <div class="sb-item-body">
-              <div class="sb-item-title">${h.unread ? '<span class="sb-unread-dot" aria-hidden="true"></span>' : ''}${escHtml(h.preview || 'Untitled conversation')}</div>
-              <div class="sb-item-meta">${h.pending ? '<span class="sb-researching">Researching…</span>' : escHtml(formatHistoryTime(h)) + (h.pairs.length > 1 ? ' · ' + h.pairs.length + ' Q&amp;As' : '')}</div>
+              <div class="sb-item-title">${escHtml(h.preview || 'Untitled conversation')}</div>
+              <div class="sb-item-meta">${escHtml(formatHistoryTime(h))}${h.pairs.length > 1 ? ' · ' + h.pairs.length + ' Q&amp;As' : ''}</div>
               ${confirming ? `
                 <div class="sb-confirm">
                   <span>Delete this conversation?</span>
@@ -2868,7 +2699,7 @@
         return `
           <header class="chat-head">
             <button class="icon-btn sb-toggle" data-action="toggle-history" title="Conversations" aria-label="Open conversations">
-              <i data-lucide="panel-left" class="w-5 h-5"></i>${sbToggleBadgeHtml()}
+              <i data-lucide="panel-left" class="w-5 h-5"></i>
             </button>
             <div class="chat-avatar ${on ? '' : 'muted'}">${escHtml(slot.label.charAt(0))}<span class="status-dot"></span></div>
             <div class="head-titles">
@@ -2912,17 +2743,14 @@
       function renderLiveStrip(slot, idx) {
         const inConvo = VOICE.awaitingCommand || VOICE.conversationMode;
         const last = TECH.decisions[TECH.decisions.length - 1];
-        const queued = TECH.queue.length;
-        const stats = TECH.pending ? 'Checking a question…'
-          : queued ? queued + (queued === 1 ? ' question' : ' questions') + ' queued'
-          : TECH.answered + ' answered · ' + TECH.heard + ' heard';
+        const stats = TECH.pending ? 'Checking a question…' : TECH.answered + ' answered · ' + TECH.heard + ' heard';
         return `
           <div class="live-strip">
             <span class="sound-wave ls-wave" aria-hidden="true"><span class="sound-wave-bar"></span><span class="sound-wave-bar"></span><span class="sound-wave-bar"></span></span>
             <div class="ls-body">
               <div class="ls-top">
                 <span class="ls-title">${inConvo ? 'Listening to you' : 'Listening for tech questions'}</span>
-                <span class="ls-stats ${TECH.pending || queued ? 'busy' : ''}">${escHtml(stats)}</span>
+                <span class="ls-stats ${TECH.pending ? 'busy' : ''}">${escHtml(stats)}</span>
               </div>
               <div class="ls-live ac-live ${VOICE.interimText ? 'hearing' : ''}" id="live-transcript">
                 <span class="ls-live-text"><span id="live-transcript-text">${escHtml(VOICE.interimText || '')}</span><span class="interim-caret">▊</span></span>
@@ -3034,13 +2862,11 @@
       function renderSavedView(entry) {
         const confirming = STATE.historyConfirmDeleteId === entry.id;
         const pairCount = entry.pairs.length;
-        const canSpeak = VOICE.ttsSupported && !entry.pending && (entry.pairs || []).some(p => p && p.answer && !/^⚠️/.test(p.answer));
-        const speakingNow = !!STATE.slots[0].isSpeaking;
         return `
           <div class="saved-view history-popout">
             <header class="chat-head">
               <button class="icon-btn sb-toggle" data-action="toggle-history" title="Conversations" aria-label="Open conversations">
-                <i data-lucide="panel-left" class="w-5 h-5"></i>${sbToggleBadgeHtml()}
+                <i data-lucide="panel-left" class="w-5 h-5"></i>
               </button>
               <button class="icon-btn" data-action="close-history" title="Back to current chat" aria-label="Back to current chat">
                 <i data-lucide="arrow-left" class="w-5 h-5"></i>
@@ -3055,9 +2881,6 @@
                   <button class="btn-ghost" data-action="cancel-delete-history" data-id="${escAttr(entry.id)}">Cancel</button>
                   <button class="btn-danger-solid" data-action="confirm-delete-history-popout" data-id="${escAttr(entry.id)}">Delete</button>
                 ` : `
-                  ${canSpeak ? `<button class="btn-ghost" data-action="speak-entry" data-id="${escAttr(entry.id)}" title="${speakingNow ? 'Stop reading' : 'Read this answer aloud'}" aria-label="${speakingNow ? 'Stop reading' : 'Read this answer aloud'}">
-                    <i data-lucide="${speakingNow ? 'volume-x' : 'volume-2'}" class="w-4 h-4"></i>${speakingNow ? 'Stop' : 'Read aloud'}
-                  </button>` : ''}
                   <button class="btn-primary" style="min-height:40px;padding:8px 18px" data-action="load-history" data-id="${escAttr(entry.id)}">
                     <i data-lucide="message-circle-plus" class="w-4 h-4"></i>Continue in chat
                   </button>
@@ -3075,10 +2898,10 @@
                   <div class="msg-row">
                     <div class="msg-av">R</div>
                     <div class="popout-answer">
-                      ${p.answer ? `<div class="chat-bubble chat-bot chat-md" style="white-space:normal">${mdToHtml(p.answer)}</div>
+                      <div class="chat-bubble chat-bot chat-md" style="white-space:normal">${mdToHtml(p.answer)}</div>
                       <button class="popout-copy" data-action="copy-answer" data-id="${escAttr(entry.id)}" data-pair="${i}" title="Copy answer" aria-label="Copy answer">
                         <i data-lucide="copy" class="w-3.5 h-3.5"></i>
-                      </button>` : `<div class="chat-bubble chat-bot chat-md saved-researching" style="white-space:normal">Randy is researching this answer — it’ll appear here in a moment.</div>`}
+                      </button>
                     </div>
                   </div>
                 `).join('')}
@@ -3093,7 +2916,7 @@
         return `
           <header class="chat-head">
             <button class="icon-btn sb-toggle" data-action="toggle-history" title="Conversations" aria-label="Open conversations">
-              <i data-lucide="panel-left" class="w-5 h-5"></i>${sbToggleBadgeHtml()}
+              <i data-lucide="panel-left" class="w-5 h-5"></i>
             </button>
             <button class="icon-btn" data-action="switch-tab" data-tab="home" title="Back to chat" aria-label="Back to chat">
               <i data-lucide="arrow-left" class="w-5 h-5"></i>
@@ -3265,7 +3088,7 @@
            listening, white dots while answering, badge + glow when an
            answer is waiting. */
         .pip-mini { display: none; position: relative; flex-direction: column; align-items: center; justify-content: center; gap: 9px; width: 100%; height: 100%; padding: 0; border: none; background: transparent; cursor: pointer; font-family: inherit; }
-        body.pip-collapsed .pip-head, body.pip-collapsed .pip-msgs, body.pip-collapsed .pip-inputrow { display: none; }
+        body.pip-collapsed .pip-head, body.pip-collapsed .pip-live, body.pip-collapsed .pip-msgs, body.pip-collapsed .pip-toolbar, body.pip-collapsed .pip-inputrow { display: none; }
         body.pip-collapsed .pip-mini { display: flex; }
         .pip-mini-stage { position: relative; width: 72px; height: 72px; }
         .pip-mini-ring { position: absolute; inset: 0; border-radius: 50%; border: 2px solid var(--cyan); opacity: 0; pointer-events: none; }
@@ -3291,6 +3114,29 @@
         @keyframes pipNewFlash { 0% { box-shadow: 0 0 0 3px rgba(3,114,255,0.5); } 100% { box-shadow: 0 0 0 3px rgba(3,114,255,0); } }
         .pip-msgs { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
         .pip-empty { margin: auto; max-width: 250px; text-align: center; color: #64748b; font-size: 12.5px; line-height: 1.6; }
+        /* Live listening band — mirrors the main tab's transcript strip:
+           streams the voice-to-text while hearing, then flips to a busy
+           "Processing/Researching" state once a question is identified. */
+        .pip-live { display: none; align-items: flex-start; gap: 10px; padding: 9px 14px; background: var(--quote); border-bottom: 1px solid var(--divider); flex-shrink: 0; }
+        .pip-live.show { display: flex; }
+        .pip-live-ind { display: inline-flex; align-items: center; height: 16px; margin-top: 1px; flex-shrink: 0; }
+        .pip-live-wave { display: inline-flex; align-items: flex-end; gap: 2px; height: 16px; }
+        .pip-live-wave i { width: 3px; height: 5px; background: var(--primary); border-radius: 2px; animation: pipWave 1s ease-in-out infinite; }
+        .pip-live-wave i:nth-child(2) { animation-delay: 0.15s; }
+        .pip-live-wave i:nth-child(3) { animation-delay: 0.3s; }
+        @keyframes pipWave { 0%, 100% { height: 4px; } 50% { height: 15px; } }
+        .pip-live-dots { display: none; gap: 3px; align-items: center; }
+        .pip-live-dots i { width: 6px; height: 6px; border-radius: 50%; background: var(--primary); animation: pipDot 1.4s infinite ease-in-out both; }
+        .pip-live-dots i:nth-child(1) { animation-delay: -0.32s; }
+        .pip-live-dots i:nth-child(2) { animation-delay: -0.16s; }
+        .pip-live.busy .pip-live-wave { display: none; }
+        .pip-live.busy .pip-live-dots { display: inline-flex; }
+        .pip-live-body { min-width: 0; flex: 1; }
+        .pip-live-label { font-size: 10px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--primary); line-height: 1.4; }
+        .pip-live-text { font-size: 12.5px; line-height: 1.45; color: var(--dark); margin-top: 2px; overflow-wrap: break-word; }
+        .pip-live-text:empty { display: none; }
+        .pip-live-caret { display: inline-block; margin-left: 1px; color: var(--primary); font-weight: 700; animation: pipCaret 1s steps(1) infinite; }
+        @keyframes pipCaret { 50% { opacity: 0; } }
         .pip-row { display: flex; justify-content: flex-start; }
         .pip-row.user { justify-content: flex-end; }
         .pip-bubble { max-width: 88%; padding: 8px 12px; border-radius: 12px; font-size: 13px; line-height: 1.5; overflow-wrap: break-word; white-space: pre-wrap; }
@@ -3321,13 +3167,28 @@
         .pip-tdot:nth-child(1) { animation-delay: -0.32s; }
         .pip-tdot:nth-child(2) { animation-delay: -0.16s; }
         @keyframes pipDot { 0%, 80%, 100% { transform: scale(0); } 40% { transform: scale(1); } }
+        /* Read-aloud toggle — mirrors the main tab's voice switch so the
+           pop-out can mute/unmute Randy's spoken answers. */
+        .pip-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 7px 12px; background: #fff; border-top: 1px solid var(--divider); flex-shrink: 0; }
+        .pip-speak { display: inline-flex; align-items: center; gap: 7px; font-size: 11.5px; font-weight: 600; color: #6B7693; cursor: pointer; user-select: none; transition: color 0.15s; }
+        .pip-speak:hover { color: var(--navy); }
+        .pip-speak.on { color: var(--primary); }
+        .pip-speak svg { width: 15px; height: 15px; flex-shrink: 0; }
+        .pip-speak .pip-ic-on { display: none; }
+        .pip-speak.on .pip-ic-on { display: inline-block; }
+        .pip-speak.on .pip-ic-off { display: none; }
+        .pip-switch { position: relative; display: inline-flex; width: 38px; height: 21px; border-radius: 999px; background: #C3CBDC; cursor: pointer; transition: background 0.2s; flex-shrink: 0; }
+        .pip-switch:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(3,114,255,0.28); }
+        .pip-switch.on { background: var(--primary); }
+        .pip-switch::after { content: ''; position: absolute; top: 2px; left: 2px; width: 17px; height: 17px; border-radius: 50%; background: #fff; transition: left 0.2s; box-shadow: 0 1px 3px rgba(22,31,91,0.25); }
+        .pip-switch.on::after { left: 19px; }
         .pip-inputrow { display: flex; gap: 8px; align-items: center; padding: 10px; border-top: 1px solid var(--divider); background: #fff; flex-shrink: 0; }
         .pip-inputrow input { flex: 1; min-width: 0; border: 1.5px solid var(--divider); border-radius: 9999px; padding: 9px 14px; font-size: 13px; outline: none; color: var(--navy); font-family: inherit; }
         .pip-inputrow input:focus { border-color: var(--cyan); box-shadow: 0 0 0 3px rgba(0,191,255,0.16); }
         .pip-send { width: 38px; height: 38px; border-radius: 50%; background: var(--primary); color: #fff; border: none; display: grid; place-items: center; cursor: pointer; flex-shrink: 0; transition: background 0.15s; }
         .pip-send:hover { background: var(--primary-hover); }
         .pip-send:disabled { background: #cbd5e1; cursor: not-allowed; }
-        @media (prefers-reduced-motion: reduce) { .pip-dot.live, .pip-mini-dot.live, .pip-mini.is-live .pip-mini-ring, .pip-mini.has-unseen .pip-mini-orb, .pip-mini-dots i, .pip-new, .pip-tdot { animation: none; } }
+        @media (prefers-reduced-motion: reduce) { .pip-dot.live, .pip-mini-dot.live, .pip-mini.is-live .pip-mini-ring, .pip-mini.has-unseen .pip-mini-orb, .pip-mini-dots i, .pip-new, .pip-tdot, .pip-live-wave i, .pip-live-dots i, .pip-live-caret { animation: none; } }
       `;
 
       // Toggle the floating window. Must run from a real user click —
@@ -3398,7 +3259,25 @@
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/></svg>
             </button>
           </div>
+          <div class="pip-live" id="pip-live">
+            <span class="pip-live-ind" aria-hidden="true">
+              <span class="pip-live-wave"><i></i><i></i><i></i></span>
+              <span class="pip-live-dots"><i></i><i></i><i></i></span>
+            </span>
+            <div class="pip-live-body">
+              <div class="pip-live-label" id="pip-live-label">Listening for tech questions</div>
+              <div class="pip-live-text" id="pip-live-text"></div>
+            </div>
+          </div>
           <div class="pip-msgs" id="pip-msgs"></div>
+          <div class="pip-toolbar">
+            <label class="pip-speak" id="pip-speak" data-action="pip-toggle-speak" title="Read each answer aloud">
+              <svg class="pip-ic-on" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4.7a.7.7 0 0 0-1.2-.5L6 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h3l3.8 3.8a.7.7 0 0 0 1.2-.5Z"/><path d="M16 9a5 5 0 0 1 0 6"/><path d="M19.4 5.6a10 10 0 0 1 0 12.8"/></svg>
+              <svg class="pip-ic-off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4.7a.7.7 0 0 0-1.2-.5L6 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h3l3.8 3.8a.7.7 0 0 0 1.2-.5Z"/><line x1="22" y1="9" x2="16" y2="15"/><line x1="16" y1="9" x2="22" y2="15"/></svg>
+              <span>Read aloud</span>
+            </label>
+            <span class="pip-switch" id="pip-switch" role="switch" aria-checked="false" aria-label="Read answers aloud" tabindex="0" data-action="pip-toggle-speak"></span>
+          </div>
           <div class="pip-inputrow">
             <input type="text" id="pip-input" placeholder="Message ${escAttr(label)}…" autocomplete="off" />
             <button class="pip-send" id="pip-send" data-action="pip-send" title="Send message" aria-label="Send message">
@@ -3425,6 +3304,7 @@
           if (e.target.closest('[data-action="pip-send"]')) { sendFromPip(); return; }
           if (e.target.closest('[data-action="pip-minimize"]')) { collapsePip(); return; }
           if (e.target.closest('[data-action="pip-expand"]')) { expandPip(); return; }
+          if (e.target.closest('[data-action="pip-toggle-speak"]')) { toggleSpeakFromPip(); return; }
           const cp = e.target.closest('[data-action="pip-copy"]');
           if (cp) copyFromPip(cp);
         });
@@ -3432,6 +3312,11 @@
           if (e.key === 'Enter' && !e.shiftKey && e.target && e.target.id === 'pip-input') {
             e.preventDefault();
             sendFromPip();
+            return;
+          }
+          if ((e.key === 'Enter' || e.key === ' ') && e.target && e.target.id === 'pip-switch') {
+            e.preventDefault();
+            toggleSpeakFromPip();
           }
         });
         w.addEventListener('pagehide', () => {
@@ -3453,6 +3338,18 @@
         PIP.lastHtml = '';
         renderPip();
         if (!collapsed) setTimeout(() => { try { doc.getElementById('pip-input').focus(); } catch {} }, 50);
+      }
+
+      // Mute / unmute Randy's spoken answers from the pop-out. Shares the
+      // same slot.speakAnswers flag as the main tab's switch, so toggling
+      // here and there stays in sync; render() refreshes both views.
+      function toggleSpeakFromPip() {
+        const slot = STATE.slots[PIP.slotIdx];
+        if (!slot) return;
+        slot.speakAnswers = !slot.speakAnswers;
+        saveSettings();
+        if (!slot.speakAnswers && slot.isSpeaking) stopSpeaking();
+        render();
       }
 
       function sendFromPip() {
@@ -3646,6 +3543,62 @@
         if (PIP.flashNext) { PIP.flashNext = false; PIP.flashNow = true; }
       }
 
+      // Live listening band, mirroring the main tab's transcript strip:
+      // stream the voice-to-text while Randy hears speech, then flip to a
+      // busy "Processing/Researching" state the moment a question is being
+      // checked or answered. Hidden whenever Randy isn't actively listening,
+      // so typed-only use of the pop-out is unaffected.
+      function pipLiveModel(slot) {
+        if (!slot || !slot.listenOn) return { show: false };
+        const inConvo = VOICE.awaitingCommand || VOICE.conversationMode;
+        // Answering — the web search runs here. An overheard question is a
+        // technical-assist answer ("Researching"); a spoken one is a chat
+        // reply ("Thinking").
+        if (slot.loading) {
+          let lastUser = null;
+          for (let i = slot.messages.length - 1; i >= 0; i--) {
+            if (slot.messages[i].role === 'user') { lastUser = slot.messages[i]; break; }
+          }
+          const researching = lastUser && lastUser.kind === 'assist-q';
+          return { show: true, busy: true, label: researching ? 'Researching the question…' : 'Thinking…', text: '' };
+        }
+        // Classifier deciding whether the latest utterance is a question.
+        if (TECH.pending) return { show: true, busy: true, label: 'Processing question…', text: '' };
+        // Live transcription as it streams in.
+        if (VOICE.interimText) {
+          return { show: true, busy: false, label: inConvo ? 'Listening to you' : 'Hearing…', text: VOICE.interimText };
+        }
+        // Listening, nothing heard yet.
+        return { show: true, busy: false, label: inConvo ? 'Listening to you' : 'Listening for tech questions', text: '' };
+      }
+
+      // Push the live-band state into the pop-out document. Called from
+      // renderPip() (covers status changes) and directly from the interim
+      // transcript hooks (which bypass a full render for performance). Must
+      // never throw — the window can close between checks and DOM writes.
+      function updatePipLive(slot) {
+        const w = PIP.window;
+        if (!w || w.closed || PIP.collapsed) return;
+        try {
+          const doc = w.document;
+          const band = doc.getElementById('pip-live');
+          if (!band) return;
+          const m = pipLiveModel(slot || STATE.slots[PIP.slotIdx]);
+          band.classList.toggle('show', !!m.show);
+          band.classList.toggle('busy', !!(m.show && m.busy));
+          if (!m.show) return;
+          const lbl = doc.getElementById('pip-live-label');
+          if (lbl && lbl.textContent !== m.label) lbl.textContent = m.label;
+          const txt = doc.getElementById('pip-live-text');
+          if (txt) {
+            const html = m.text ? escHtml(m.text) + '<span class="pip-live-caret">▊</span>' : '';
+            if (txt.innerHTML !== html) txt.innerHTML = html;
+          }
+        } catch (err) {
+          // window vanished mid-write — harmless, next render reconciles.
+        }
+      }
+
       // Status line + listening dot, mirroring the conv-sub logic in
       // renderCard so the pop-out reflects the main tab's voice state.
       function pipStatus(slot) {
@@ -3662,6 +3615,9 @@
       function pipMessagesHtml(slot) {
         const msgs = slot.messages;
         if (msgs.length === 0 && !slot.loading) {
+          if (slot.listenOn) {
+            return '<div class="pip-empty">Listening to the call — technical questions get answered here as Randy hears them.</div>';
+          }
           return '<div class="pip-empty">No messages yet — say “Hey ' + escHtml(slot.voiceName || slot.label) + '” in the main tab or type below.</div>';
         }
         const out = msgs.map((m, mi) => {
@@ -3711,6 +3667,24 @@
           if (sub && sub.textContent !== st.text) sub.textContent = st.text;
           const dot = doc.getElementById('pip-dot');
           if (dot) dot.className = 'pip-dot' + (st.live ? ' live' : '');
+
+          // Live transcript / processing band.
+          updatePipLive(slot);
+
+          // Read-aloud switch — keep in sync with slot.speakAnswers (it can
+          // also be toggled from the main tab).
+          const speakOn = !!slot.speakAnswers;
+          const speakLbl = doc.getElementById('pip-speak');
+          if (speakLbl) {
+            speakLbl.classList.toggle('on', speakOn);
+            const t = speakOn ? 'Randy reads each answer aloud — click to mute' : 'Answers stay silent — click to have Randy read them aloud';
+            if (speakLbl.title !== t) speakLbl.title = t;
+          }
+          const speakSw = doc.getElementById('pip-switch');
+          if (speakSw) {
+            speakSw.classList.toggle('on', speakOn);
+            speakSw.setAttribute('aria-checked', speakOn ? 'true' : 'false');
+          }
 
           // Collapsed icon: listening → answering → answer-ready.
           const mini = doc.getElementById('pip-mini');
@@ -3897,23 +3871,10 @@
             }
             case 'view-history': {
               HISTORY_VIEW.open = act.dataset.id;
-              const viewed = STATE.sessionHistory.find(h => h.id === act.dataset.id);
-              if (viewed) {
-                viewed.unread = false;     // opened — clear its notification
-                speakAnswerEntry(viewed);  // ...and read the answer aloud
-              }
               STATE.historyConfirmDeleteId = null;
               STATE.activeTab = 'home';
               STATE.historyOpen = false;
               render();
-              break;
-            }
-            case 'speak-entry': {
-              const entry = STATE.sessionHistory.find(h => h.id === act.dataset.id);
-              if (!entry) break;
-              // Toggle: if Randy is already reading, stop; otherwise read it.
-              if (STATE.slots[0].isSpeaking) stopSpeaking();
-              else speakAnswerEntry(entry);
               break;
             }
             case 'close-history':
@@ -3967,7 +3928,6 @@
             case 'load-history': {
               const hist = STATE.sessionHistory.find(h => h.id === act.dataset.id);
               if (hist) {
-                hist.unread = false;   // opened — clear its notification
                 const slot = STATE.slots[0];
                 const transcript = hist.pairs.map(p => 'User: ' + p.question + '\nRandy: ' + stripMarkdown(p.answer)).join('\n\n');
                 slot.inputText = 'Here is a previous conversation for context:\n\n' + transcript + '\n\nBased on this conversation, ';
