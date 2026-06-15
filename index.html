@@ -510,23 +510,49 @@
       const DEFAULT_VOICE_PERSONALITY = "Your reply will be spoken aloud, so write it the way you'd actually say it. Keep it to 2-3 short sentences. Use contractions and everyday phrasing, and vary the sentence length — flat, uniform sentences sound robotic. An occasional natural lead-in is good ('Yeah, so...', 'Honestly,', 'Short answer —') but never a compliment about the question. Say numbers the way people talk — '120 grand', 'about a third', 'a couple hundred'. No markdown, no lists, no formatting of any kind. Warm, direct, like a colleague answering across the desk.";
 
       // Classifier gate for overheard utterances.
+      //
+      // The gate looks for a technical INFORMATION NEED, not just a grammatical
+      // question. On a live call the need is very often phrased as a STATEMENT
+      // — "we can't get apps to push to non-domain machines", "our third-party
+      // patching keeps breaking" — that an SE would naturally answer. Those
+      // count. Pure facts with no implied ask ("we run Intune") and chatter do
+      // not. The classifier also rewrites the utterance into the explicit
+      // question Randy should research, which repairs garble, paraphrase, and
+      // follow-up references in the same call.
       const CLASSIFIER_SYSTEM = [
-        'You are a strict gate. Decide whether the LATEST utterance overheard during a sales call is a TECHNICAL QUESTION that a Recast Software solution engineer should answer.',
+        'You are the gate for Randy, a Recast Software solution engineer listening to a live call. Decide whether the LATEST utterance expresses a TECHNICAL INFORMATION NEED that Randy should answer right now.',
+        '',
+        'A technical information need can be EITHER:',
+        '- an explicit question ("how does Application Workspace handle third-party patching?"), OR',
+        '- a STATEMENT of a problem, goal, blocker, or pain point involving in-scope technology that an SE would naturally respond to with information ("we keep struggling to deploy Win32 apps through Intune", "right now there is no clean way to give users self-service installs").',
         '',
         'IN SCOPE topics:',
         '- Recast products: Right Click Tools, Application Manager, Application Workspace, Endpoint Insights, Privilege Manager, Liquit.',
         '- Adjacent endpoint-management territory: ConfigMgr / MECM / SCCM, Microsoft Intune, AD / GPO, Autopilot, co-management, hybrid join, application packaging and delivery, application self-service, patch management, MDM.',
         '',
-        'OUT OF SCOPE: small talk, pleasantries, scheduling, status updates, contract / pricing / legal questions, anything not endpoint-management adjacent.',
+        'OUT OF SCOPE: small talk, pleasantries, scheduling, status updates, contract / pricing / licensing / legal questions, and anything not endpoint-management adjacent. Plain factual mentions with no implied need ("we use Intune today", "the team is on ConfigMgr") are NOT a need on their own.',
         '',
-        'Set is_question=true only when ALL hold:',
-        '1. The latest utterance functions as a question (interrogative form or a clear ask like "walk me through how X handles Y").',
-        '2. The question is in scope per the lists above.',
-        '3. An SE could plausibly answer it now without asking anything back.',
+        'Set needs_answer=true only when ALL hold:',
+        '1. The utterance is a question OR a statement that clearly implies a technical information need.',
+        '2. It is in scope per the lists above.',
+        '3. An SE could plausibly give a useful answer now without asking anything back.',
+        'For pure statements (no question form), be stricter: set needs_answer=true only when the technical need is unmistakable and Randy jumping in with information would clearly help — when in doubt on a bare statement, set it false.',
         '',
-        'confidence is your 0-to-1 certainty that auto-answering helps. Below 0.6 means do not act. Be conservative; false positives interrupt a live call. Speech-to-text may garble product names ("in tune" = Intune, "config manager"/"SCCM"/"MECM" = ConfigMgr, "liquid" = Liquit, "auto pilot" = Autopilot, "right click tools" = Right Click Tools) — interpret charitably but do not invent a question that is not there.',
+        'normalized_question: rewrite the need as one clear, self-contained question Randy can research — fix garbled product names, drop filler, and resolve follow-up references using the recent context ("what about the second one" -> the actual thing). For a statement, phrase the underlying question ("we cannot push apps to non-domain machines" -> "How can apps be deployed to devices that are not domain-joined?"). Keep it under 25 words. If needs_answer is false, return an empty string.',
         '',
-        'Respond with ONLY a JSON object — no prose, no code fences: {"is_question": boolean, "confidence": number 0-1, "topic": "short phrase", "reason": "max 12 words"}'
+        'confidence is your 0-to-1 certainty that auto-answering helps. Below 0.6 means do not act. Be conservative; a false positive interrupts a live call and is worse than a miss. Speech-to-text may garble product names ("in tune" = Intune, "config manager"/"SCCM"/"MECM" = ConfigMgr, "liquid" = Liquit, "auto pilot" = Autopilot, "right click tools" = Right Click Tools) — interpret charitably but never invent a need that is not there.',
+        '',
+        'Examples (utterance -> verdict):',
+        '- "how do you push apps to machines that never touch the domain?" -> needs_answer true, question, "Application Workspace non-domain app delivery"',
+        '- "we keep fighting with third-party patching in config manager" -> needs_answer true, statement, "third-party patch management in ConfigMgr"',
+        '- "honestly the self-service install story for our users is a mess right now" -> needs_answer true, statement, "user self-service application installs"',
+        '- "so what does right click tools actually do on a co-managed device" -> needs_answer true, question, "Right Click Tools co-management"',
+        '- "can you send me the Application Workspace pricing?" -> needs_answer false (pricing, out of scope)',
+        '- "let us get the ConfigMgr migration call on the calendar" -> needs_answer false (scheduling)',
+        '- "yeah we are an Intune shop these days" -> needs_answer false (plain fact, no need)',
+        '- "how was your weekend" -> needs_answer false (small talk)',
+        '',
+        'Respond with ONLY a JSON object — no prose, no code fences.'
       ].join('\n');
 
       // JSON schema enforced via structured outputs — the classifier reply is
@@ -535,12 +561,15 @@
       const CLASSIFIER_SCHEMA = {
         type: 'object',
         properties: {
-          is_question: { type: 'boolean', description: 'True only if the latest utterance is an in-scope technical question an SE should answer now.' },
-          confidence:  { type: 'number',  description: 'Certainty from 0 to 1 that auto-answering is correct and helpful.' },
-          topic:       { type: 'string',  description: 'Two-to-four word topic, e.g. "Intune app deployment".' },
-          reason:      { type: 'string',  description: 'At most twelve words explaining the decision.' }
+          needs_answer:        { type: 'boolean', description: 'True only if the latest utterance is an in-scope technical information need (question OR a statement implying one) Randy should answer now.' },
+          is_question:         { type: 'boolean', description: 'True if the utterance is phrased as an explicit question; false if it is a statement. For logging/debug only.' },
+          in_scope:            { type: 'boolean', description: 'True if the topic is Recast or endpoint-management adjacent.' },
+          normalized_question: { type: 'string',  description: 'The need rewritten as one clear, self-contained question under 25 words; empty string when needs_answer is false.' },
+          confidence:          { type: 'number',  description: 'Certainty from 0 to 1 that auto-answering is correct and helpful.' },
+          topic:               { type: 'string',  description: 'Two-to-four word topic, e.g. "Intune app deployment".' },
+          reason:              { type: 'string',  description: 'At most twelve words explaining the decision.' }
         },
-        required: ['is_question', 'confidence', 'topic', 'reason'],
+        required: ['needs_answer', 'is_question', 'in_scope', 'normalized_question', 'confidence', 'topic', 'reason'],
         additionalProperties: false
       };
 
@@ -548,8 +577,14 @@
       // technical questions still get answered.
       const TECH_TOPIC_RE = /\b(recast|liquit|application workspace|right.?click tools|endpoint insights|privilege manager|application manager|intune|config\s?manager|configmgr|sccm|mecm|autopilot|co.?management|gpo|group policy|hybrid join|win32|msi|packag(?:e|ing)|app (?:deploy|delivery|catalog)|self.?service|patch(?:ing|es)?|third.?party|mdm|endpoint)\b/i;
       const QUESTIONISH_RE = /\?|\b(how|what|why|when|where|which|who|can|could|does|do(?:es)?n.?t|did|is|are|will|would|should)\b[\s\S]{3,}|^(walk me through|tell me|explain|show me)/i;
+      // Statement-form technical needs: a problem/goal/pain marker near an
+      // in-scope topic ("we keep struggling with third-party patching", "no
+      // clean way to give users self-service"). Used only by the classifier-down
+      // fallback, so a loose match can never auto-answer on its own — it just
+      // keeps the SE useful while the LLM gate is unreachable.
+      const NEED_MARKER_RE = /\b(struggl(?:e|ing)|trouble|issue|issues|problem|problems|pain|painful|challeng(?:e|ing)|broke(?:n)?|break(?:s|ing)?|fail(?:s|ing|ed)?|can.?t|cannot|can not|unable|no (?:clean |good |easy )?way|hard to|difficult|messy|a mess|need(?:s|ed)? to|trying to|want to|wish (?:we|i)|looking (?:for|to)|figure out|deal with)\b/i;
       function looksLikeTechQuestion(t) {
-        return TECH_TOPIC_RE.test(t) && QUESTIONISH_RE.test(t);
+        return TECH_TOPIC_RE.test(t) && (QUESTIONISH_RE.test(t) || NEED_MARKER_RE.test(t));
       }
 
       // Tight question shapes for the fast path: clearly-formed technical
@@ -2101,14 +2136,21 @@
           .then(decision => {
             TECH.pending = false;
             const accepted =
-              decision.is_question === true &&
+              decision.needs_answer === true &&
+              decision.in_scope !== false &&
               typeof decision.confidence === 'number' &&
               decision.confidence >= ASSIST.CONF_THRESHOLD;
             recordAssistDecision(corrected, accepted, decision.confidence || 0, decision.topic || '');
             if (!accepted) { renderAssistStatus(); return; }
+            // Answer the classifier's clean rewrite when it produced one: it
+            // turns a statement-form need into an explicit question and
+            // resolves garble/follow-up references. Fall back to the corrected
+            // transcript if the rewrite is missing or implausibly short.
+            const nq = decision.normalized_question || '';
+            const toAnswer = nq.length >= ASSIST.MIN_CHARS ? nq : corrected;
             TECH.lastSubmitted = corrected;
             TECH.lastSubmittedAt = Date.now();
-            runAssistAnswer(0, corrected);
+            runAssistAnswer(0, toAnswer);
           })
           .catch(err => {
             TECH.pending = false;
@@ -2160,7 +2202,7 @@
       }
 
       async function classifyUtterance(text, contextArr) {
-        if (!GSHEET_WEBHOOK) return { is_question: false, confidence: 0 };
+        if (!GSHEET_WEBHOOK) return { needs_answer: false, confidence: 0 };
         const ctxLines = (contextArr || []).map((u, i) => (i + 1) + '. ' + u).join('\n');
         const userContent =
           (ctxLines ? 'Recent context (older first):\n' + ctxLines + '\n\n' : '') +
@@ -2177,20 +2219,26 @@
       }
 
       // Structured outputs guarantee valid JSON, but parse defensively anyway
-      // (older proxy deployments may not forward output_config).
+      // (older proxy deployments may not forward output_config). Stays
+      // backward-compatible with the old schema: a reply that only carries the
+      // legacy is_question field still produces a usable needs_answer verdict.
       function parseClassifierReply(reply) {
         const m = reply.match(/\{[\s\S]*\}/);
-        if (!m) return { is_question: false, confidence: 0 };
+        if (!m) return { needs_answer: false, confidence: 0 };
         try {
           const j = JSON.parse(m[0]);
+          const needs = typeof j.needs_answer === 'boolean' ? j.needs_answer : !!j.is_question;
           return {
-            is_question: !!j.is_question,
+            needs_answer: needs,
+            is_question: typeof j.is_question === 'boolean' ? j.is_question : needs,
+            in_scope: typeof j.in_scope === 'boolean' ? j.in_scope : true,
+            normalized_question: typeof j.normalized_question === 'string' ? j.normalized_question.trim() : '',
             confidence: typeof j.confidence === 'number' ? j.confidence : 0,
             topic: j.topic || '',
             reason: j.reason || ''
           };
         } catch {
-          return { is_question: false, confidence: 0 };
+          return { needs_answer: false, confidence: 0 };
         }
       }
 
