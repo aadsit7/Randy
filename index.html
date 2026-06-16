@@ -206,6 +206,10 @@
       .ls-last span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .ls-last .ok { color: var(--brand-green); }
       .ls-last .skip { color: var(--n400); }
+      .ls-nearmiss { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; min-width: 0; font-size: 11px; font-weight: 600; color: var(--primary); background: var(--quote, #eef4ff); border: 1px solid color-mix(in srgb, var(--primary) 35%, transparent); border-radius: 999px; padding: 3px 11px; cursor: pointer; line-height: 1.2; text-align: left; }
+      .ls-nearmiss span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .ls-nearmiss:hover { background: var(--primary); color: #fff; }
+      .ls-nearmiss i { flex-shrink: 0; }
       .ls-controls { display: flex; align-items: center; gap: 14px; flex-shrink: 0; }
       .ls-speak { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; color: var(--n600); cursor: default; }
       .ls-off { background: transparent; border: 1.5px solid var(--n300); color: var(--n600); font-size: 12px; font-weight: 600; padding: 6px 14px; border-radius: 999px; cursor: pointer; transition: border-color 0.12s, color 0.12s; }
@@ -419,23 +423,22 @@
       const ASSIST = {
         DEBOUNCE_MS: 1400,        // silence gap before a buffered utterance is classified
         DEBOUNCE_FAST_MS: 900,    // shorter gap when the buffer already looks like a full question
-        MIN_CHARS: 10,            // ignore fragments shorter than this
-        MIN_WORDS: 3,             // ...or with fewer words than this
-        CONF_THRESHOLD: 0.65,     // classifier confidence needed to auto-answer
+        MIN_CHARS: 6,             // ignore fragments shorter than this
+        MIN_WORDS: 2,             // ...or with fewer words than this
+        CONF_THRESHOLD: 0.45,     // classifier confidence needed to auto-answer (errs toward answering)
         DEDUPE_MS: 8000,          // ignore near-identical utterances inside this window
         CONTEXT_LEN: 3,           // recent utterances passed to the classifier
         DECISIONS_KEEP: 8,        // ring buffer for the status UI
         MAX_BUFFER_CHARS: 420,    // cap the join buffer so run-on speech still flushes
         MAX_DEFERRALS: 4,         // holds while interim speech is still flowing
-        // Holds while a prior classify/answer is in flight. Answers with web
-        // search take 5-15s, so this budget (x 1500ms) must outlast them —
-        // otherwise a question asked while Randy is answering gets dropped.
-        BUSY_MAX_DEFERRALS: 20,
+        // Questions overheard while Randy is busy are queued, not dropped. Cap
+        // the queue so a long monologue can't pile up unboundedly; on overflow
+        // the oldest is dropped with a visible notice.
+        MAX_QUEUE: 5,
         INTERIM_FRESH_MS: 1500,   // interim words newer than this mean speech is still flowing
         INTERIM_RECHECK_MS: 700,  // re-check cadence while waiting for a sentence to finish
         SEARCH_MAX_USES: 2,       // web searches per answer (latency budget)
-        HISTORY_PAIRS: 2,         // prior assist Q&A pairs sent as context
-        CONV_EXIT_MS: 20000       // follow-up window after a voice answer
+        HISTORY_PAIRS: 2          // prior assist Q&A pairs sent as context
       };
 
       /* ================================================================
@@ -479,10 +482,17 @@
         '- Only state facts you can verify. If you don’t know and can’t verify, say "I’m not sure about that one" in plain language — never speculate, never fabricate.',
         '- Never fabricate features, capabilities, statistics, or URLs.',
         '- Never pad with generic filler or marketing language.',
-        '- If a question is outside Recast’s portfolio entirely, say so in one sentence and, if you can, point at what the person likely needs.'
+        '- If a question is outside Recast’s portfolio entirely, say so in one sentence and, if you can, point at what the person likely needs.',
+        '',
+        '# Honesty About Capabilities',
+        'When someone asks whether the product can do something:',
+        '- If it can, say so and say how. If it can\'t — or it isn\'t available out of the box — say that plainly. Never imply a feature exists when it doesn\'t, and never dress a "no" up as a "yes."',
+        '- A flat "no" is rarely the useful answer. Find the goal behind the question. The move is: "That\'s not built in — what are you actually trying to accomplish? If the goal is X, here\'s how I\'d get there." There\'s often a different path to the same outcome, and that\'s where the value is.',
+        '- Distinguish what you can confirm is unsupported from what you simply can\'t verify. "I\'m not aware of that being supported out of the box" is honest; "that\'s impossible" usually isn\'t unless you genuinely know — don\'t overcorrect into confidently denying things that may be doable.',
+        '- This outranks product positioning. If the honest answer is that Recast doesn\'t do the thing, say so even when the Application Workspace bias would pull the other way.'
       ].join('\n');
 
-      // Appended for typed chat and wake-word voice conversations.
+      // Appended for typed chat replies.
       const CHAT_STYLE = [
         '# Response Format',
         '- Start the very first sentence with the answer itself. No preamble, no compliments about the question, no jokes or false starts before the real answer.',
@@ -503,6 +513,7 @@
         '3. If steps are needed, use a numbered list ("1.", "2.", ...) instead of bullets for that part.',
         '4. After the bullets, output a line containing exactly: ===SPOKEN===',
         '5. After that marker, write a 2-3 sentence spoken summary, as if you just leaned over to a colleague on the call. Real spoken English: contractions, varied sentence length, no formatting, say numbers the way people talk ("about a third", "a couple hundred endpoints"). A brief natural lead-in is fine ("Short answer — yes.", "So the way that works is..."), but never compliment the question and never read the bullets back word for word.',
+        '- If the honest answer is that the capability isn\'t available out of the box, say so plainly in the Bottom line, then use the bullets to give the most likely underlying goal and the path to it, flagged as an assumption. Do not ask a clarifying question — the questioner can\'t respond.',
         '',
         'Total length before the marker: under 180 words. Never mention searching, docs, or sources anywhere. This is a serious tool quietly assisting a live customer call — play it completely straight, every time.'
       ].join('\n');
@@ -536,11 +547,11 @@
         '1. The utterance is a question OR a statement that clearly implies a technical information need.',
         '2. It is in scope per the lists above.',
         '3. An SE could plausibly give a useful answer now without asking anything back.',
-        'For pure statements (no question form), be stricter: set needs_answer=true only when the technical need is unmistakable and Randy jumping in with information would clearly help — when in doubt on a bare statement, set it false.',
+        'Err toward answering. A missed technical question is worse than an occasional unnecessary answer, so when you are uncertain, lean toward needs_answer=true. Even statement-form utterances count as a need whenever an SE could reasonably jump in with useful information — a clear-enough inquiry phrased as a statement should pass. Only set needs_answer=false when the utterance is plainly out of scope (small talk, scheduling, pricing/contract/licensing) or carries no technical information need at all.',
         '',
         'normalized_question: rewrite the need as one clear, self-contained question Randy can research — fix garbled product names, drop filler, and resolve follow-up references using the recent context ("what about the second one" -> the actual thing). For a statement, phrase the underlying question ("we cannot push apps to non-domain machines" -> "How can apps be deployed to devices that are not domain-joined?"). Keep it under 25 words. If needs_answer is false, return an empty string.',
         '',
-        'confidence is your 0-to-1 certainty that auto-answering helps. Below 0.6 means do not act. Be conservative; a false positive interrupts a live call and is worse than a miss. Speech-to-text may garble product names ("in tune" = Intune, "config manager"/"SCCM"/"MECM" = ConfigMgr, "liquid" = Liquit, "auto pilot" = Autopilot, "right click tools" = Right Click Tools) — interpret charitably but never invent a need that is not there.',
+        'confidence is your 0-to-1 certainty that auto-answering helps. Below 0.45 means do not act. Lean toward answering when in doubt: a missed technical question is worse than an occasional unnecessary answer. Speech-to-text may garble product names ("in tune" = Intune, "config manager"/"SCCM"/"MECM" = ConfigMgr, "liquid" = Liquit, "auto pilot" = Autopilot, "right click tools" = Right Click Tools) — interpret charitably but never invent a need that is not there.',
         '',
         'Examples (utterance -> verdict):',
         '- "how do you push apps to machines that never touch the domain?" -> needs_answer true, question, "Application Workspace non-domain app delivery"',
@@ -565,7 +576,7 @@
           is_question:         { type: 'boolean', description: 'True if the utterance is phrased as an explicit question; false if it is a statement. For logging/debug only.' },
           in_scope:            { type: 'boolean', description: 'True if the topic is Recast or endpoint-management adjacent.' },
           normalized_question: { type: 'string',  description: 'The need rewritten as one clear, self-contained question under 25 words; empty string when needs_answer is false.' },
-          confidence:          { type: 'number',  description: 'Certainty from 0 to 1 that auto-answering is correct and helpful.' },
+          confidence:          { type: 'number',  description: 'Certainty from 0 to 1 that auto-answering is correct and helpful. Below 0.45 means do not act.' },
           topic:               { type: 'string',  description: 'Two-to-four word topic, e.g. "Intune app deployment".' },
           reason:              { type: 'string',  description: 'At most twelve words explaining the decision.' }
         },
@@ -670,10 +681,10 @@
           messages: [],                 // {role, content, kind?, spoken?, sources?}
           inputText: '',
           loading: false,
-          // The one big switch. When on, Randy hears the microphone and the
-          // computer's sound together, answers technical questions in the
-          // chat, and responds to "Hey Randy". Always starts off — turning
-          // it on needs a click (the screen-share picker requires one).
+          // The one big switch. When on, Randy passively hears the microphone
+          // and the computer's sound together and answers every technical
+          // question he overhears in the chat — no wake word. Always starts
+          // off; turning it on needs a click (the mic permission requires one).
           listenOn: false,
           voiceName: 'Randy',
           voicePersonality: DEFAULT_VOICE_PERSONALITY,
@@ -734,11 +745,6 @@
         recognition: null,        // shared SpeechRecognition instance
         wantRunning: false,       // should the recognizer be running?
         audioCtx: null,           // lazy AudioContext for the wake beep
-        activeSlot: null,         // slot handling a voice command (post wake-word)
-        awaitingCommand: false,   // wake word heard, waiting for the question
-        conversationMode: false,  // keep accepting commands without re-arming
-        wakeTimeoutId: null,      // 30s drop back to passive listening (first arm only)
-        convExitTimerId: null,    // auto-exit a voice conversation after a quiet spell
         permissionDenied: false,
         toastTimeoutId: null,
         toastMessage: '',
@@ -747,8 +753,7 @@
         interimSlot: null,
         interimAt: 0,             // when the interim transcript last changed
         lastTtsEndAt: 0,          // for the post-playback echo grace window
-        ttsPaused: false,         // recognition paused because TTS is playing
-        resumeRecognitionId: null,
+        ttsPaused: false,         // legacy guard flag; always false now (no TTS pause)
         recentTtsText: '',        // rolling buffer of spoken text for echo matching
         srRunning: false,         // recognizer actually running (onstart..onend)
         watchdogId: null,         // background-tab restart watchdog interval
@@ -766,7 +771,7 @@
         bufferTimerId: null,
         deferrals: 0,
         pending: false,           // classifier call in flight
-        busyDeferrals: 0,         // flush holds while a classify/answer is in flight
+        questionQueue: [],        // FIFO of questions overheard while Randy was busy
         context: [],              // recent utterances for the classifier
         lastSubmitted: '',
         lastSubmittedAt: 0,
@@ -800,7 +805,12 @@
       // without clobbering anyone who actually customized their prompt.
       const LEGACY_PROMPT_MARKERS = [
         "Recast Software's Application Workspace expert",
-        'ABSOLUTE RULE — NO EXCEPTIONS'
+        'ABSOLUTE RULE — NO EXCEPTIONS',
+        // Distinctive line from the persona default that shipped before the
+        // "Honesty About Capabilities" section was added. Returning users have
+        // that older default cached; matching it here refreshes them to the
+        // current RANDY_PERSONA so the honesty rules actually reach them.
+        'Your research process is invisible.'
       ];
 
       function loadSettings() {
@@ -991,7 +1001,7 @@
         if (slot.abortController) { try { slot.abortController.abort(); } catch {} slot.abortController = null; }
         teardownTtsQueue(0);
         if (slot.isSpeaking) stopSpeaking();
-        if (VOICE.conversationMode || VOICE.awaitingCommand) exitConversationMode();
+        abortActiveReply();   // cancel any in-flight reply and stop any audio
         slot.loading = false;
         const archived = archiveChatToHistory(slot);
         if (!archived) {
@@ -1345,36 +1355,11 @@
         return (matches / words.length) >= 0.7;
       }
 
-      // Pause recognition while TTS is playing ONLY during a back-and-forth
-      // voice conversation (turn-taking). In passive listening Randy keeps
-      // hearing the call; mic echo cancellation plus isLikelyEcho() text
-      // matching keep his own voice out.
-      function pauseRecognitionForTts() {
-        if (!VOICE.conversationMode && !VOICE.awaitingCommand) return;
-        VOICE.ttsPaused = true;
-        if (VOICE.resumeRecognitionId) {
-          clearTimeout(VOICE.resumeRecognitionId);
-          VOICE.resumeRecognitionId = null;
-        }
-        clearInterim();
-        if (VOICE.recognition) {
-          try { VOICE.recognition.abort(); } catch {}
-        }
-      }
-
-      function scheduleRecognitionResume() {
-        if (VOICE.resumeRecognitionId) clearTimeout(VOICE.resumeRecognitionId);
-        VOICE.resumeRecognitionId = setTimeout(() => {
-          VOICE.resumeRecognitionId = null;
-          VOICE.ttsPaused = false;
-          markTtsEnded();
-          if (VOICE.wantRunning && recognitionWanted()) {
-            // In passive mode the recognizer never stopped — start() throws
-            // InvalidStateError; the watchdog covers any other failure.
-            try { startRecognitionNow(); } catch {}
-          }
-        }, TTS_ECHO_GRACE_MS);
-      }
+      // The recognizer now stays live during TTS — there's no conversation-mode
+      // pause anymore. Randy keeps hearing the call while he reads an answer
+      // aloud; mic echo cancellation plus the isLikelyEcho() text guard keep
+      // his own voice from being picked up as a new question. markTtsEnded()
+      // is called wherever speech stops so the echo grace window still works.
 
       function initTtsQueue(idx, signal, msgIdx) {
         const slot = STATE.slots[idx];
@@ -1403,10 +1388,7 @@
         if (TTS_STATE.speakingSlot === idx) TTS_STATE.speakingSlot = null;
         slot.isSpeaking = false;
         VOICE.playingMsg = null;
-        if (wasActive) {
-          markTtsEnded();
-          scheduleRecognitionResume();
-        }
+        if (wasActive) markTtsEnded();
       }
 
       function enqueueTtsSentence(idx, text) {
@@ -1437,8 +1419,6 @@
             if (TTS_STATE.speakingSlot === idx) TTS_STATE.speakingSlot = null;
             VOICE.playingMsg = null;
             markTtsEnded();
-            scheduleRecognitionResume();
-            if (VOICE.conversationMode) scheduleConvAutoExit();
             render();
           }
         }
@@ -1460,7 +1440,6 @@
           u.pitch = 1.0;
           u.rate = 1.04;
           appendRecentTts(clean);
-          pauseRecognitionForTts();
           slot.isSpeaking = true;
           TTS_STATE.speakingSlot = idx;
           VOICE.playingMsg = { slot: idx, msg: q.msgIdx };
@@ -1496,32 +1475,22 @@
           STATE.slots[idx].isSpeaking = true;
           TTS_STATE.speakingSlot = idx;
           if (typeof msgIdx === 'number') VOICE.playingMsg = { slot: idx, msg: msgIdx };
-          pauseRecognitionForTts();
           render();
         };
         u.onend = () => {
           STATE.slots[idx].isSpeaking = false;
           if (TTS_STATE.speakingSlot === idx) TTS_STATE.speakingSlot = null;
-          if (!VOICE.conversationMode) {
-            VOICE.activeSlot = null;
-            VOICE.awaitingCommand = false;
-          } else {
-            scheduleConvAutoExit();
-          }
           VOICE.playingMsg = null;
           markTtsEnded();
-          scheduleRecognitionResume();
           render();
         };
         u.onerror = u.onend;
-        pauseRecognitionForTts();
         try { window.speechSynthesis.speak(u); }
         catch {
           STATE.slots[idx].isSpeaking = false;
           if (TTS_STATE.speakingSlot === idx) TTS_STATE.speakingSlot = null;
           VOICE.playingMsg = null;
           markTtsEnded();
-          scheduleRecognitionResume();
           render();
         }
       }
@@ -1535,7 +1504,6 @@
         TTS_STATE.speakingSlot = null;
         VOICE.playingMsg = null;
         markTtsEnded();
-        scheduleRecognitionResume();
         render();
       }
 
@@ -1597,7 +1565,6 @@
         r.onend = () => {
           VOICE.srRunning = false;
           VOICE.lastSrEventAt = Date.now();
-          // Intentionally paused for TTS — scheduleRecognitionResume restarts.
           if (VOICE.ttsPaused) return;
           if (!VOICE.wantRunning || !recognitionWanted()) return;
           // start() can throw InvalidStateError while the previous session is
@@ -1635,7 +1602,7 @@
       // it's presumed wedged. Chrome's cloud recognizer occasionally stops
       // delivering results without firing onend during long sessions; an
       // abort() + restart costs under a second and un-sticks it.
-      const SR_STALL_MS = 60000;
+      const SR_STALL_MS = 15000;
 
       // Background-tab insurance. Chrome throttles timers in hidden tabs
       // (e.g. while the user works beside the pop-out chat), so the onend
@@ -1694,12 +1661,7 @@
         if (VOICE.recognition) {
           try { VOICE.recognition.stop(); } catch {}
         }
-        if (VOICE.wakeTimeoutId) { clearTimeout(VOICE.wakeTimeoutId); VOICE.wakeTimeoutId = null; }
-        if (VOICE.resumeRecognitionId) { clearTimeout(VOICE.resumeRecognitionId); VOICE.resumeRecognitionId = null; }
         VOICE.ttsPaused = false;
-        VOICE.activeSlot = null;
-        VOICE.awaitingCommand = false;
-        VOICE.conversationMode = false;
         VOICE.interimText = '';
         VOICE.interimSlot = null;
         VOICE.recentTtsText = '';
@@ -1707,23 +1669,12 @@
       }
 
       /* ================================================================
-       * WAKE WORD + COMMAND ROUTING
+       * PASSIVE LISTENING TEARDOWN
        * ================================================================ */
 
-      function escapeRegex(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
-
-      function buildWakePattern(name) {
-        const n = escapeRegex(String(name).trim());
-        return new RegExp('\\b(?:hey|hi|ok|okay|yo)\\s+' + n + '\\b[\\s,.!?:;-]*', 'i');
-      }
-
-      const EXIT_CONVERSATION_RE = /^(stop|cancel|never mind|nevermind|that'?s all|exit|goodbye|good ?bye|end (?:conversation|chat)|quiet|shut up)\b/i;
-
-      function exitConversationMode() {
-        clearConvAutoExit();
-        if (VOICE.interimSlot !== null && STATE.slots[VOICE.interimSlot]) {
-          STATE.slots[VOICE.interimSlot].inputText = '';
-        }
+      // Abort any in-flight reply and stop any audio. Called by stopListening()
+      // and newChat() to cleanly cancel whatever Randy is doing right now.
+      function abortActiveReply() {
         STATE.slots.forEach((s, i) => {
           if (s.abortController) { try { s.abortController.abort(); } catch {} s.abortController = null; }
           teardownTtsQueue(i);
@@ -1732,170 +1683,19 @@
         });
         stopSpeaking();
         clearInterim();
-        if (VOICE.wakeTimeoutId) { clearTimeout(VOICE.wakeTimeoutId); VOICE.wakeTimeoutId = null; }
-        VOICE.activeSlot = null;
-        VOICE.awaitingCommand = false;
-        VOICE.conversationMode = false;
-        render();
       }
 
-      function cancelPendingUtterance() {
-        const idx = VOICE.interimSlot;
-        if (idx !== null && STATE.slots[idx]) {
-          STATE.slots[idx].inputText = '';
-        }
-        clearInterim();
-        render();
-      }
-
-      // Cancel an in-flight reply + TTS so a fresh utterance can take over.
-      function interruptCurrentReply(idx) {
-        const slot = STATE.slots[idx];
-        if (!slot) return;
-        if (slot.abortController) {
-          try { slot.abortController.abort(); } catch {}
-          slot.abortController = null;
-        }
-        teardownTtsQueue(idx);
-        const last = slot.messages[slot.messages.length - 1];
-        if (last && last.role === 'assistant' && !last.content) {
-          slot.messages.pop();
-        }
-        slot.loading = false;
-      }
-
-      // After Randy answers a spoken question, he keeps listening for a
-      // follow-up for a short window, then quietly goes back to passive
-      // listening — so a live call can't get swallowed as "commands".
-      function scheduleConvAutoExit() {
-        clearConvAutoExit();
-        VOICE.convExitTimerId = setTimeout(() => {
-          VOICE.convExitTimerId = null;
-          if (!VOICE.conversationMode && !VOICE.awaitingCommand) return;
-          VOICE.conversationMode = false;
-          VOICE.awaitingCommand = false;
-          VOICE.activeSlot = null;
-          STATE.slots.forEach(s => { s.isListening = false; });
-          render();
-        }, ASSIST.CONV_EXIT_MS);
-      }
-      function clearConvAutoExit() {
-        if (VOICE.convExitTimerId) { clearTimeout(VOICE.convExitTimerId); VOICE.convExitTimerId = null; }
-      }
-
+      // One passive path. Once listening is on, every finalized utterance goes
+      // straight to the technical-question pipeline — no wake word, no
+      // conversation mode, no turn-taking. The only filter is dropping
+      // re-transcriptions of Randy's own read-aloud voice. This keeps working
+      // even while Randy is talking, because the call on the computer keeps
+      // going (mic echo cancellation + isLikelyEcho() guard his own voice out).
       function handleVoiceTranscript(raw) {
         const text = String(raw).trim();
         if (!text) return;
-
         // Drop re-transcriptions of Randy's own voice.
         if (isLikelyEcho(text)) return;
-
-        const ttsBusy = ttsEchoActive();
-
-        // Active conversation ("Hey Randy" was said): each utterance is a
-        // question for Randy. Turn-taking — ignored while Randy is talking.
-        if (VOICE.conversationMode && VOICE.activeSlot !== null) {
-          if (ttsBusy) return;
-          const slot = STATE.slots[VOICE.activeSlot];
-          if (!slot || !slot.listenOn) {
-            exitConversationMode();
-            return;
-          }
-          const wakeP = buildWakePattern(slot.voiceName || slot.label);
-          const cleaned = text.replace(wakeP, '').trim();
-          if (EXIT_CONVERSATION_RE.test(cleaned)) {
-            exitConversationMode();
-            return;
-          }
-          if (cleaned.length < 2) return;
-          clearConvAutoExit();
-          if (slot.loading) interruptCurrentReply(VOICE.activeSlot);
-          if (VOICE.wakeTimeoutId) { clearTimeout(VOICE.wakeTimeoutId); VOICE.wakeTimeoutId = null; }
-          VOICE.awaitingCommand = false;
-          const idx = VOICE.activeSlot;
-          STATE.slots[idx].isListening = false;
-          STATE.slots[idx].inputText = cleaned;
-          sendMessage(idx, { viaVoice: true });
-          return;
-        }
-
-        // Armed (wake word heard, waiting for the question).
-        if (VOICE.activeSlot !== null && VOICE.awaitingCommand) {
-          if (ttsBusy) return;
-          const slot = STATE.slots[VOICE.activeSlot];
-          if (!slot || !slot.listenOn) {
-            if (VOICE.wakeTimeoutId) { clearTimeout(VOICE.wakeTimeoutId); VOICE.wakeTimeoutId = null; }
-            VOICE.activeSlot = null;
-            VOICE.awaitingCommand = false;
-            return;
-          }
-          const p = buildWakePattern(slot.voiceName || slot.label);
-          const cleaned = text.replace(p, '').trim();
-          if (EXIT_CONVERSATION_RE.test(cleaned)) {
-            exitConversationMode();
-            return;
-          }
-          if (cleaned.length < 2) return;
-          clearConvAutoExit();
-          if (slot.loading) interruptCurrentReply(VOICE.activeSlot);
-          if (VOICE.wakeTimeoutId) { clearTimeout(VOICE.wakeTimeoutId); VOICE.wakeTimeoutId = null; }
-          VOICE.awaitingCommand = false;
-          VOICE.conversationMode = true;
-          const idx = VOICE.activeSlot;
-          STATE.slots[idx].isListening = false;
-          STATE.slots[idx].inputText = cleaned;
-          sendMessage(idx, { viaVoice: true });
-          return;
-        }
-
-        // Wake word scan (skipped while Randy is talking).
-        if (!ttsBusy) {
-          for (let i = 0; i < STATE.slots.length; i++) {
-            const slot = STATE.slots[i];
-            if (!slot.listenOn) continue;
-            const pattern = buildWakePattern(slot.voiceName || slot.label);
-            const match = text.match(pattern);
-            if (!match) continue;
-
-            if (slot.loading) interruptCurrentReply(i);
-            playBeep();
-
-            // Wake word + question in one breath.
-            const after = text.slice(match.index + match[0].length).trim();
-            if (after.length >= 2) {
-              VOICE.activeSlot = i;
-              VOICE.awaitingCommand = false;
-              VOICE.conversationMode = true;
-              slot.isListening = false;
-              slot.inputText = after;
-              sendMessage(i, { viaVoice: true });
-              return;
-            }
-
-            // Arm and wait for the question. 30s fallback on the first arm only.
-            VOICE.activeSlot = i;
-            VOICE.awaitingCommand = true;
-            slot.isListening = true;
-            if (VOICE.wakeTimeoutId) clearTimeout(VOICE.wakeTimeoutId);
-            const armedSlotIdx = i;
-            VOICE.wakeTimeoutId = setTimeout(() => {
-              VOICE.wakeTimeoutId = null;
-              if (VOICE.conversationMode) return;
-              if (VOICE.activeSlot !== armedSlotIdx) return;
-              VOICE.activeSlot = null;
-              VOICE.awaitingCommand = false;
-              const s = STATE.slots[armedSlotIdx];
-              if (s) s.isListening = false;
-              render();
-            }, 30000);
-            render();
-            return;
-          }
-        }
-
-        // Everything else: passive listening for technical questions — this
-        // keeps working even while Randy is talking, because the call on the
-        // computer keeps going.
         if (listeningOn()) assistIngest(text);
       }
 
@@ -1904,7 +1704,6 @@
        * ================================================================ */
 
       function interimTargetSlot() {
-        if (VOICE.activeSlot !== null && VOICE.awaitingCommand) return VOICE.activeSlot;
         return listeningOn() ? 0 : null;
       }
 
@@ -1925,7 +1724,6 @@
         if (trimmed.length < 2) { clearInterim(); return; }
         // Don't flash Randy's own voice back onscreen.
         if (isLikelyEcho(trimmed)) { clearInterim(); return; }
-        if ((VOICE.conversationMode || VOICE.awaitingCommand) && ttsEchoActive()) { clearInterim(); return; }
         const target = interimTargetSlot();
         if (target === null) { clearInterim(); return; }
 
@@ -1995,7 +1793,7 @@
         // keep-alive that covers the gaps between recognition sessions.)
         if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
           try {
-            VOICE.micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            VOICE.micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
             VOICE.micStream.getTracks().forEach(t => {
               t.onended = () => { VOICE.micStream = null; };
             });
@@ -2030,9 +1828,8 @@
           VOICE.micStream = null;
         }
         clearAssistBuffer();
-        clearConvAutoExit();
         TECH.pending = false;
-        exitConversationMode();   // aborts in-flight replies and any TTS
+        abortActiveReply();   // aborts in-flight replies and any TTS
         stopRecognition();
         if (!silent && wasOn) showToast('Randy stopped listening');
         render();
@@ -2043,7 +1840,7 @@
       function clearAssistBuffer() {
         TECH.buffer = '';
         TECH.deferrals = 0;
-        TECH.busyDeferrals = 0;
+        TECH.questionQueue = [];
         if (TECH.bufferTimerId) { clearTimeout(TECH.bufferTimerId); TECH.bufferTimerId = null; }
       }
 
@@ -2078,29 +1875,57 @@
           return;
         }
 
-        // Busy with a previous classify/answer — hold the question until
-        // Randy frees up. The budget is generous on purpose: dropping here
-        // means a question asked during an answer silently vanishes, which
-        // reads as "Randy didn't hear me". MAX_BUFFER_CHARS keeps the held
-        // buffer from growing unboundedly while we wait.
-        if (TECH.pending || slot.loading) {
-          if (TECH.busyDeferrals < ASSIST.BUSY_MAX_DEFERRALS) {
-            TECH.busyDeferrals++;
-            TECH.bufferTimerId = setTimeout(flushAssistBuffer, 1500);
-          } else {
-            clearAssistBuffer();
-          }
-          return;
-        }
+        // Reset the join buffer now so any new speech accumulates separately,
+        // whether this candidate is answered immediately or queued.
         TECH.buffer = '';
         TECH.deferrals = 0;
-        TECH.busyDeferrals = 0;
         if (!candidate) return;
 
+        // Busy with a previous classify/answer — queue the finalized question
+        // so it's answered in turn instead of being merged into the next
+        // utterance or silently dropped. The queue drains when Randy frees up.
+        if (TECH.pending || slot.loading) {
+          enqueueQuestion(candidate);
+          return;
+        }
+
+        processAssistCandidate(candidate);
+      }
+
+      // Push an overheard question onto the FIFO queue, dropping the oldest
+      // (with a visible notice) if the queue is over its cap.
+      function enqueueQuestion(candidate) {
+        TECH.questionQueue.push(candidate);
+        if (TECH.questionQueue.length > ASSIST.MAX_QUEUE) {
+          const dropped = TECH.questionQueue.shift();
+          showToast('Randy is backed up — skipped: "' + truncate(dropped, 40) + '"');
+        }
+        renderAssistStatus();
+      }
+
+      // Randy just freed up: answer the next queued question, if any. Each
+      // dequeued item runs through the same processing path as a fresh one
+      // (dedupe → fast-path/classifier → runAssistAnswer).
+      function drainQuestionQueue() {
+        if (TECH.pending) return;
+        const slot = STATE.slots[0];
+        if (slot.loading) return;
+        if (!slot.listenOn) { TECH.questionQueue = []; return; }
+        if (!TECH.questionQueue.length) return;
+        const next = TECH.questionQueue.shift();
+        renderAssistStatus();
+        processAssistCandidate(next);
+      }
+
+      // Classify (or fast-path) a finalized candidate and answer it when it
+      // clears the gate. Non-answering paths drain the next queued question so
+      // a skip never strands the rest of the queue.
+      function processAssistCandidate(candidate) {
         const words = candidate.split(/\s+/).filter(Boolean);
         if (candidate.length < ASSIST.MIN_CHARS || words.length < ASSIST.MIN_WORDS) {
           recordAssistDecision(candidate, false, 0, 'too short');
           renderAssistStatus();
+          drainQuestionQueue();
           return;
         }
         // Repair common ASR garbles of product names ("in tune" → "Intune")
@@ -2112,6 +1937,7 @@
 
         const now = Date.now();
         if (TECH.lastSubmitted && now - TECH.lastSubmittedAt < ASSIST.DEDUPE_MS && fuzzyEqual(corrected, TECH.lastSubmitted)) {
+          drainQuestionQueue();
           return;
         }
 
@@ -2135,13 +1961,17 @@
         classifyUtterance(corrected, TECH.context.slice(0, -1))
           .then(decision => {
             TECH.pending = false;
+            const conf = typeof decision.confidence === 'number' ? decision.confidence : 0;
             const accepted =
               decision.needs_answer === true &&
               decision.in_scope !== false &&
-              typeof decision.confidence === 'number' &&
-              decision.confidence >= ASSIST.CONF_THRESHOLD;
-            recordAssistDecision(corrected, accepted, decision.confidence || 0, decision.topic || '');
-            if (!accepted) { renderAssistStatus(); return; }
+              conf >= ASSIST.CONF_THRESHOLD;
+            // Near-miss: a flagged need that landed just under the bar. Logged
+            // so the live strip can offer a one-tap "answer this?" chip.
+            const nearMiss = !accepted && decision.needs_answer === true &&
+              decision.in_scope !== false && conf >= 0.4 && conf < ASSIST.CONF_THRESHOLD;
+            recordAssistDecision(corrected, accepted, conf, decision.topic || '', nearMiss);
+            if (!accepted) { renderAssistStatus(); drainQuestionQueue(); return; }
             // Answer the classifier's clean rewrite when it produced one: it
             // turns a statement-form need into an explicit question and
             // resolves garble/follow-up references. Fall back to the corrected
@@ -2166,6 +1996,7 @@
             } else {
               recordAssistDecision(corrected, false, 0, 'check failed');
               renderAssistStatus();
+              drainQuestionQueue();
             }
           });
       }
@@ -2175,9 +2006,9 @@
         while (TECH.context.length > ASSIST.CONTEXT_LEN) TECH.context.shift();
       }
 
-      function recordAssistDecision(text, accepted, confidence, topic) {
+      function recordAssistDecision(text, accepted, confidence, topic, nearMiss) {
         TECH.heard++;
-        TECH.decisions.push({ text, accepted: !!accepted, confidence: Number(confidence) || 0, topic: topic || '', ts: Date.now() });
+        TECH.decisions.push({ text, accepted: !!accepted, confidence: Number(confidence) || 0, topic: topic || '', nearMiss: !!nearMiss, ts: Date.now() });
         while (TECH.decisions.length > ASSIST.DECISIONS_KEEP) TECH.decisions.shift();
       }
 
@@ -2301,9 +2132,9 @@
           .map(m => ({ role: m.role, content: m.content }));
       }
 
-      /* ---------- conversational sends (typed + wake-word voice) ---------- */
+      /* ---------- conversational sends (typed input) ---------- */
 
-      async function sendMessage(idx, { viaVoice = false } = {}) {
+      async function sendMessage(idx) {
         const slot = STATE.slots[idx];
         // Claim the slot synchronously so near-simultaneous callers (voice
         // finalization + Enter key) can't double-send.
@@ -2321,8 +2152,6 @@
         slot.messages.push({ role: 'assistant', content: '' });
         const assistantMsgIdx = slot.messages.length - 1;
 
-        if (viaVoice) initTtsQueue(idx, controller.signal, assistantMsgIdx);
-
         // If the pop-out is sitting collapsed, a new question should bring
         // it back so the reply is visible.
         pipAutoExpand();
@@ -2330,37 +2159,33 @@
         scrollChat();
 
         try {
-          const systemPrompt = viaVoice
-            ? slot.prompt + '\n\n' + CHAT_STYLE + '\n\n# Voice Delivery\n' + (slot.voicePersonality || DEFAULT_VOICE_PERSONALITY)
-            : slot.prompt + '\n\n' + CHAT_STYLE;
-
-          const needsSearch = !viaVoice || WEB_SEARCH_HINT_RE.test(text);
+          const systemPrompt = slot.prompt + '\n\n' + CHAT_STYLE;
 
           // The empty assistant placeholder is already excluded by the
           // content filter inside conversationPayloadMessages.
           const sessionIdAtSend = SESSION_ID;
           const body = {
-            model: viaVoice ? MODELS.voice : MODELS.chat,
-            max_tokens: viaVoice ? 300 : 1500,
+            model: MODELS.chat,
+            max_tokens: 1500,
             system: systemBlocks(systemPrompt),
             messages: conversationPayloadMessages(slot, 20),
             // Skip the proxy's synchronous sheet append; saved from the
             // client below, off the answer's critical path.
             save: false
           };
-          if (needsSearch) {
-            // Strictly source only from the approved doc URLs. Without this,
-            // chat/voice web_search ran against the open web and could surface
-            // facts from unvetted sites — the cause of inaccurate answers.
-            // Mirror the technical-assist path: restrict to the allow-list, and
-            // fall back to the default research domains so a wiped Settings box
-            // can never silently re-open the whole web.
+          // Strictly source only from the approved doc URLs. Without this,
+          // chat web_search ran against the open web and could surface facts
+          // from unvetted sites — the cause of inaccurate answers. Mirror the
+          // technical-assist path: restrict to the allow-list, and fall back to
+          // the default research domains so a wiped Settings box can never
+          // silently re-open the whole web.
+          {
             const domains = (slot.allowedDomains || []).filter(Boolean);
             const allowed = domains.length ? domains : DEFAULT_RESEARCH_DOMAINS.slice();
             body.tools = [{
               type: SEARCH_TOOL,
               name: 'web_search',
-              max_uses: viaVoice ? 2 : 3,
+              max_uses: 3,
               allowed_domains: allowed
             }];
           }
@@ -2372,17 +2197,6 @@
             slot.messages[assistantMsgIdx].sources = data.sources.slice(0, 6);
           }
           notePipAnswerArrived();
-
-          if (viaVoice && slot.ttsQueue) {
-            const sentenceRe = /[^.!?]+[.!?]+(?:\s+|$)|[^.!?]+$/g;
-            let m;
-            while ((m = sentenceRe.exec(reply)) !== null) {
-              const sent = m[0].trim();
-              if (sent.length >= 2) enqueueTtsSentence(idx, sent);
-            }
-            slot.ttsQueue.done = true;
-            processTtsQueue(idx);
-          }
 
           // Background save (the proxy only saved non-empty replies; mirror that).
           postSaveToSheet({
@@ -2403,7 +2217,6 @@
             const errMsg = '⚠️ ' + (err.message || 'Connection failed. Check your internet connection and try again.');
             if (placeholder && placeholder.role === 'assistant') placeholder.content = errMsg;
             else slot.messages.push({ role: 'assistant', content: errMsg });
-            if (viaVoice) teardownTtsQueue(idx);
             notePipAnswerArrived();
           }
         }
@@ -2412,9 +2225,6 @@
           slot.loading = false;
           slot.abortController = null;
         }
-        // Keep the follow-up window open for a bit, then drop back to
-        // passive listening automatically.
-        if (viaVoice && (VOICE.conversationMode || VOICE.awaitingCommand)) scheduleConvAutoExit();
         render();
         scrollChat();
       }
@@ -2538,6 +2348,8 @@
         }
         render();
         scrollChat();
+        // Randy is free again — answer the next overheard question, if any.
+        drainQuestionQueue();
       }
 
       function scrollChat() {
@@ -2618,8 +2430,6 @@
         const isSpeaking = !!slot.isSpeaking;
         const loading = !!slot.loading;
         const sr = VOICE.srSupported;
-        const inConversation = on && VOICE.activeSlot === idx && !loading && !isSpeaking &&
-          (VOICE.conversationMode || VOICE.awaitingCommand);
 
         if (!sr) return {
           orbClass: 'off', orbInner: '<i data-lucide="mic-off" class="w-8 h-8"></i>',
@@ -2635,15 +2445,9 @@
         };
         if (loading) return {
           orbClass: 'thinking', orbInner: '<span class="orb-dots"><span class="typing-dot"></span><span class="typing-dot"></span><span class="typing-dot"></span></span>',
-          action: 'exit-conversation', title: 'Click to cancel', disabled: false, live: false,
+          action: 'cancel-reply', title: 'Click to cancel', disabled: false, live: false,
           statusText: 'Thinking…', statusClass: '',
           pill: 'think', pillLabel: 'Thinking…', pillIcon: '<i data-lucide="loader-circle" class="w-4 h-4 vp-spin"></i>'
-        };
-        if (inConversation) return {
-          orbClass: 'listening', orbInner: '<i data-lucide="mic" class="w-8 h-8"></i>',
-          action: 'exit-conversation', title: 'Randy is listening to you — click to stop', disabled: false, live: true,
-          statusText: 'Listening to you — ask away', statusClass: 'listening',
-          pill: 'live', pillLabel: 'Listening to you', pillIcon: '<span class="vp-dot"></span>'
         };
         if (on) return {
           orbClass: 'monitor', orbInner: '<i data-lucide="mic" class="w-8 h-8"></i>',
@@ -2806,27 +2610,40 @@
       }
 
       function renderLiveStrip(slot, idx) {
-        const inConvo = VOICE.awaitingCommand || VOICE.conversationMode;
         const last = TECH.decisions[TECH.decisions.length - 1];
-        const stats = TECH.pending ? 'Checking a question…' : TECH.answered + ' answered · ' + TECH.heard + ' heard';
+        const queued = TECH.questionQueue.length;
+        // Near-miss: the classifier flagged a possible need but landed just
+        // under the answer threshold. Surface it as a tappable "answer this?"
+        // chip so the SE can force the answer with one tap.
+        const nearMiss = (!last || !last.accepted)
+          ? TECH.decisions.slice().reverse().find(d => !d.accepted && d.nearMiss)
+          : null;
+        const baseStats = TECH.answered + ' answered · ' + TECH.heard + ' heard';
+        const stats = TECH.pending
+          ? 'Checking a question…'
+          : (queued ? queued + ' queued · ' + baseStats : baseStats);
         return `
           <div class="live-strip">
             <span class="sound-wave ls-wave" aria-hidden="true"><span class="sound-wave-bar"></span><span class="sound-wave-bar"></span><span class="sound-wave-bar"></span></span>
             <div class="ls-body">
               <div class="ls-top">
-                <span class="ls-title">${inConvo ? 'Listening to you' : 'Listening for tech questions'}</span>
+                <span class="ls-title">Listening for tech questions</span>
                 <span class="ls-stats ${TECH.pending ? 'busy' : ''}">${escHtml(stats)}</span>
               </div>
               <div class="ls-live ac-live ${VOICE.interimText ? 'hearing' : ''}" id="live-transcript">
                 <span class="ls-live-text"><span id="live-transcript-text">${escHtml(VOICE.interimText || '')}</span><span class="interim-caret">▊</span></span>
-                ${inConvo ? `<button class="ac-cancel" title="Cancel — don't send this" data-action="cancel-pending" data-idx="0">Cancel</button>` : ''}
               </div>
-              ${last ? `
+              ${nearMiss ? `
+                <button class="ls-nearmiss" data-action="force-answer" data-text="${escAttr(nearMiss.text)}" title="Randy skipped this — tap to answer it anyway">
+                  <i data-lucide="help-circle" class="w-3 h-3"></i>
+                  <span>${escHtml(truncate(nearMiss.text, 70))} · answer this?</span>
+                </button>
+              ` : (last ? `
                 <div class="ls-last">
                   <i data-lucide="${last.accepted ? 'check' : 'minus'}" class="w-3 h-3 ${last.accepted ? 'ok' : 'skip'}"></i>
                   <span>${escHtml(truncate(last.text, 90))} · ${Math.round((last.confidence || 0) * 100)}%</span>
                 </div>
-              ` : ''}
+              ` : '')}
             </div>
             <div class="ls-controls">
               <label class="ls-speak" title="${slot.speakAnswers ? 'Randy reads each answer out loud' : 'Answers show in the chat only'}">
@@ -3019,12 +2836,6 @@
                 <input type="text" id="setting-label" value="${escAttr(slot.label)}" placeholder="Assistant name..." />
               </div>
 
-              <div>
-                <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1.5">Wake Word Name</label>
-                <input type="text" id="setting-voicename" value="${escAttr(slot.voiceName || slot.label)}" placeholder="e.g. Randy" ${VOICE.srSupported?'':'disabled'} />
-                <p class="text-[11px] text-slate-400 mt-1">Say "Hey ${escHtml(slot.voiceName || slot.label)}", "OK ${escHtml(slot.voiceName || slot.label)}", or "Yo ${escHtml(slot.voiceName || slot.label)}".</p>
-              </div>
-
               <div class="full">
                 <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1.5">
                   <i data-lucide="table" class="w-3 h-3 inline mr-1"></i>Answer Service
@@ -3061,12 +2872,6 @@
                 <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">
                   <i data-lucide="mic" class="w-3 h-3 inline mr-1"></i>Voice${VOICE.srSupported ? '' : ' — needs Chrome or Edge'}
                 </label>
-
-                <div class="mb-3">
-                  <label class="block text-[11px] font-semibold text-slate-500 uppercase tracking-wide mb-1">Voice Personality Override</label>
-                  <textarea id="setting-voicepersonality" rows="4" placeholder="${escAttr(DEFAULT_VOICE_PERSONALITY)}" ${VOICE.srSupported?'':'disabled'}>${escHtml(slot.voicePersonality || DEFAULT_VOICE_PERSONALITY)}</textarea>
-                  <p class="text-[11px] text-slate-400 mt-1">How Randy talks when he answers out loud. Typed answers don't use this.</p>
-                </div>
 
                 ${VOICE.ttsSupported ? `
                   <div>
@@ -3615,7 +3420,6 @@
       // so typed-only use of the pop-out is unaffected.
       function pipLiveModel(slot) {
         if (!slot || !slot.listenOn) return { show: false };
-        const inConvo = VOICE.awaitingCommand || VOICE.conversationMode;
         // Answering — the web search runs here. An overheard question is a
         // technical-assist answer ("Researching"); a spoken one is a chat
         // reply ("Thinking").
@@ -3631,10 +3435,10 @@
         if (TECH.pending) return { show: true, busy: true, label: 'Processing question…', text: '' };
         // Live transcription as it streams in.
         if (VOICE.interimText) {
-          return { show: true, busy: false, label: inConvo ? 'Listening to you' : 'Hearing…', text: VOICE.interimText };
+          return { show: true, busy: false, label: 'Hearing…', text: VOICE.interimText };
         }
         // Listening, nothing heard yet.
-        return { show: true, busy: false, label: inConvo ? 'Listening to you' : 'Listening for tech questions', text: '' };
+        return { show: true, busy: false, label: 'Listening for tech questions', text: '' };
       }
 
       // Push the live-band state into the pop-out document. Called from
@@ -3668,11 +3472,8 @@
       // renderCard so the pop-out reflects the main tab's voice state.
       function pipStatus(slot) {
         const on = !!slot.listenOn;
-        const inConvo = on && VOICE.activeSlot === PIP.slotIdx && !slot.loading && !slot.isSpeaking &&
-          (VOICE.conversationMode || VOICE.awaitingCommand);
         if (slot.isSpeaking) return { text: 'Talking…', live: true };
         if (slot.loading) return { text: 'Thinking…', live: on };
-        if (inConvo) return { text: 'Listening to you…', live: true };
         if (on) return { text: 'Listening for tech questions', live: true };
         return { text: 'Online', live: false };
       }
@@ -3902,8 +3703,18 @@
               break;
             }
             case 'stop-speaking': stopSpeaking(); break;
-            case 'exit-conversation': exitConversationMode(); break;
-            case 'cancel-pending': cancelPendingUtterance(); break;
+            case 'cancel-reply': abortActiveReply(); render(); break;
+            case 'force-answer': {
+              const q = act.dataset.text || '';
+              if (q.trim()) {
+                // Clear the near-miss flag so the chip doesn't linger after tap.
+                TECH.decisions.forEach(d => { if (d.text === q) d.nearMiss = false; });
+                TECH.lastSubmitted = q;
+                TECH.lastSubmittedAt = Date.now();
+                runAssistAnswer(0, q);
+              }
+              break;
+            }
             case 'tts-speak': {
               const si = parseInt(act.dataset.slot, 10);
               const mi = parseInt(act.dataset.msg, 10);
@@ -4094,13 +3905,12 @@
         const s = STATE.slots[i];
         const l = document.getElementById('setting-label');
         const p = document.getElementById('setting-prompt');
-        const vn = document.getElementById('setting-voicename');
-        const vp = document.getElementById('setting-voicepersonality');
         const dm = document.getElementById('setting-domains');
         if (l) s.label = l.value.trim() || s.label;
         if (p) s.prompt = p.value.trim() || s.prompt;
-        if (vn) s.voiceName = vn.value.trim() || s.label;
-        if (vp) s.voicePersonality = vp.value.trim() || DEFAULT_VOICE_PERSONALITY;
+        // The wake-word field is gone; keep voiceName (the hero/display name)
+        // in sync with the display name so renaming Randy still works.
+        s.voiceName = s.label;
         if (dm) {
           s.allowedDomains = dm.value.split('\n').map(x => x.trim()).filter(Boolean);
         }
