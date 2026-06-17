@@ -221,7 +221,7 @@
       @keyframes interim-blink { 50% { opacity: 0; } }
 
       /* ===== Message area ===== */
-      .msg-scroll { flex: 6 1 0; min-height: 0; overflow-y: auto; background: var(--n25); }
+      .msg-scroll { flex: 6 1 0; min-height: 0; min-width: 0; overflow-y: auto; background: var(--n25); }
       .msg-col { max-width: 768px; margin: 0 auto; padding: 28px 24px 16px; display: flex; flex-direction: column; gap: 16px; }
       .msg-row { display: flex; gap: 10px; align-items: flex-start; justify-content: flex-start; }
       .msg-row.me { justify-content: flex-end; }
@@ -397,8 +397,10 @@
        * VOICE CONSOLE — the main stage: mic orb + live voice-to-text +
        * what Randy is doing. Pinned above the composer, ~a third of the view.
        * ================================================================ */
-      /* Top stage = mic console + composer, 40% of the post-header height. */
-      .top-stage { flex: 4 1 0; min-height: 0; display: flex; flex-direction: column; background: #fff; border-bottom: 1px solid var(--divider); box-shadow: 0 6px 22px rgba(22,31,91,0.05); }
+      /* Split row = mic console (left) + results (right), side by side. */
+      .split-row { flex: 1; min-height: 0; display: flex; flex-direction: row; }
+      /* Left column: mic console + composer, 40% of the row width. */
+      .top-stage { flex: 4 1 0; min-width: 0; min-height: 0; display: flex; flex-direction: column; background: #fff; border-right: 1px solid var(--divider); box-shadow: 6px 0 22px rgba(22,31,91,0.05); }
       .console { flex: 1; min-height: 0; overflow-y: auto; background: #fff; padding: 22px 24px; display: flex; align-items: center; }
       .console-inner { max-width: 880px; width: 100%; margin: 0 auto; display: flex; align-items: center; gap: 34px; }
 
@@ -434,6 +436,9 @@
 
       /* ===== Responsive ===== */
       @media (max-width: 1023px) {
+        /* Narrow screens: stack the split back to top (mic) / bottom (results). */
+        .split-row { flex-direction: column; }
+        .top-stage { border-right: none; border-bottom: 1px solid var(--divider); box-shadow: 0 6px 22px rgba(22,31,91,0.05); }
         .console { padding: 16px 14px; }
         .console-inner { gap: 18px; }
         .console-orb .orb-wrap { width: 96px; height: 96px; }
@@ -3079,7 +3084,7 @@
           if (el) el.scrollTop = el.scrollHeight;
           for (let i = 0; i < STATE.slots.length; i++) {
             const h = document.getElementById('home-scroll-' + i);
-            if (h) h.scrollTop = h.scrollHeight;
+            if (h) h.scrollTop = 0;
           }
         }, 50);
       }
@@ -3119,7 +3124,7 @@
         for (const id in state) {
           const el = document.getElementById(id);
           if (!el) continue;
-          el.scrollTop = state[id].atBottom
+          el.scrollTop = (state[id].atBottom && id !== 'home-scroll-0')
             ? el.scrollHeight
             : Math.min(state[id].top, el.scrollHeight);
         }
@@ -3463,29 +3468,31 @@
         const hasMsgs = slot.messages.length > 0;
         return `
           ${renderChatHeader(slot, idx, vm)}
-          <div class="top-stage">
-            ${renderConsole(slot, idx, vm)}
-            <div class="composer-zone">
-              <div class="composer">
-                <textarea id="home-input-${idx}" class="composer-input" rows="1" placeholder="Message ${escAttr(slot.label)}…" ${slot.loading ? 'disabled' : ''}>${escHtml(slot.inputText || '')}</textarea>
-                <button class="comp-send" data-action="send-home" data-idx="${idx}" title="Send message" aria-label="Send message" ${(slot.loading || !(slot.inputText || '').trim()) ? 'disabled' : ''}>
-                  <i data-lucide="arrow-up" class="w-5 h-5"></i>
-                </button>
+          <div class="split-row">
+            <div class="top-stage">
+              ${renderConsole(slot, idx, vm)}
+              <div class="composer-zone">
+                <div class="composer">
+                  <textarea id="home-input-${idx}" class="composer-input" rows="1" placeholder="Message ${escAttr(slot.label)}…" ${slot.loading ? 'disabled' : ''}>${escHtml(slot.inputText || '')}</textarea>
+                  <button class="comp-send" data-action="send-home" data-idx="${idx}" title="Send message" aria-label="Send message" ${(slot.loading || !(slot.inputText || '').trim()) ? 'disabled' : ''}>
+                    <i data-lucide="arrow-up" class="w-5 h-5"></i>
+                  </button>
+                </div>
               </div>
             </div>
-          </div>
-          <div id="home-scroll-${idx}" class="msg-scroll">
-            <div class="msg-col">
-              ${hasMsgs ? slot.messages.map((m, mi) => `
-                <div class="msg-row ${m.role === 'user' ? 'me' : ''}">
-                  ${m.role === 'user' ? renderUserMessage(m) : renderBotMessage(slot, m, mi, idx)}
-                </div>
-              `).join('') + (slot.loading ? `
-                <div class="msg-row">
-                  <div class="msg-av">${escHtml(slot.label.charAt(0))}</div>
-                  <div class="chat-bubble chat-bot typing"><span class="typing-dot"></span><span class="typing-dot"></span><span class="typing-dot"></span></div>
-                </div>
-              ` : '') : renderHomeEmpty(slot)}
+            <div id="home-scroll-${idx}" class="msg-scroll">
+              <div class="msg-col">
+                ${hasMsgs ? slot.messages.map((m, mi) => `
+                  <div class="msg-row ${m.role === 'user' ? 'me' : ''}">
+                    ${m.role === 'user' ? renderUserMessage(m) : renderBotMessage(slot, m, mi, idx)}
+                  </div>
+                `).join('') + (slot.loading ? `
+                  <div class="msg-row">
+                    <div class="msg-av">${escHtml(slot.label.charAt(0))}</div>
+                    <div class="chat-bubble chat-bot typing"><span class="typing-dot"></span><span class="typing-dot"></span><span class="typing-dot"></span></div>
+                  </div>
+                ` : '') : renderHomeEmpty(slot)}
+              </div>
             </div>
           </div>`;
       }
