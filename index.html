@@ -758,13 +758,19 @@
         srRunning: false,         // recognizer actually running (onstart..onend)
         watchdogId: null,         // background-tab restart watchdog interval
         lastSrEventAt: 0,         // last recognizer activity (wedge detection)
-        micStream: null           // held open while listening — see startListening()
+        micStream: null           // held open (echo cancellation OFF) so the
+                                  // mic hears the computer's speakers — see
+                                  // startListening()
       };
 
       // Listening runtime state. Randy listens through the microphone only —
-      // the mic naturally hears the user's voice AND the call playing on the
-      // speakers. (Browsers never allow capturing screen/tab audio without a
-      // picker dialog, so mic listening is what makes one-tap possible.)
+      // the mic hears the user's voice AND the call playing on the speakers.
+      // That speaker pickup only survives with the mic's echo cancellation /
+      // noise suppression / auto-gain disabled (see startListening), since
+      // those processors otherwise strip the computer sound. (Browsers never
+      // allow capturing screen/tab audio without a picker dialog, and the Web
+      // Speech recognizer can't be pointed at a non-default stream anyway, so
+      // mic listening is what makes one-tap, all-audio capture possible.)
       const TECH = {
         lastErrorToastAt: 0,      // throttle pipeline-failure toasts
         buffer: '',               // join buffer for ASR fragments
@@ -1508,7 +1514,9 @@
       }
 
       /* ================================================================
-       * SPEECH RECOGNITION — one engine, two sources (mic | desktop track)
+       * SPEECH RECOGNITION — one engine, default microphone only
+       * (the recognizer can't accept a custom stream; computer/desktop
+       *  sound reaches it acoustically via the un-processed mic capture)
        * ================================================================ */
 
       function recognitionWanted() { return listeningOn(); }
@@ -1640,8 +1648,8 @@
         }
       });
 
-      // Restart the recognizer so a source change (mic ↔ desktop track) takes
-      // effect. abort() triggers onend, which restarts with the new source.
+      // Force a clean recognizer restart. abort() triggers onend, which
+      // restarts a fresh recognition session.
       function restartRecognition() {
         VOICE.wantRunning = true;
         const r = ensureRecognition();
@@ -1789,11 +1797,34 @@
         // an active capture exempts the tab from Chrome's intensive timer
         // throttling, which is what keeps the restart watchdog alive while
         // the user works beside the docked pop-out with this tab hidden.
-        // (The recognizer captures on its own; this stream is the cheap
-        // keep-alive that covers the gaps between recognition sessions.)
+        //
+        // CRITICAL — audio processing is turned OFF on purpose. Randy is
+        // supposed to transcribe BOTH the user's voice and the call playing
+        // on the computer's speakers, but the only audio source the Web
+        // Speech recognizer can use is the system default microphone, so the
+        // "computer sound" reaches it acoustically: the mic physically hears
+        // the speakers. Chrome opens the default device once and shares that
+        // capture session with the recognizer, so the constraints we request
+        // here govern what the recognizer hears too.
+        //
+        //   echoCancellation — acoustic echo cancellation exists specifically
+        //     to subtract your own speaker output from the mic. That output
+        //     IS the call/desktop audio we want, so leaving it on deletes the
+        //     very thing Randy is meant to pick up. Its aggressiveness varies
+        //     by machine/OS/driver, which is why listening worked on one
+        //     computer (weak AEC, audio leaked through) but not another
+        //     (strong AEC, computer sound stripped before transcription).
+        //   noiseSuppression — treats the steady call audio as "background"
+        //     and attenuates it.
+        //   autoGainControl — rides the level toward the loudest source
+        //     (the local speaker), ducking everything else.
+        //
+        // All three are disabled so desktop/call sound survives to the
+        // recognizer the same way on every computer. (TTS self-echo is
+        // already handled in software via VOICE.recentTtsText matching.)
         if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
           try {
-            VOICE.micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+            VOICE.micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
             VOICE.micStream.getTracks().forEach(t => {
               t.onended = () => { VOICE.micStream = null; };
             });
