@@ -221,7 +221,7 @@
       @keyframes interim-blink { 50% { opacity: 0; } }
 
       /* ===== Message area ===== */
-      .msg-scroll { flex: 1; min-height: 0; overflow-y: auto; background: var(--n25); }
+      .msg-scroll { flex: 6 1 0; min-height: 0; overflow-y: auto; background: var(--n25); }
       .msg-col { max-width: 768px; margin: 0 auto; padding: 28px 24px 16px; display: flex; flex-direction: column; gap: 16px; }
       .msg-row { display: flex; gap: 10px; align-items: flex-start; justify-content: flex-start; }
       .msg-row.me { justify-content: flex-end; }
@@ -397,7 +397,9 @@
        * VOICE CONSOLE — the main stage: mic orb + live voice-to-text +
        * what Randy is doing. Pinned above the composer, ~a third of the view.
        * ================================================================ */
-      .console { flex-shrink: 0; background: #fff; border-top: 1px solid var(--divider); box-shadow: 0 -6px 22px rgba(22,31,91,0.05); padding: 22px 24px; height: clamp(244px, 33vh, 360px); display: flex; align-items: center; }
+      /* Top stage = mic console + composer, 40% of the post-header height. */
+      .top-stage { flex: 4 1 0; min-height: 0; display: flex; flex-direction: column; background: #fff; border-bottom: 1px solid var(--divider); box-shadow: 0 6px 22px rgba(22,31,91,0.05); }
+      .console { flex: 1; min-height: 0; overflow-y: auto; background: #fff; padding: 22px 24px; display: flex; align-items: center; }
       .console-inner { max-width: 880px; width: 100%; margin: 0 auto; display: flex; align-items: center; gap: 34px; }
 
       .console-orb { display: flex; flex-direction: column; align-items: center; gap: 13px; flex-shrink: 0; }
@@ -432,7 +434,7 @@
 
       /* ===== Responsive ===== */
       @media (max-width: 1023px) {
-        .console { height: clamp(208px, 30vh, 300px); padding: 16px 14px; }
+        .console { padding: 16px 14px; }
         .console-inner { gap: 18px; }
         .console-orb .orb-wrap { width: 96px; height: 96px; }
         .console-orb .voice-orb { width: 80px; height: 80px; }
@@ -3461,6 +3463,17 @@
         const hasMsgs = slot.messages.length > 0;
         return `
           ${renderChatHeader(slot, idx, vm)}
+          <div class="top-stage">
+            ${renderConsole(slot, idx, vm)}
+            <div class="composer-zone">
+              <div class="composer">
+                <textarea id="home-input-${idx}" class="composer-input" rows="1" placeholder="Message ${escAttr(slot.label)}…" ${slot.loading ? 'disabled' : ''}>${escHtml(slot.inputText || '')}</textarea>
+                <button class="comp-send" data-action="send-home" data-idx="${idx}" title="Send message" aria-label="Send message" ${(slot.loading || !(slot.inputText || '').trim()) ? 'disabled' : ''}>
+                  <i data-lucide="arrow-up" class="w-5 h-5"></i>
+                </button>
+              </div>
+            </div>
+          </div>
           <div id="home-scroll-${idx}" class="msg-scroll">
             <div class="msg-col">
               ${hasMsgs ? slot.messages.map((m, mi) => `
@@ -3473,15 +3486,6 @@
                   <div class="chat-bubble chat-bot typing"><span class="typing-dot"></span><span class="typing-dot"></span><span class="typing-dot"></span></div>
                 </div>
               ` : '') : renderHomeEmpty(slot)}
-            </div>
-          </div>
-          ${renderConsole(slot, idx, vm)}
-          <div class="composer-zone">
-            <div class="composer">
-              <textarea id="home-input-${idx}" class="composer-input" rows="1" placeholder="Message ${escAttr(slot.label)}…" ${slot.loading ? 'disabled' : ''}>${escHtml(slot.inputText || '')}</textarea>
-              <button class="comp-send" data-action="send-home" data-idx="${idx}" title="Send message" aria-label="Send message" ${(slot.loading || !(slot.inputText || '').trim()) ? 'disabled' : ''}>
-                <i data-lucide="arrow-up" class="w-5 h-5"></i>
-              </button>
             </div>
           </div>`;
       }
