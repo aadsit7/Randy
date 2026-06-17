@@ -221,7 +221,7 @@
       @keyframes interim-blink { 50% { opacity: 0; } }
 
       /* ===== Message area ===== */
-      .msg-scroll { flex: 6 1 0; min-height: 0; min-width: 0; overflow-y: auto; background: var(--n25); }
+      .msg-scroll { flex: 1 1 0; min-height: 0; min-width: 0; overflow-y: auto; background: var(--n25); }
       .msg-col { max-width: 768px; margin: 0 auto; padding: 28px 24px 16px; display: flex; flex-direction: column; gap: 16px; }
       .msg-row { display: flex; gap: 10px; align-items: flex-start; justify-content: flex-start; }
       .msg-row.me { justify-content: flex-end; }
@@ -402,6 +402,8 @@
       /* Left column: mic console + composer, 40% of the row width. */
       .top-stage { flex: 4 1 0; min-width: 0; min-height: 0; display: flex; flex-direction: column; background: #fff; border-right: 1px solid var(--divider); box-shadow: 6px 0 22px rgba(22,31,91,0.05); }
       .console { flex: 1; min-height: 0; overflow-y: auto; background: #fff; padding: 22px 24px; display: flex; align-items: center; }
+      /* Right column: results (scrolls) on top, manual-question composer pinned at the bottom. */
+      .right-col { flex: 6 1 0; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
       .console-inner { max-width: 560px; width: 100%; margin: 0 auto; display: flex; flex-direction: column; align-items: center; text-align: center; gap: 22px; }
 
       /* Status title, sits right above the mic and reflects what Randy is doing. */
@@ -3453,6 +3455,22 @@
           <div class="split-row">
             <div class="top-stage">
               ${renderConsole(slot, idx, vm)}
+            </div>
+            <div class="right-col">
+              <div id="home-scroll-${idx}" class="msg-scroll">
+                <div class="msg-col">
+                  ${hasMsgs ? slot.messages.map((m, mi) => `
+                    <div class="msg-row ${m.role === 'user' ? 'me' : ''}">
+                      ${m.role === 'user' ? renderUserMessage(m) : renderBotMessage(slot, m, mi, idx)}
+                    </div>
+                  `).join('') + (slot.loading ? `
+                    <div class="msg-row">
+                      <div class="msg-av">${escHtml(slot.label.charAt(0))}</div>
+                      <div class="chat-bubble chat-bot typing"><span class="typing-dot"></span><span class="typing-dot"></span><span class="typing-dot"></span></div>
+                    </div>
+                  ` : '') : renderHomeEmpty(slot)}
+                </div>
+              </div>
               <div class="composer-zone">
                 <div class="composer">
                   <textarea id="home-input-${idx}" class="composer-input" rows="1" placeholder="Message ${escAttr(slot.label)}…" ${slot.loading ? 'disabled' : ''}>${escHtml(slot.inputText || '')}</textarea>
@@ -3460,20 +3478,6 @@
                     <i data-lucide="arrow-up" class="w-5 h-5"></i>
                   </button>
                 </div>
-              </div>
-            </div>
-            <div id="home-scroll-${idx}" class="msg-scroll">
-              <div class="msg-col">
-                ${hasMsgs ? slot.messages.map((m, mi) => `
-                  <div class="msg-row ${m.role === 'user' ? 'me' : ''}">
-                    ${m.role === 'user' ? renderUserMessage(m) : renderBotMessage(slot, m, mi, idx)}
-                  </div>
-                `).join('') + (slot.loading ? `
-                  <div class="msg-row">
-                    <div class="msg-av">${escHtml(slot.label.charAt(0))}</div>
-                    <div class="chat-bubble chat-bot typing"><span class="typing-dot"></span><span class="typing-dot"></span><span class="typing-dot"></span></div>
-                  </div>
-                ` : '') : renderHomeEmpty(slot)}
               </div>
             </div>
           </div>`;
