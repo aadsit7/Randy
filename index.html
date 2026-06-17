@@ -1933,6 +1933,9 @@
           try { VOICE.recognition.stop(); } catch {}
         }
         VOICE.ttsPaused = false;
+        // Tearing down the passive listener clears the "paused for dictation"
+        // gate too, so a stale-true value can never block a later restart.
+        VOICE.dictationPaused = false;
         VOICE.interimText = '';
         VOICE.interimSlot = null;
         VOICE.recentTtsText = '';
