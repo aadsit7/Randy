@@ -892,9 +892,18 @@
         srRunning: false,         // recognizer actually running (onstart..onend)
         watchdogId: null,         // background-tab restart watchdog interval
         lastSrEventAt: 0,         // last recognizer activity (wedge detection)
-        micStream: null           // held open (echo cancellation OFF) so the
+        micStream: null,          // held open (echo cancellation OFF) so the
                                   // mic hears the computer's speakers — see
                                   // startListening()
+        // Push-to-talk dictation in the pop-out composer. A SEPARATE
+        // recognizer from the passive one above: the Web Speech API only
+        // runs one recognizer at a time, so while dictation is live the
+        // passive recognizer is paused (dictationPaused) and resumed when
+        // dictation ends — see startDictation()/stopDictation().
+        dictation: null,          // dedicated dictation SpeechRecognition
+        dictating: false,         // dictation actively capturing the mic
+        dictationPaused: false,   // passive recognizer paused for dictation
+        dictationBase: ''         // finalized dictation text staged in the input
       };
 
       // Listening runtime state. Randy hears on two channels: (1) the
@@ -1764,12 +1773,12 @@
         r.onend = () => {
           VOICE.srRunning = false;
           VOICE.lastSrEventAt = Date.now();
-          if (VOICE.ttsPaused) return;
+          if (VOICE.ttsPaused || VOICE.dictationPaused) return;
           if (!VOICE.wantRunning || !recognitionWanted()) return;
           // start() can throw InvalidStateError while the previous session is
           // still shutting down — retry with backoff.
           const tryStart = (attempt) => {
-            if (!VOICE.wantRunning || !recognitionWanted() || VOICE.ttsPaused) return;
+            if (!VOICE.wantRunning || !recognitionWanted() || VOICE.ttsPaused || VOICE.dictationPaused) return;
             try { startRecognitionNow(); }
             catch (err) {
               if (attempt < 4) setTimeout(() => tryStart(attempt + 1), 250 * (attempt + 1));
@@ -1814,7 +1823,7 @@
       function startRecognitionWatchdog() {
         if (VOICE.watchdogId) return;
         VOICE.watchdogId = setInterval(() => {
-          if (!VOICE.wantRunning || !recognitionWanted() || VOICE.ttsPaused) return;
+          if (!VOICE.wantRunning || !recognitionWanted() || VOICE.ttsPaused || VOICE.dictationPaused) return;
           if (!VOICE.srRunning) {
             try { startRecognitionNow(); } catch {}
             return;
@@ -1834,7 +1843,7 @@
       // recognizer that died while the tab was throttled in the background.
       document.addEventListener('visibilitychange', () => {
         if (document.hidden) return;
-        if (VOICE.wantRunning && recognitionWanted() && !VOICE.ttsPaused && !VOICE.srRunning) {
+        if (VOICE.wantRunning && recognitionWanted() && !VOICE.ttsPaused && !VOICE.dictationPaused && !VOICE.srRunning) {
           try { startRecognitionNow(); } catch {}
         }
         // Also a free chance to un-stick a pipeline that wedged while the tab
@@ -1852,7 +1861,7 @@
         try { r.abort(); } catch {}
         // If onend doesn't fire (recognizer was idle), kick it directly.
         setTimeout(() => {
-          if (VOICE.wantRunning && recognitionWanted() && !VOICE.ttsPaused) {
+          if (VOICE.wantRunning && recognitionWanted() && !VOICE.ttsPaused && !VOICE.dictationPaused) {
             try { startRecognitionNow(); } catch {}
           }
         }, 150);
@@ -1869,6 +1878,177 @@
         VOICE.interimSlot = null;
         VOICE.recentTtsText = '';
         STATE.slots.forEach(s => { s.isListening = false; });
+      }
+
+      /* ================================================================
+       * DICTATION — push-to-talk voice typing in the pop-out composer
+       *
+       * A SECOND, independent recognizer. The Web Speech API only runs one
+       * recognizer at a time, so while dictation captures the mic Randy's
+       * passive listener is paused (VOICE.dictationPaused) and resumed the
+       * moment dictation stops. Dictation never auto-sends — it streams the
+       * transcript into #pip-input — and it never cuts the user off: Chrome
+       * silently ends a recognition session after a pause, so onend restarts
+       * it for as long as the user keeps dictating.
+       * ================================================================ */
+
+      // Write the staged dictation text (+ optional live interim) into the
+      // pop-out input. Never throws — the window can vanish mid-write.
+      function syncDictationInput(interim) {
+        const w = PIP.window;
+        if (!w || w.closed) return;
+        let input;
+        try { input = w.document.getElementById('pip-input'); } catch { return; }
+        if (!input) return;
+        const base = VOICE.dictationBase || '';
+        const it = (interim || '').trim();
+        const val = it ? (base ? base.replace(/\s+$/, '') + ' ' + it : it) : base;
+        try {
+          input.value = val;
+          input.selectionStart = input.selectionEnd = val.length;
+          input.scrollLeft = input.scrollWidth;
+        } catch {}
+      }
+
+      // Fold a finalized chunk into the staged dictation text with sane spacing.
+      function appendDictationFinal(chunk) {
+        const add = (chunk || '').trim();
+        if (!add) return;
+        const base = VOICE.dictationBase || '';
+        VOICE.dictationBase = base ? base.replace(/\s+$/, '') + ' ' + add : add;
+      }
+
+      function ensureDictationRecognition() {
+        if (!VOICE.srSupported) return null;
+        if (VOICE.dictation) return VOICE.dictation;
+        const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+        const r = new SR();
+        r.continuous = true;
+        r.interimResults = true;
+        r.lang = 'en-US';
+        r.onresult = (e) => {
+          let interim = '';
+          let finalChunk = '';
+          for (let i = e.resultIndex; i < e.results.length; i++) {
+            const res = e.results[i];
+            const t = res[0] && res[0].transcript ? res[0].transcript : '';
+            if (res.isFinal) finalChunk += t + ' ';
+            else interim += t;
+          }
+          if (finalChunk) appendDictationFinal(finalChunk);
+          syncDictationInput(interim);
+        };
+        r.onerror = (e) => {
+          if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+            showToast('Randy needs microphone access — allow the mic and try again');
+            stopDictation();
+            return;
+          }
+          if (e.error === 'audio-capture') {
+            showToast("Randy couldn't use the microphone — check that one is plugged in");
+            stopDictation();
+            return;
+          }
+          // Transient errors (no-speech, aborted, network) fall through to
+          // onend, which restarts while the user is still dictating.
+        };
+        r.onend = () => {
+          if (VOICE.dictating) {
+            // Chrome ended the session after a pause but the user hasn't
+            // stopped — restart so a long answer is never cut off. start()
+            // can throw while the old session tears down; retry with backoff.
+            const tryStart = (attempt) => {
+              if (!VOICE.dictating) return;
+              try { r.start(); }
+              catch (err) {
+                if (attempt < 4) setTimeout(() => tryStart(attempt + 1), 250 * (attempt + 1));
+              }
+            };
+            tryStart(0);
+            return;
+          }
+          // Dictation finished — settle the input to the finalized text
+          // (drop any dangling interim) and bring Randy's listener back.
+          syncDictationInput('');
+          resumePassiveAfterDictation();
+        };
+        VOICE.dictation = r;
+        return r;
+      }
+
+      // Bring Randy's passive listener back after dictation, if it was on.
+      function resumePassiveAfterDictation() {
+        if (!VOICE.dictationPaused) return;
+        VOICE.dictationPaused = false;
+        if (!VOICE.wantRunning || !recognitionWanted()) return;
+        const tryStart = (attempt) => {
+          if (!VOICE.wantRunning || !recognitionWanted() || VOICE.dictationPaused) return;
+          try { startRecognitionNow(); }
+          catch (err) {
+            if (attempt < 4) setTimeout(() => tryStart(attempt + 1), 250 * (attempt + 1));
+          }
+        };
+        tryStart(0);
+      }
+
+      function toggleDictation() {
+        if (!VOICE.srSupported) { showToast('Voice typing needs Chrome or Edge'); return; }
+        if (VOICE.dictating) stopDictation();
+        else startDictation();
+      }
+
+      function startDictation() {
+        if (!VOICE.srSupported || VOICE.dictating) return;
+        const r = ensureDictationRecognition();
+        if (!r) return;
+        VOICE.dictating = true;
+
+        // Seed the staged text from whatever the user already typed, so
+        // dictation appends rather than overwrites.
+        const w = PIP.window;
+        let existing = '';
+        try { existing = (w && !w.closed && w.document.getElementById('pip-input').value) || ''; } catch {}
+        VOICE.dictationBase = existing.trim();
+
+        // Pause Randy's passive listener so the two recognizers don't fight
+        // over the mic. Keep VOICE.wantRunning intact so resume knows to
+        // restart it. abort() releases the mic fastest; its onend bails out
+        // immediately because dictationPaused is set.
+        if (VOICE.wantRunning && recognitionWanted()) {
+          VOICE.dictationPaused = true;
+          try { VOICE.recognition && VOICE.recognition.abort(); } catch {}
+        }
+
+        // Start the dictation recognizer. The passive recognizer may still be
+        // releasing the mic, so retry with backoff on InvalidStateError.
+        const tryStart = (attempt) => {
+          if (!VOICE.dictating) return;
+          try { r.start(); }
+          catch (err) {
+            if (attempt < 6) setTimeout(() => tryStart(attempt + 1), 200 * (attempt + 1));
+          }
+        };
+        tryStart(0);
+
+        try { if (w && !w.closed) w.document.getElementById('pip-input').focus(); } catch {}
+        render();
+      }
+
+      function stopDictation() {
+        if (!VOICE.dictating) {
+          // Already stopped, but make sure the listener isn't stuck paused.
+          resumePassiveAfterDictation();
+          return;
+        }
+        VOICE.dictating = false;       // onend won't restart now
+        if (VOICE.dictation) {
+          try { VOICE.dictation.stop(); } catch {}
+        } else {
+          // No recognizer to fire onend — resume the listener directly.
+          syncDictationInput('');
+          resumePassiveAfterDictation();
+        }
+        render();
       }
 
       /* ================================================================
@@ -3975,7 +4155,17 @@
         .pip-send { width: 38px; height: 38px; border-radius: 50%; background: var(--primary); color: #fff; border: none; display: grid; place-items: center; cursor: pointer; flex-shrink: 0; transition: background 0.15s; }
         .pip-send:hover { background: var(--primary-hover); }
         .pip-send:disabled { background: #cbd5e1; cursor: not-allowed; }
-        @media (prefers-reduced-motion: reduce) { .pip-dot.live, .pip-mini-dot.live, .pip-mini.is-live .pip-mini-ring, .pip-mini.has-unseen .pip-mini-orb, .pip-mini-dots i, .pip-new, .pip-tdot, .pip-live-wave i, .pip-live-dots i, .pip-live-caret { animation: none; } }
+        .pip-mic { width: 38px; height: 38px; border-radius: 50%; background: #fff; color: var(--primary); border: 1.5px solid var(--divider); display: grid; place-items: center; cursor: pointer; flex-shrink: 0; transition: background 0.15s, color 0.15s, border-color 0.15s; }
+        .pip-mic:hover { border-color: var(--primary); background: #F5F9FF; }
+        .pip-mic svg { width: 17px; height: 17px; }
+        .pip-mic .pip-mic-live { display: none; }
+        .pip-mic:disabled { opacity: 0.45; cursor: not-allowed; }
+        .pip-mic.recording { background: #EF4444; border-color: #EF4444; color: #fff; animation: pipMicPulse 1.5s ease-in-out infinite; }
+        .pip-mic.recording:hover { background: #DC2626; border-color: #DC2626; }
+        .pip-mic.recording .pip-mic-idle { display: none; }
+        .pip-mic.recording .pip-mic-live { display: block; }
+        @keyframes pipMicPulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(239,68,68,0.45); } 50% { box-shadow: 0 0 0 6px rgba(239,68,68,0); } }
+        @media (prefers-reduced-motion: reduce) { .pip-dot.live, .pip-mini-dot.live, .pip-mini.is-live .pip-mini-ring, .pip-mini.has-unseen .pip-mini-orb, .pip-mini-dots i, .pip-new, .pip-tdot, .pip-live-wave i, .pip-live-dots i, .pip-live-caret, .pip-mic.recording { animation: none; } }
       `;
 
       // Toggle the floating window. Must run from a real user click —
@@ -4076,6 +4266,10 @@
             <button class="pip-send" id="pip-send" data-action="pip-send" title="Send message" aria-label="Send message">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>
             </button>
+            <button class="pip-mic" id="pip-mic" data-action="pip-dictate" title="Dictate your message — voice to text" aria-label="Dictate your message" aria-pressed="false"${VOICE.srSupported ? '' : ' disabled'}>
+              <svg class="pip-mic-idle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/></svg>
+              <svg class="pip-mic-live" viewBox="0 0 24 24" fill="currentColor" stroke="none"><rect x="6" y="6" width="12" height="12" rx="2.5"/></svg>
+            </button>
           </div>
           <button class="pip-mini" id="pip-mini" data-action="pip-expand" title="Randy is listening — click to open the chat" aria-label="Open the chat">
             <span class="pip-mini-stage">
@@ -4095,6 +4289,7 @@
         doc.addEventListener('click', e => {
           if (!e.target.closest) return;
           if (e.target.closest('[data-action="pip-send"]')) { sendFromPip(); return; }
+          if (e.target.closest('[data-action="pip-dictate"]')) { toggleDictation(); return; }
           if (e.target.closest('[data-action="pip-minimize"]')) { collapsePip(); return; }
           if (e.target.closest('[data-action="pip-expand"]')) { expandPip(); return; }
           if (e.target.closest('[data-action="pip-toggle-speak"]')) { toggleSpeakFromPip(); return; }
@@ -4115,6 +4310,7 @@
         });
         w.addEventListener('pagehide', () => {
           if (PIP.swapping) return; // window replaced by a swap, not closed
+          if (VOICE.dictating) stopDictation(); // free the mic, resume Randy
           if (PIP.window === w) {
             PIP.window = null;
             PIP.slotIdx = null;
@@ -4154,6 +4350,9 @@
         if (!slot || !input) return;
         const text = input.value.trim();
         if (!text || slot.loading) return;
+        // Sending ends dictation — clear the staged text first so the
+        // recognizer's trailing onend can't repaint the just-cleared input.
+        if (VOICE.dictating) { VOICE.dictationBase = ''; stopDictation(); }
         slot.inputText = text;
         input.value = '';
         sendMessage(PIP.slotIdx); // its render() syncs the pop-out too
@@ -4226,6 +4425,7 @@
       async function collapsePip() {
         const w = PIP.window;
         if (!w || w.closed || PIP.collapsed || PIP.swapping) return;
+        if (VOICE.dictating) stopDictation(); // the input is hidden while collapsed
         PIP.collapsed = true;
         PIP.unseen = 0;
         PIP.flashNext = false;
@@ -4534,6 +4734,16 @@
 
           const sendBtn = doc.getElementById('pip-send');
           if (sendBtn && sendBtn.disabled !== !!slot.loading) sendBtn.disabled = !!slot.loading;
+
+          // Dictation mic — reflect the live recording state.
+          const micBtn = doc.getElementById('pip-mic');
+          if (micBtn) {
+            micBtn.classList.toggle('recording', !!VOICE.dictating);
+            micBtn.setAttribute('aria-pressed', VOICE.dictating ? 'true' : 'false');
+            if (micBtn.disabled !== !VOICE.srSupported) micBtn.disabled = !VOICE.srSupported;
+            const t = VOICE.dictating ? 'Stop dictation' : 'Dictate your message — voice to text';
+            if (micBtn.title !== t) micBtn.title = t;
+          }
         } catch (err) {
           console.warn('renderPip failed:', err);
         }
