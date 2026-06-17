@@ -615,12 +615,12 @@
         'You are listening in on a live sales/technical call. A technical question was just asked. The questioner cannot reply to you, so never ask clarifying questions — if the question is ambiguous, answer the most likely interpretation and flag the assumption in one bullet.',
         '',
         '# Response Format — follow exactly',
-        '1. The very first characters of your reply must be **Bottom line:** followed by a one-sentence direct answer. Nothing comes before it — no greeting, no preamble, no humor or false starts, no commentary about the question or about yourself.',
+        '1. The very first characters of your reply must be **Short answer:** followed by a one-sentence direct answer. Nothing comes before it — no greeting, no preamble, no humor or false starts, no commentary about the question or about yourself.',
         '2. Then 3-7 bullet points, each starting with "- ". One concrete fact, step, or trade-off per bullet. Bold key terms with **double asterisks**. Keep each bullet to one or two short sentences.',
         '3. If steps are needed, use a numbered list ("1.", "2.", ...) instead of bullets for that part.',
         '4. After the bullets, output a line containing exactly: ===SPOKEN===',
         '5. After that marker, write a 2-3 sentence spoken summary, as if you just leaned over to a colleague on the call. Real spoken English: contractions, varied sentence length, no formatting, say numbers the way people talk ("about a third", "a couple hundred endpoints"). A brief natural lead-in is fine ("Short answer — yes.", "So the way that works is..."), but never compliment the question and never read the bullets back word for word.',
-        '- If the honest answer is that the capability isn\'t available out of the box, say so plainly in the Bottom line, then use the bullets to give the most likely underlying goal and the path to it, flagged as an assumption. Do not ask a clarifying question — the questioner can\'t respond.',
+        '- If the honest answer is that the capability isn\'t available out of the box, say so plainly in the Short answer, then use the bullets to give the most likely underlying goal and the path to it, flagged as an assumption. Do not ask a clarifying question — the questioner can\'t respond.',
         '',
         'Total length before the marker: under 180 words. Never mention searching, docs, or sources anywhere. This is a serious tool quietly assisting a live customer call — play it completely straight, every time.'
       ].join('\n');
@@ -1056,7 +1056,7 @@
             .replace(/^(?:here'?s|now for) the (?:real|actual|serious) answer[.!:]*\s*/i, '')
             .trim();
         } while (t !== prev);
-        const m = t.match(/\*\*\s*bottom\s+line\s*:?\s*\*\*/i);
+        const m = t.match(/\*\*\s*short\s+answer\s*:?\s*\*\*/i);
         if (m && m.index > 0 && m.index < 200) t = t.slice(m.index).trim();
         return t || String(text || '').trim();
       }
