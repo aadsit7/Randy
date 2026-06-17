@@ -196,6 +196,8 @@
       .ls-title { font-size: 12px; font-weight: 700; color: var(--navy); white-space: nowrap; }
       .ls-stats { font-size: 11px; color: var(--n500); white-space: nowrap; }
       .ls-stats.busy { color: var(--primary); font-weight: 600; }
+      .ls-desktop { font-size: 10.5px; font-weight: 600; color: var(--n500); margin-top: 2px; }
+      .ls-desktop.on { color: var(--primary); }
       .ls-live { display: flex; align-items: center; gap: 8px; min-width: 0; }
       .ls-live-text { font-size: 12px; color: var(--n600); line-height: 1.4; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       #live-transcript-text:empty::before { content: 'Waiting for speech…'; font-style: italic; color: var(--n400); }
@@ -763,14 +765,14 @@
                                   // startListening()
       };
 
-      // Listening runtime state. Randy listens through the microphone only —
-      // the mic hears the user's voice AND the call playing on the speakers.
-      // That speaker pickup only survives with the mic's echo cancellation /
-      // noise suppression / auto-gain disabled (see startListening), since
-      // those processors otherwise strip the computer sound. (Browsers never
-      // allow capturing screen/tab audio without a picker dialog, and the Web
-      // Speech recognizer can't be pointed at a non-default stream anyway, so
-      // mic listening is what makes one-tap, all-audio capture possible.)
+      // Listening runtime state. Randy hears on two channels: (1) the
+      // microphone via the Web Speech recognizer — which also overhears the
+      // call on the speakers, but only with echo cancellation / noise
+      // suppression / auto-gain disabled (see startListening), and only when
+      // the user isn't on headphones; and (2) the computer's audio captured
+      // digitally through the share picker and transcribed locally by an
+      // in-browser Whisper model (see DESKTOP / startDesktopCapture), which
+      // works on headphones too. Both channels feed the same pipeline below.
       const TECH = {
         lastErrorToastAt: 0,      // throttle pipeline-failure toasts
         buffer: '',               // join buffer for ASR fragments
@@ -788,6 +790,55 @@
       };
 
       function listeningOn() { return STATE.slots[0].listenOn; }
+
+      // Desktop/computer-audio capture + fully in-browser transcription.
+      //
+      // The mic path above can only hear computer sound acoustically (the mic
+      // overhearing the speakers), which fails the moment the user wears
+      // headphones. This path taps the computer's audio DIGITALLY via the
+      // screen/tab-share picker (getDisplayMedia) and transcribes it with a
+      // Whisper model that runs locally in the browser (WebGPU, WASM
+      // fallback) — no audio ever leaves the machine, no API key, and it
+      // works identically on speakers or headphones. Its transcripts feed the
+      // exact same answer pipeline the microphone uses (handleVoiceTranscript
+      // / updateInterim). Optional: if the user dismisses the picker, Randy
+      // falls back to mic-only just like before.
+      const DESKTOP = {
+        supported: !!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia &&
+                      typeof Worker !== 'undefined' && typeof AudioContext !== 'undefined'),
+        on: false,                // is digital computer-audio capture running?
+        stream: null,             // getDisplayMedia stream (audio + a stopped video track)
+        audioCtx: null,           // 16 kHz context that feeds the transcriber
+        sourceNode: null,
+        procNode: null,           // ScriptProcessor pulling raw PCM
+        worker: null,             // Whisper inference worker (Blob module)
+        workerReady: false,
+        modelLoading: false,
+        device: '',               // 'webgpu' | 'wasm' once known
+        statusText: '',           // shown in the live strip
+        // Voice-activity segmentation over the incoming PCM.
+        seg: [],                  // Float32 chunks of the current utterance
+        segLen: 0,                // samples buffered in seg
+        speaking: false,
+        silenceRun: 0,            // consecutive silent samples
+        voicedRun: 0,             // consecutive voiced samples in the open segment
+        reqId: 0,                 // monotonic id for inference requests
+        inFlight: 0,              // outstanding worker jobs (single-flight gate)
+        lastInterimAt: 0          // throttle for live partial transcriptions
+      };
+
+      // Whisper sample rate, plus VAD/segmentation tuning. Chosen so a normal
+      // spoken question finalizes ~0.7 s after the speaker stops, while a long
+      // monologue still flushes periodically instead of growing unbounded.
+      const ASR = {
+        SAMPLE_RATE: 16000,
+        SILENCE_RMS: 0.006,       // below this is "silence"
+        SILENCE_MS: 700,          // trailing silence that ends an utterance
+        MIN_VOICED_MS: 250,       // ignore blips shorter than this
+        MAX_SEG_MS: 18000,        // hard flush so long talk still transcribes live
+        INTERIM_MS: 1400,         // how often to refresh the live partial
+        MAX_TAIL_S: 24            // cap the audio sent per inference (seconds)
+      };
 
       /* ================================================================
        * SETTINGS PERSISTENCE
@@ -1704,7 +1755,36 @@
         if (!text) return;
         // Drop re-transcriptions of Randy's own voice.
         if (isLikelyEcho(text)) return;
+        // Two transcribers can hear the same words — the mic (Web Speech) and
+        // the digital computer-audio tap (Whisper). On speakers especially,
+        // the mic also overhears the call, so the same utterance can arrive
+        // from both. Collapse those so a question isn't answered twice.
+        if (isDuplicateUtterance(text)) return;
         if (listeningOn()) assistIngest(text);
+      }
+
+      // Cross-source de-dupe for finalized utterances. Holds a short rolling
+      // window of recent finals (from either transcriber) and rejects a new
+      // one that repeats it — exact match, containment, or high token overlap
+      // (ASR wording varies slightly between the two engines).
+      const RECENT_FINALS = [];
+      function isDuplicateUtterance(text) {
+        const norm = String(text).toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+        if (!norm) return false;
+        const now = Date.now();
+        while (RECENT_FINALS.length && now - RECENT_FINALS[0].at > 8000) RECENT_FINALS.shift();
+        const tokens = new Set(norm.split(' '));
+        for (const e of RECENT_FINALS) {
+          if (e.norm === norm) { e.at = now; return true; }
+          const shorter = e.norm.length <= norm.length ? e.norm : norm;
+          const longer  = e.norm.length <= norm.length ? norm : e.norm;
+          if (shorter.length >= 12 && longer.indexOf(shorter) !== -1) { e.at = now; return true; }
+          let inter = 0; e.tokens.forEach(w => { if (tokens.has(w)) inter++; });
+          const uni = new Set([...e.tokens, ...tokens]).size;
+          if (uni > 0 && inter / uni >= 0.8 && Math.min(e.tokens.size, tokens.size) >= 3) { e.at = now; return true; }
+        }
+        RECENT_FINALS.push({ norm, tokens, at: now });
+        return false;
       }
 
       /* ================================================================
@@ -1772,12 +1852,14 @@
 
 
       /* ================================================================
-       * LISTENING — one switch, microphone only (no pickers, no pop-ups)
+       * LISTENING — one switch: mic + optional digital computer-audio tap
        * ================================================================ */
 
-      // The big mic button. ON: ask for the microphone once and start
-      // listening. The mic hears the user's voice AND the call playing on
-      // the speakers — no screen sharing, nothing to choose. OFF: stop.
+      // The big mic button. ON: start listening. Randy first offers the
+      // computer-audio share (the picker — tick "share tab/system audio") so
+      // he can transcribe the call digitally even on headphones, then opens
+      // the microphone for the user's own voice. Dismiss the picker and it's
+      // mic-only, exactly as before. OFF: stop.
       async function toggleListening() {
         const slot = STATE.slots[0];
         if (!VOICE.srSupported) { showToast('Randy needs Chrome or Edge to listen'); return; }
@@ -1790,6 +1872,15 @@
         if (slot.listenOn) return;
         const r = ensureRecognition();
         if (!r) { showToast('Randy needs Chrome or Edge to listen'); return; }
+
+        // Offer the digital computer-audio tap FIRST, while the click's
+        // transient activation is still fresh — getDisplayMedia requires it,
+        // and the mic getUserMedia await below would otherwise consume it.
+        // This resolves whether or not the user actually shares audio; if they
+        // dismiss the picker we just continue mic-only, exactly as before.
+        if (DESKTOP.supported) {
+          try { await startDesktopCapture(); } catch {}
+        }
 
         // Ask for the mic up front so a denial fails loudly here, with a
         // clear message, instead of dying quietly inside the recognizer.
@@ -1862,8 +1953,257 @@
         TECH.pending = false;
         abortActiveReply();   // aborts in-flight replies and any TTS
         stopRecognition();
+        stopDesktopCapture();
         if (!silent && wasOn) showToast('Randy stopped listening');
         render();
+      }
+
+      /* ================================================================
+       * DESKTOP / COMPUTER AUDIO — digital tap + in-browser Whisper
+       *
+       * getDisplayMedia (the tab/screen-share picker, "share audio" ticked)
+       * gives us the call's real audio, even on headphones. We can't hand
+       * that stream to the Web Speech recognizer, so we transcribe it locally
+       * with a Whisper model running in a Web Worker (WebGPU, WASM fallback).
+       * Nothing is uploaded; the audio never leaves the browser. Finalized
+       * utterances go to handleVoiceTranscript() — the same pipeline the mic
+       * feeds — so answers happen the same way regardless of source.
+       * ================================================================ */
+
+      // The transcription worker. Loaded from a Blob URL so it stays inside
+      // this single-file app; it pulls Transformers.js from a CDN and keeps
+      // WASM single-threaded so no cross-origin isolation (SharedArrayBuffer)
+      // is required. NOTE: keep this free of ${...} — it lives in a template.
+      const WHISPER_WORKER_SRC = `
+        import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.7.5';
+        env.allowLocalModels = false;
+        try { env.backends.onnx.wasm.numThreads = 1; } catch (e) {}
+        const MODEL = 'onnx-community/whisper-base.en';
+        let asr = null;
+        let device = '';
+        async function build(dev) {
+          return await pipeline('automatic-speech-recognition', MODEL, {
+            device: dev,
+            dtype: dev === 'webgpu' ? 'fp32' : 'q8'
+          });
+        }
+        async function init() {
+          try { asr = await build('webgpu'); device = 'webgpu'; }
+          catch (e) {
+            try { asr = await build('wasm'); device = 'wasm'; }
+            catch (e2) { self.postMessage({ type: 'error', error: String((e2 && e2.message) || e2) }); return; }
+          }
+          self.postMessage({ type: 'ready', device: device });
+        }
+        self.onmessage = async (ev) => {
+          const d = ev.data || {};
+          if (d.type === 'init') { await init(); return; }
+          if (d.type === 'transcribe') {
+            if (!asr) { self.postMessage({ type: 'result', id: d.id, final: d.final, text: '' }); return; }
+            try {
+              const out = await asr(d.audio, { language: 'en', task: 'transcribe', chunk_length_s: 30, stride_length_s: 5, return_timestamps: false });
+              const text = ((out && out.text) || '').trim();
+              self.postMessage({ type: 'result', id: d.id, final: d.final, text: text });
+            } catch (err) {
+              self.postMessage({ type: 'result', id: d.id, final: d.final, text: '', error: String((err && err.message) || err) });
+            }
+          }
+        };
+      `;
+
+      // Reflect capture state in the live strip without a full re-render.
+      function setDesktopStatus(text) {
+        DESKTOP.statusText = text || '';
+        const el = document.getElementById('desktop-status');
+        if (el) { el.textContent = DESKTOP.statusText; el.classList.toggle('on', !!DESKTOP.statusText); }
+      }
+
+      async function startDesktopCapture() {
+        if (DESKTOP.on || !DESKTOP.supported) return;
+        let stream;
+        try {
+          stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+        } catch (err) {
+          // Picker dismissed or permission denied — continue mic-only.
+          return;
+        }
+        const audioTracks = stream.getAudioTracks();
+        if (!audioTracks.length) {
+          // Shared a window/screen but didn't tick "share audio". The video is
+          // useless to us, so drop the whole share and stay on the mic.
+          try { stream.getTracks().forEach(t => t.stop()); } catch {}
+          showToast('No computer audio shared — re-share and tick “Share tab/system audio”. Using mic only.');
+          return;
+        }
+        // Audio only — stop the video track so we aren't grabbing the screen.
+        stream.getVideoTracks().forEach(t => { try { t.stop(); } catch {} });
+
+        DESKTOP.stream = stream;
+        DESKTOP.on = true;
+        // If the user clicks Chrome's "Stop sharing", tear this path down.
+        audioTracks[0].addEventListener('ended', () => { stopDesktopCapture(); render(); });
+
+        try {
+          const Ctx = window.AudioContext || window.webkitAudioContext;
+          DESKTOP.audioCtx = new Ctx({ sampleRate: ASR.SAMPLE_RATE });
+          if (DESKTOP.audioCtx.state === 'suspended') { try { await DESKTOP.audioCtx.resume(); } catch {} }
+          DESKTOP.sourceNode = DESKTOP.audioCtx.createMediaStreamSource(new MediaStream([audioTracks[0]]));
+          const proc = DESKTOP.audioCtx.createScriptProcessor(4096, 1, 1);
+          proc.onaudioprocess = (e) => { processDesktopBlock(e.inputBuffer.getChannelData(0)); };
+          DESKTOP.sourceNode.connect(proc);
+          // ScriptProcessor only runs when connected to a destination; route it
+          // through a silent gain so the call isn't echoed back to the speakers.
+          const sink = DESKTOP.audioCtx.createGain();
+          sink.gain.value = 0;
+          proc.connect(sink);
+          sink.connect(DESKTOP.audioCtx.destination);
+          DESKTOP.procNode = proc;
+        } catch (err) {
+          showToast('Randy could not set up computer-audio capture — using mic only.');
+          stopDesktopCapture();
+          return;
+        }
+
+        startWhisperWorker();
+        setDesktopStatus('Computer audio: loading transcriber…');
+        showToast('Randy is capturing computer audio');
+      }
+
+      function startWhisperWorker() {
+        if (DESKTOP.worker) return;
+        try {
+          const blob = new Blob([WHISPER_WORKER_SRC], { type: 'text/javascript' });
+          DESKTOP.workerUrl = URL.createObjectURL(blob);
+          DESKTOP.worker = new Worker(DESKTOP.workerUrl, { type: 'module' });
+          DESKTOP.modelLoading = true;
+          DESKTOP.worker.onmessage = onWhisperMessage;
+          DESKTOP.worker.onerror = () => {
+            setDesktopStatus('Computer audio: transcriber failed to load');
+            showToast('Live transcription model failed to load — check your connection.');
+          };
+          DESKTOP.worker.postMessage({ type: 'init' });
+        } catch (err) {
+          showToast('This browser can’t run the in-page transcriber. Using mic only.');
+        }
+      }
+
+      function onWhisperMessage(ev) {
+        const d = ev.data || {};
+        if (d.type === 'ready') {
+          DESKTOP.workerReady = true;
+          DESKTOP.modelLoading = false;
+          DESKTOP.device = d.device || '';
+          setDesktopStatus('Computer audio: on' + (d.device === 'wasm' ? ' (CPU)' : ''));
+          return;
+        }
+        if (d.type === 'error') {
+          DESKTOP.modelLoading = false;
+          setDesktopStatus('Computer audio: transcriber unavailable');
+          showToast('Live transcription couldn’t start on this device. Using mic only.');
+          return;
+        }
+        if (d.type === 'result') {
+          DESKTOP.inFlight = Math.max(0, DESKTOP.inFlight - 1);
+          const text = (d.text || '').trim();
+          if (!text) return;
+          if (d.final) handleVoiceTranscript(text);
+          else updateInterim(text);
+        }
+      }
+
+      // Energy-based voice-activity segmentation over the 16 kHz PCM. Builds up
+      // one utterance, finalizes it after a trailing pause (or a hard length
+      // cap), and refreshes a live partial in between.
+      function processDesktopBlock(frame) {
+        if (!DESKTOP.on) return;
+        const n = frame.length;
+        const blockMs = (n / ASR.SAMPLE_RATE) * 1000;
+        let sum = 0;
+        for (let i = 0; i < n; i++) { const s = frame[i]; sum += s * s; }
+        const rms = Math.sqrt(sum / n);
+
+        if (rms >= ASR.SILENCE_RMS) {
+          DESKTOP.speaking = true;
+          DESKTOP.silenceRun = 0;
+          DESKTOP.voicedRun += blockMs;
+          appendSeg(frame);
+        } else if (DESKTOP.speaking) {
+          appendSeg(frame); // keep a little trailing silence for a clean cutoff
+          DESKTOP.silenceRun += blockMs;
+          if (DESKTOP.silenceRun >= ASR.SILENCE_MS) { flushSegment(); return; }
+        }
+
+        if (DESKTOP.speaking && (DESKTOP.segLen / ASR.SAMPLE_RATE) * 1000 >= ASR.MAX_SEG_MS) {
+          flushSegment();
+          return;
+        }
+        maybeInterim();
+      }
+
+      function appendSeg(frame) {
+        DESKTOP.seg.push(new Float32Array(frame)); // ScriptProcessor reuses its buffer — copy
+        DESKTOP.segLen += frame.length;
+        const cap = ASR.MAX_TAIL_S * ASR.SAMPLE_RATE;
+        while (DESKTOP.segLen > cap && DESKTOP.seg.length > 1) {
+          DESKTOP.segLen -= DESKTOP.seg.shift().length;
+        }
+      }
+
+      function concatSeg() {
+        const out = new Float32Array(DESKTOP.segLen);
+        let off = 0;
+        for (const c of DESKTOP.seg) { out.set(c, off); off += c.length; }
+        return out;
+      }
+
+      function flushSegment() {
+        const voiced = DESKTOP.voicedRun;
+        const audio = DESKTOP.segLen ? concatSeg() : null;
+        DESKTOP.seg = [];
+        DESKTOP.segLen = 0;
+        DESKTOP.speaking = false;
+        DESKTOP.silenceRun = 0;
+        DESKTOP.voicedRun = 0;
+        if (!audio || voiced < ASR.MIN_VOICED_MS) return; // too short — likely a noise blip
+        if (!DESKTOP.workerReady || !DESKTOP.worker) return;
+        DESKTOP.reqId++;
+        DESKTOP.inFlight++;
+        DESKTOP.worker.postMessage({ type: 'transcribe', id: DESKTOP.reqId, final: true, audio }, [audio.buffer]);
+      }
+
+      // Throttled live partial: transcribe the open segment so the strip shows
+      // words as they're spoken. Single-flight so inference can't pile up.
+      function maybeInterim() {
+        if (!DESKTOP.workerReady || !DESKTOP.worker || !DESKTOP.speaking) return;
+        if (DESKTOP.inFlight > 0) return;
+        if (DESKTOP.voicedRun < 400) return;
+        const now = Date.now();
+        if (now - DESKTOP.lastInterimAt < ASR.INTERIM_MS) return;
+        DESKTOP.lastInterimAt = now;
+        const audio = concatSeg();
+        DESKTOP.reqId++;
+        DESKTOP.inFlight++;
+        DESKTOP.worker.postMessage({ type: 'transcribe', id: DESKTOP.reqId, final: false, audio }, [audio.buffer]);
+      }
+
+      function stopDesktopCapture() {
+        if (DESKTOP.procNode) { try { DESKTOP.procNode.disconnect(); DESKTOP.procNode.onaudioprocess = null; } catch {} DESKTOP.procNode = null; }
+        if (DESKTOP.sourceNode) { try { DESKTOP.sourceNode.disconnect(); } catch {} DESKTOP.sourceNode = null; }
+        if (DESKTOP.audioCtx) { try { DESKTOP.audioCtx.close(); } catch {} DESKTOP.audioCtx = null; }
+        if (DESKTOP.stream) { try { DESKTOP.stream.getTracks().forEach(t => t.stop()); } catch {} DESKTOP.stream = null; }
+        if (DESKTOP.worker) { try { DESKTOP.worker.terminate(); } catch {} DESKTOP.worker = null; }
+        if (DESKTOP.workerUrl) { try { URL.revokeObjectURL(DESKTOP.workerUrl); } catch {} DESKTOP.workerUrl = null; }
+        DESKTOP.on = false;
+        DESKTOP.workerReady = false;
+        DESKTOP.modelLoading = false;
+        DESKTOP.seg = [];
+        DESKTOP.segLen = 0;
+        DESKTOP.speaking = false;
+        DESKTOP.silenceRun = 0;
+        DESKTOP.voicedRun = 0;
+        DESKTOP.inFlight = 0;
+        DESKTOP.device = '';
+        setDesktopStatus('');
       }
 
       /* ---------- utterance buffering + classification ---------- */
@@ -2661,6 +3001,7 @@
                 <span class="ls-title">Listening for tech questions</span>
                 <span class="ls-stats ${TECH.pending ? 'busy' : ''}">${escHtml(stats)}</span>
               </div>
+              ${DESKTOP.on ? `<div class="ls-desktop ${DESKTOP.statusText ? 'on' : ''}" id="desktop-status">${escHtml(DESKTOP.statusText)}</div>` : ''}
               <div class="ls-live ac-live ${VOICE.interimText ? 'hearing' : ''}" id="live-transcript">
                 <span class="ls-live-text"><span id="live-transcript-text">${escHtml(VOICE.interimText || '')}</span><span class="interim-caret">▊</span></span>
               </div>
