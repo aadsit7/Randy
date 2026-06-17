@@ -447,12 +447,15 @@
         /* Narrow screens: stack the split back to top (mic) / bottom (results). */
         .split-row { flex-direction: column; }
         .top-stage { border-right: none; border-bottom: 1px solid var(--divider); box-shadow: 0 6px 22px rgba(22,31,91,0.05); }
-        .console { padding: 16px 14px; }
-        .console-inner { gap: 18px; }
-        .console-orb .orb-wrap { width: 96px; height: 96px; }
-        .console-orb .voice-orb { width: 80px; height: 80px; }
+        /* Anchor the stack to the top (not centered) so the title + transcript
+           stay in view even when the console is short; tighten it to fit. */
+        .console { padding: 14px 14px; align-items: flex-start; }
+        .console-inner { gap: 12px; }
+        .cl-status { font-size: 17px; }
+        .console-orb .orb-wrap { width: 84px; height: 84px; }
+        .console-orb .voice-orb { width: 68px; height: 68px; }
         .console-orb-label { display: none; }
-        .cl-transcript { font-size: 17px; min-height: 44px; }
+        .cl-transcript { font-size: 18px; min-height: 36px; }
         .console.stage-analyzing .cl-transcript, .console.stage-researching .cl-transcript { font-size: 15.5px; }
         .cl-stage-label { font-size: 14.5px; }
         .sidebar { position: fixed; inset: 0 auto 0 0; z-index: 60; transform: translateX(-100%); transition: transform 0.22s var(--ease); box-shadow: var(--shadow-hover); width: min(320px, 86vw); }
