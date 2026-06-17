@@ -375,8 +375,71 @@
       .ac-go:hover { background: var(--primary-hover); }
       .ac-go:active { background: var(--primary-press); }
 
+      /* ===== Sidebar control group ("Options") ===== */
+      .sb-controls { padding: 2px 10px 10px; display: flex; flex-direction: column; gap: 2px; flex-shrink: 0; }
+      .sb-controls .sb-label { padding: 4px 10px 6px; }
+      .sb-ctl { display: flex; align-items: center; gap: 11px; width: 100%; background: transparent; border: none; color: rgba(255,255,255,0.85); font-size: 13px; font-weight: 600; padding: 10px 10px; border-radius: 10px; cursor: pointer; transition: background 0.12s, color 0.12s; text-align: left; font-family: inherit; }
+      .sb-ctl:hover:not(:disabled) { background: rgba(255,255,255,0.08); color: #fff; }
+      .sb-ctl:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--cyan); }
+      .sb-ctl:disabled { opacity: 0.4; cursor: not-allowed; }
+      .sb-ctl i { flex-shrink: 0; color: rgba(255,255,255,0.65); transition: color 0.12s; }
+      .sb-ctl:hover:not(:disabled) i { color: rgba(255,255,255,0.9); }
+      .sb-ctl .sb-ctl-label { flex: 1; min-width: 0; }
+      .sb-ctl.danger:hover:not(:disabled) { background: rgba(220,38,38,0.20); color: #fff; }
+      .sb-ctl.danger:hover:not(:disabled) i { color: #fff; }
+      .sb-switch { position: relative; width: 40px; height: 22px; border-radius: 999px; background: rgba(255,255,255,0.22); flex-shrink: 0; transition: background 0.2s; }
+      .sb-switch.on { background: var(--cyan); }
+      .sb-switch::after { content: ''; position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%; background: #fff; transition: left 0.2s; box-shadow: 0 1px 2px rgba(22,31,91,0.25); }
+      .sb-switch.on::after { left: 20px; }
+      .sb-divider { height: 1px; background: rgba(255,255,255,0.12); margin: 8px 14px; flex-shrink: 0; }
+
+      /* ================================================================
+       * VOICE CONSOLE — the main stage: mic orb + live voice-to-text +
+       * what Randy is doing. Pinned above the composer, ~a third of the view.
+       * ================================================================ */
+      .console { flex-shrink: 0; background: #fff; border-top: 1px solid var(--divider); box-shadow: 0 -6px 22px rgba(22,31,91,0.05); padding: 22px 24px; height: clamp(244px, 33vh, 360px); display: flex; align-items: center; }
+      .console-inner { max-width: 880px; width: 100%; margin: 0 auto; display: flex; align-items: center; gap: 34px; }
+
+      .console-orb { display: flex; flex-direction: column; align-items: center; gap: 13px; flex-shrink: 0; }
+      .console-orb .orb-wrap { margin-bottom: 0; }
+      .console-orb-label { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--n500); transition: color 0.2s; }
+      .console.stage-listening .console-orb-label { color: var(--primary); }
+      .console.stage-analyzing .console-orb-label { color: #B45309; }
+      .console.stage-researching .console-orb-label { color: #047857; }
+      .console.stage-speaking .console-orb-label { color: var(--navy-deep); }
+
+      .console-live { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+      .cl-stage { display: flex; align-items: center; gap: 13px; }
+      .cl-stage-ic { width: 42px; height: 42px; border-radius: 12px; display: grid; place-items: center; flex-shrink: 0; background: var(--n100); color: var(--n500); transition: background 0.2s, color 0.2s; }
+      .console.stage-listening .cl-stage-ic { background: var(--quote); color: var(--primary); }
+      .console.stage-analyzing .cl-stage-ic { background: #FFFBEB; color: #B45309; }
+      .console.stage-researching .cl-stage-ic { background: #ECFDF5; color: #047857; }
+      .console.stage-speaking .cl-stage-ic { background: rgba(49,209,255,0.16); color: var(--navy-deep); }
+      .cl-stage-titles { min-width: 0; }
+      .cl-stage-label { font-size: 16.5px; font-weight: 700; color: var(--navy-deep); letter-spacing: -0.01em; line-height: 1.25; }
+      .cl-stage-sub { font-size: 12px; color: var(--n500); line-height: 1.3; margin-top: 1px; }
+      .cl-stats { margin-left: auto; flex-shrink: 0; font-size: 11.5px; font-weight: 700; color: var(--n600); background: var(--n100); padding: 5px 13px; border-radius: 999px; white-space: nowrap; }
+      .cl-stats.busy { color: var(--primary); background: var(--quote); }
+
+      .cl-transcript { margin-top: 16px; font-size: 21px; font-weight: 500; line-height: 1.4; color: var(--navy-deep); letter-spacing: -0.01em; min-height: 58px; max-height: 132px; overflow-y: auto; text-wrap: pretty; }
+      .cl-transcript .interim-caret { font-size: 0.7em; }
+      .console.stage-analyzing .cl-transcript, .console.stage-researching .cl-transcript { font-size: 18px; }
+      .cl-prompt { margin: 14px 0 0; font-size: 14.5px; line-height: 1.6; color: var(--gray); max-width: 56ch; text-wrap: pretty; }
+      .cl-desktop { margin-top: 10px; font-size: 11px; font-weight: 600; color: var(--n500); display: inline-flex; align-items: center; gap: 6px; }
+      .cl-desktop.on { color: var(--primary); }
+      .cl-foot { margin-top: 12px; }
+      .cl-foot .ls-nearmiss { max-width: 100%; }
+
       /* ===== Responsive ===== */
       @media (max-width: 1023px) {
+        .console { height: clamp(208px, 30vh, 300px); padding: 16px 14px; }
+        .console-inner { gap: 18px; }
+        .console-orb .orb-wrap { width: 96px; height: 96px; }
+        .console-orb .voice-orb { width: 80px; height: 80px; }
+        .console-orb-label { display: none; }
+        .cl-transcript { font-size: 17px; min-height: 44px; }
+        .console.stage-analyzing .cl-transcript, .console.stage-researching .cl-transcript { font-size: 15.5px; }
+        .cl-stage-label { font-size: 14.5px; }
         .sidebar { position: fixed; inset: 0 auto 0 0; z-index: 60; transform: translateX(-100%); transition: transform 0.22s var(--ease); box-shadow: var(--shadow-hover); width: min(320px, 86vw); }
         .sidebar.open { transform: translateX(0); }
         .sidebar-scrim { display: block; position: fixed; inset: 0; z-index: 55; background: rgba(22,31,91,0.45); opacity: 0; pointer-events: none; transition: opacity 0.2s; }
@@ -3154,6 +3217,7 @@
       function renderSidebar() {
         const history = STATE.sessionHistory;
         const filtered = filterHistory(history, STATE.historyQuery);
+        const slot = STATE.slots[0];
         return `
           <aside class="sidebar ${STATE.historyOpen ? 'open' : ''}" data-screen-label="Sidebar">
             <div class="sb-brand">
@@ -3166,6 +3230,25 @@
             <button class="sb-new" data-action="new-chat" title="Start a new chat — the current one is saved below">
               <i data-lucide="square-pen" class="w-4 h-4"></i>New chat
             </button>
+            <div class="sb-controls">
+              <div class="sb-label">Options</div>
+              <button class="sb-ctl" data-action="toggle-speak-answers" title="${slot.speakAnswers ? 'Randy reads each answer out loud' : 'Answers show in the chat only'}">
+                <i data-lucide="${slot.speakAnswers ? 'volume-2' : 'volume-x'}" class="w-4 h-4"></i>
+                <span class="sb-ctl-label">Read answers aloud</span>
+                <span class="sb-switch ${slot.speakAnswers ? 'on' : ''}" role="switch" aria-checked="${!!slot.speakAnswers}" tabindex="0" data-action="toggle-speak-answers" aria-label="Read answers aloud"></span>
+              </button>
+              ${PIP.supported ? `
+                <button class="sb-ctl ${PIP.window ? 'active' : ''}" data-action="pop-out-chat" data-idx="0" title="${PIP.window ? 'Close the pop-out chat window' : 'Pop out chat — floats on top while you use other apps'}">
+                  <i data-lucide="picture-in-picture-2" class="w-4 h-4"></i>
+                  <span class="sb-ctl-label">${PIP.window ? 'Close pop-out window' : 'Pop out window'}</span>
+                </button>
+              ` : ''}
+              <button class="sb-ctl danger" data-action="clear-chat" data-idx="0" ${slot.messages.length === 0 ? 'disabled' : ''} title="Clear the current chat">
+                <i data-lucide="trash-2" class="w-4 h-4"></i>
+                <span class="sb-ctl-label">Clear chat</span>
+              </button>
+            </div>
+            <div class="sb-divider"></div>
             ${history.length > 0 ? `
               <div class="sb-search">
                 <i data-lucide="search" class="sb-search-ic w-3.5 h-3.5"></i>
@@ -3232,37 +3315,6 @@
               <div class="conv-title">${escHtml(slot.label)}</div>
               <div class="conv-sub">${sub}</div>
             </div>
-            <div class="head-actions">
-              ${renderVoicePill(vm, idx)}
-              ${PIP.supported ? `
-                <button class="icon-btn ${PIP.window ? 'active' : ''}" title="${PIP.window ? 'Close the pop-out chat window' : 'Pop out chat — floats on top while you use other apps'}" aria-label="${PIP.window ? 'Close pop-out chat' : 'Pop out chat'}" data-action="pop-out-chat" data-idx="${idx}">
-                  <i data-lucide="picture-in-picture-2" class="w-5 h-5"></i>
-                </button>
-              ` : ''}
-              <button class="icon-btn" title="More actions" aria-label="More actions" aria-haspopup="true" aria-expanded="${STATE.cardMenuOpen ? 'true' : 'false'}" data-action="toggle-card-menu" data-idx="${idx}">
-                <i data-lucide="more-vertical" class="w-5 h-5"></i>
-              </button>
-            </div>
-            ${STATE.cardMenuOpen ? `
-              <div class="overflow-menu" data-menu="card">
-                <button data-action="new-chat">
-                  <i data-lucide="square-pen" class="w-4 h-4"></i> New chat
-                </button>
-                <button data-action="toggle-speak-answers">
-                  <i data-lucide="${slot.speakAnswers ? 'volume-2' : 'volume-x'}" class="w-4 h-4"></i> Read answers aloud
-                  <span class="menu-toggle-state ${slot.speakAnswers ? 'on' : ''}">${slot.speakAnswers ? 'ON' : 'OFF'}</span>
-                </button>
-                ${on ? `
-                  <button data-action="toggle-listen">
-                    <i data-lucide="power" class="w-4 h-4"></i> Turn Randy off
-                  </button>
-                ` : ''}
-                <hr>
-                <button class="danger" data-action="clear-chat" data-idx="${idx}" ${slot.messages.length === 0 ? 'disabled' : ''}>
-                  <i data-lucide="trash-2" class="w-4 h-4"></i> Clear chat
-                </button>
-              </div>
-            ` : ''}
           </header>`;
       }
 
@@ -3313,42 +3365,117 @@
           </div>`;
       }
 
-      function renderHero(slot, idx, vm) {
+      // What is Randy doing right now? One model drives the console's orb label,
+      // stage badge, and the big live text — mirrors pipLiveModel so the main
+      // stage and the pop-out never disagree.
+      function consoleModel(slot, vm) {
+        if (!VOICE.srSupported) return { stageKey: 'off', orbLabel: 'Unavailable', icon: 'mic-off', label: 'Voice needs Chrome or Edge', sub: 'You can still type your questions below', mode: 'prompt', text: 'Randy listens through the browser\u2019s speech engine, which runs in Chrome or Edge. Type to him here anytime.' };
+        if (slot.isSpeaking) return { stageKey: 'speaking', orbLabel: 'Talking', icon: 'volume-2', label: 'Randy is talking', sub: 'Reading the answer aloud — tap the orb to stop', mode: 'prompt', text: '' };
+        if (slot.loading) {
+          const lastUser = slot.messages.slice().reverse().find(m => m.role === 'user');
+          const researching = lastUser && lastUser.kind === 'assist-q';
+          return { stageKey: 'researching', orbLabel: researching ? 'Researching' : 'Answering', icon: 'search', label: researching ? 'Researching the support docs' : 'Writing the answer', sub: researching ? 'Checking Recast & Microsoft documentation' : 'Putting the answer together', mode: 'question', text: lastUser ? lastUser.content : '' };
+        }
+        if (TECH.pending) return { stageKey: 'analyzing', orbLabel: 'Analyzing', icon: 'scan-search', label: 'Analyzing the question', sub: 'Deciding whether this needs an answer', mode: 'question', text: TECH.activeText || VOICE.interimText || '' };
+        if (slot.listenOn) return { stageKey: 'listening', orbLabel: 'Listening', icon: 'ear', label: 'Listening for questions', sub: 'Randy is on the call — speak naturally', mode: 'transcript', text: VOICE.interimText || '' };
+        return { stageKey: 'off', orbLabel: 'Off', icon: 'mic', label: 'Randy is off', sub: 'Tap the mic to start listening', mode: 'prompt', text: 'Turn Randy on and he listens to your call, spots the technical questions, and answers them right here — or just type below anytime.' };
+      }
+
+      // The main stage: mic orb + live voice-to-text + what Randy is doing.
+      function renderConsole(slot, idx, vm) {
+        const cm = consoleModel(slot, vm);
+        const showMeta = slot.listenOn && VOICE.srSupported;
+        const last = TECH.decisions[TECH.decisions.length - 1];
+        const queued = TECH.questionQueue.length;
+        const nearMiss = (!last || !last.accepted)
+          ? TECH.decisions.slice().reverse().find(d => !d.accepted && d.nearMiss)
+          : null;
+        const baseStats = TECH.answered + ' answered · ' + TECH.heard + ' heard';
+        const stats = TECH.pending ? 'Checking a question…' : (queued ? queued + ' queued · ' + baseStats : baseStats);
+
+        // The live transcript node carries the patchable id ONLY while Randy is
+        // actively hearing the call (listening / speaking), so the in-place
+        // interim patch never clobbers the settled question shown mid-analysis.
+        const liveNode = slot.listenOn && (cm.stageKey === 'listening' || cm.stageKey === 'speaking');
+        let body;
+        if (liveNode) {
+          const caret = cm.stageKey === 'listening' ? '<span class="interim-caret">▊</span>' : '';
+          body = `<div class="cl-transcript ac-live ${VOICE.interimText ? 'hearing' : ''}" id="live-transcript"><span id="live-transcript-text">${escHtml(VOICE.interimText || '')}</span>${caret}</div>`;
+        } else if (cm.mode === 'question') {
+          body = cm.text ? `<div class="cl-transcript">${escHtml(cm.text)}</div>` : `<div class="cl-prompt">Working on it…</div>`;
+        } else {
+          body = cm.text ? `<div class="cl-prompt">${escHtml(cm.text)}</div>` : '';
+        }
+
         return `
-          <div class="hero">
-            <div class="orb-wrap ${vm.live ? 'live' : ''}">
-              <span class="orb-ring"></span>
-              <span class="orb-ring d"></span>
-              <button class="voice-orb ${vm.orbClass}" title="${escAttr(vm.title)}" aria-label="${escAttr(vm.title)}" data-action="${vm.action}" data-idx="${idx}" ${vm.disabled ? 'disabled' : ''}>
-                ${vm.orbInner}
-              </button>
+          <div class="console stage-${cm.stageKey}">
+            <div class="console-inner">
+              <div class="console-orb">
+                <div class="orb-wrap ${vm.live ? 'live' : ''}">
+                  <span class="orb-ring"></span>
+                  <span class="orb-ring d"></span>
+                  <button class="voice-orb ${vm.orbClass}" title="${escAttr(vm.title)}" aria-label="${escAttr(vm.title)}" data-action="${vm.action}" data-idx="${idx}" ${vm.disabled ? 'disabled' : ''}>
+                    ${vm.orbInner}
+                  </button>
+                </div>
+                <div class="console-orb-label">${escHtml(cm.orbLabel)}</div>
+              </div>
+              <div class="console-live">
+                <div class="cl-stage">
+                  <span class="cl-stage-ic"><i data-lucide="${cm.icon}" class="w-5 h-5"></i></span>
+                  <div class="cl-stage-titles">
+                    <div class="cl-stage-label">${escHtml(cm.label)}</div>
+                    <div class="cl-stage-sub">${escHtml(cm.sub)}</div>
+                  </div>
+                  ${showMeta ? `<span class="cl-stats ${TECH.pending ? 'busy' : ''}">${escHtml(stats)}</span>` : ''}
+                </div>
+                ${body}
+                ${DESKTOP.on ? `<div class="cl-desktop ${DESKTOP.statusText ? 'on' : ''}" id="desktop-status">${escHtml(DESKTOP.statusText)}</div>` : ''}
+                ${showMeta && (nearMiss || last) ? `<div class="cl-foot">${nearMiss ? `
+                  <button class="ls-nearmiss" data-action="force-answer" data-text="${escAttr(nearMiss.text)}" title="Randy skipped this — tap to answer it anyway">
+                    <i data-lucide="help-circle" class="w-3 h-3"></i>
+                    <span>${escHtml(truncate(nearMiss.text, 70))} · answer this?</span>
+                  </button>
+                ` : `
+                  <div class="ls-last">
+                    <i data-lucide="${last.accepted ? 'check' : 'minus'}" class="w-3 h-3 ${last.accepted ? 'ok' : 'skip'}"></i>
+                    <span>${escHtml(truncate(last.text, 90))} · ${Math.round((last.confidence || 0) * 100)}%</span>
+                  </div>
+                `}</div>` : ''}
+              </div>
             </div>
-            <div class="hero-name">${escHtml(slot.voiceName || slot.label)}</div>
-            <div class="hero-sub">Your Recast product expert. Turn him on and he listens to the call, spots technical questions, and answers them here — or just type below.</div>
-            <div class="hero-status ${vm.statusClass}"><span class="st-dot"></span>${vm.statusText}</div>
+          </div>`;
+      }
+
+      function renderHomeEmpty(slot) {
+        return `
+          <div style="max-width:520px;margin:0 auto;text-align:center;padding:7vh 20px 24px;display:flex;flex-direction:column;align-items:center;gap:14px">
+            <div style="font-size:11px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;color:var(--n400)">Recast · SE Assistant</div>
+            <h2 style="font-size:26px;font-weight:700;letter-spacing:-0.02em;color:var(--navy-deep);margin:0">Hey, I&rsquo;m ${escHtml(slot.voiceName || slot.label)}.</h2>
+            <p style="font-size:14.5px;line-height:1.65;color:var(--gray);margin:0;text-wrap:pretty">Your Recast product expert. Use the mic below and I&rsquo;ll listen to your call, catch the technical questions, and answer them right here &mdash; or just type to me anytime.</p>
           </div>`;
       }
 
       function renderChat(slot, idx) {
         const vm = voiceModel(slot, idx);
+        const hasMsgs = slot.messages.length > 0;
         return `
           ${renderChatHeader(slot, idx, vm)}
-          ${slot.listenOn && VOICE.srSupported ? renderLiveStrip(slot, idx) : ''}
           <div id="home-scroll-${idx}" class="msg-scroll">
             <div class="msg-col">
-              ${slot.messages.length === 0 ? renderHero(slot, idx, vm) : slot.messages.map((m, mi) => `
+              ${hasMsgs ? slot.messages.map((m, mi) => `
                 <div class="msg-row ${m.role === 'user' ? 'me' : ''}">
                   ${m.role === 'user' ? renderUserMessage(m) : renderBotMessage(slot, m, mi, idx)}
                 </div>
-              `).join('')}
-              ${slot.loading ? `
+              `).join('') + (slot.loading ? `
                 <div class="msg-row">
                   <div class="msg-av">${escHtml(slot.label.charAt(0))}</div>
                   <div class="chat-bubble chat-bot typing"><span class="typing-dot"></span><span class="typing-dot"></span><span class="typing-dot"></span></div>
                 </div>
-              ` : ''}
+              ` : '') : renderHomeEmpty(slot)}
             </div>
           </div>
+          ${renderConsole(slot, idx, vm)}
           <div class="composer-zone">
             <div class="composer">
               <textarea id="home-input-${idx}" class="composer-input" rows="1" placeholder="Message ${escAttr(slot.label)}…" ${slot.loading ? 'disabled' : ''}>${escHtml(slot.inputText || '')}</textarea>
