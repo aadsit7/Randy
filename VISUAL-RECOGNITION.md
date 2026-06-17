@@ -5,10 +5,15 @@ screen/tab**, recognize a question in it with a **vision model (Claude)**, and
 feed that question into the **same answer pipeline** the microphone and
 computer-audio paths already use.
 
-> **Status (2026-06):** proposal. Decisions locked: source = the shared
-> screen (not Randy's own page); recognition = Claude vision (not in-browser
-> OCR). Everything below targets `index.html` plus a one-line allow change in
-> `apps-script.gs`.
+> **Status (2026-06):** **shipped** in `index.html`. The shared screen's video
+> track is now retained (was discarded), a "Read screen" button + `Alt+Shift+R`
+> hotkey grab one frame, a Claude vision call (`SCREEN_VISION_SYSTEM` /
+> `SCREEN_VISION_SCHEMA`, on the Haiku classifier model) extracts a clean
+> question, and it is answered through the existing `runAssistAnswer` path —
+> the same chat spoken questions use. No backend change was needed: the proxy
+> already forwards image content blocks to Anthropic verbatim. Region-select
+> crop (§3c) is the remaining fast-follow. Decisions locked: source = the
+> shared screen; recognition = Claude vision.
 
 ---
 
