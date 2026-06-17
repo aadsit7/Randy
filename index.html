@@ -2188,6 +2188,33 @@
        * feeds — so answers happen the same way regardless of source.
        * ================================================================ */
 
+      // PCM tap that runs OFF the main thread. The old ScriptProcessorNode
+      // fired its callback on the main thread, so every audio block competed
+      // with rendering and made the page lag while computer-audio capture was
+      // running. This AudioWorklet does the same job on the audio thread and
+      // batches samples into 4096-frame blocks so the main-thread VAD math in
+      // processDesktopBlock() stays identical. Loaded from a Blob URL to keep
+      // the app single-file. NOTE: keep this free of ${...} — it's a template.
+      const PCM_WORKLET_SRC = `
+        class RandyPCM extends AudioWorkletProcessor {
+          constructor() { super(); this._buf = new Float32Array(4096); this._n = 0; }
+          process(inputs) {
+            const ch = inputs[0] && inputs[0][0];
+            if (ch) {
+              for (let i = 0; i < ch.length; i++) {
+                this._buf[this._n++] = ch[i];
+                if (this._n === this._buf.length) {
+                  this.port.postMessage(this._buf.slice(0));
+                  this._n = 0;
+                }
+              }
+            }
+            return true;
+          }
+        }
+        registerProcessor('randy-pcm', RandyPCM);
+      `;
+
       // The transcription worker. Loaded from a Blob URL so it stays inside
       // this single-file app; it pulls Transformers.js from a CDN and keeps
       // WASM single-threaded so no cross-origin isolation (SharedArrayBuffer)
@@ -2240,7 +2267,22 @@
         if (DESKTOP.on || !DESKTOP.supported) return;
         let stream;
         try {
-          stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+          // We only ever want the AUDIO from this share — the video track is
+          // stopped immediately below. Requesting a full-res/full-framerate
+          // screen capture just to discard it is what makes the UI freeze the
+          // moment you pick a surface in the picker, so constrain the video to
+          // a tiny 1 fps stream: the capture pipeline becomes nearly free while
+          // the picker still offers the same "share tab/system audio" choices.
+          // The picker hints keep surface-switching available and stop the
+          // captured audio from being echoed back out of the local speakers.
+          stream = await navigator.mediaDevices.getDisplayMedia({
+            video: { frameRate: { ideal: 1, max: 1 }, width: { max: 640 }, height: { max: 360 } },
+            audio: true,
+            selfBrowserSurface: 'include',
+            surfaceSwitching: 'include',
+            systemAudio: 'include',
+            suppressLocalAudioPlayback: false
+          });
         } catch (err) {
           // Picker dismissed or permission denied — continue mic-only.
           return;
@@ -2266,16 +2308,39 @@
           DESKTOP.audioCtx = new Ctx({ sampleRate: ASR.SAMPLE_RATE });
           if (DESKTOP.audioCtx.state === 'suspended') { try { await DESKTOP.audioCtx.resume(); } catch {} }
           DESKTOP.sourceNode = DESKTOP.audioCtx.createMediaStreamSource(new MediaStream([audioTracks[0]]));
-          const proc = DESKTOP.audioCtx.createScriptProcessor(4096, 1, 1);
-          proc.onaudioprocess = (e) => { processDesktopBlock(e.inputBuffer.getChannelData(0)); };
-          DESKTOP.sourceNode.connect(proc);
-          // ScriptProcessor only runs when connected to a destination; route it
-          // through a silent gain so the call isn't echoed back to the speakers.
+
+          // A silent gain → destination "pulls" the graph so the tap keeps
+          // running without echoing the captured audio back to the speakers.
           const sink = DESKTOP.audioCtx.createGain();
           sink.gain.value = 0;
-          proc.connect(sink);
           sink.connect(DESKTOP.audioCtx.destination);
-          DESKTOP.procNode = proc;
+
+          // Prefer the AudioWorklet (off the main thread → no UI lag). Fall
+          // back to the deprecated ScriptProcessor only where it's missing.
+          let usingWorklet = false;
+          if (DESKTOP.audioCtx.audioWorklet) {
+            try {
+              if (!DESKTOP.workletUrl) {
+                DESKTOP.workletUrl = URL.createObjectURL(new Blob([PCM_WORKLET_SRC], { type: 'text/javascript' }));
+              }
+              await DESKTOP.audioCtx.audioWorklet.addModule(DESKTOP.workletUrl);
+              const node = new AudioWorkletNode(DESKTOP.audioCtx, 'randy-pcm');
+              node.port.onmessage = (e) => processDesktopBlock(e.data);
+              DESKTOP.sourceNode.connect(node);
+              node.connect(sink);
+              DESKTOP.procNode = node;
+              usingWorklet = true;
+            } catch (e) {
+              console.warn('AudioWorklet unavailable — using ScriptProcessor fallback:', (e && e.message) || e);
+            }
+          }
+          if (!usingWorklet) {
+            const proc = DESKTOP.audioCtx.createScriptProcessor(4096, 1, 1);
+            proc.onaudioprocess = (e) => { processDesktopBlock(e.inputBuffer.getChannelData(0)); };
+            DESKTOP.sourceNode.connect(proc);
+            proc.connect(sink);
+            DESKTOP.procNode = proc;
+          }
         } catch (err) {
           showToast('Randy could not set up computer-audio capture — using mic only.');
           stopDesktopCapture();
@@ -2415,12 +2480,20 @@
       }
 
       function stopDesktopCapture() {
-        if (DESKTOP.procNode) { try { DESKTOP.procNode.disconnect(); DESKTOP.procNode.onaudioprocess = null; } catch {} DESKTOP.procNode = null; }
+        if (DESKTOP.procNode) {
+          try {
+            DESKTOP.procNode.disconnect();
+            if (DESKTOP.procNode.port) DESKTOP.procNode.port.onmessage = null; // AudioWorkletNode
+            DESKTOP.procNode.onaudioprocess = null;                            // ScriptProcessorNode
+          } catch {}
+          DESKTOP.procNode = null;
+        }
         if (DESKTOP.sourceNode) { try { DESKTOP.sourceNode.disconnect(); } catch {} DESKTOP.sourceNode = null; }
         if (DESKTOP.audioCtx) { try { DESKTOP.audioCtx.close(); } catch {} DESKTOP.audioCtx = null; }
         if (DESKTOP.stream) { try { DESKTOP.stream.getTracks().forEach(t => t.stop()); } catch {} DESKTOP.stream = null; }
         if (DESKTOP.worker) { try { DESKTOP.worker.terminate(); } catch {} DESKTOP.worker = null; }
         if (DESKTOP.workerUrl) { try { URL.revokeObjectURL(DESKTOP.workerUrl); } catch {} DESKTOP.workerUrl = null; }
+        if (DESKTOP.workletUrl) { try { URL.revokeObjectURL(DESKTOP.workletUrl); } catch {} DESKTOP.workletUrl = null; }
         DESKTOP.on = false;
         DESKTOP.workerReady = false;
         DESKTOP.modelLoading = false;
