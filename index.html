@@ -220,35 +220,6 @@
       .interim-caret { display: inline-block; width: 6px; margin-left: 2px; animation: interim-blink 1s steps(2,end) infinite; color: var(--primary); }
       @keyframes interim-blink { 50% { opacity: 0; } }
 
-      /* Phase-aware live strip: while Randy analyzes/answers a detected
-         question the wave swaps to a spinner and the question is shown as a
-         chip, but the transcript row below keeps streaming live speech — so
-         it's always clear Randy never stops hearing the call. */
-      .ls-spin { display: grid; place-items: center; width: 18px; color: var(--primary); flex-shrink: 0; }
-      .ls-spin i { animation: vpSpin 0.9s linear infinite; }
-      .live-strip.busy { background: linear-gradient(0deg, rgba(3,114,255,0.06), rgba(3,114,255,0.06)), #fff; }
-      .live-strip.busy .ls-title { color: var(--primary); }
-      .ls-work { display: flex; align-items: center; gap: 7px; min-width: 0; margin-top: 1px; }
-      .ls-work-tag { flex-shrink: 0; font-size: 9.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--primary); background: var(--quote, #eef4ff); padding: 2px 7px; border-radius: 999px; }
-      .ls-work-q { font-size: 12px; color: var(--navy); font-weight: 500; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-      .ls-mic { color: var(--n400); flex-shrink: 0; }
-      .ls-live.hearing .ls-mic { color: var(--primary); }
-
-      /* Unread answers — previous Q&As that got bumped to History when Randy
-         moved on to a new question. Flagged in the sidebar and via a banner. */
-      .sb-unread-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--cyan); margin-right: 6px; flex-shrink: 0; vertical-align: middle; animation: sbUnreadPulse 2s ease-out infinite; }
-      @keyframes sbUnreadPulse { 0% { box-shadow: 0 0 0 0 rgba(0,191,255,0.55); } 70%, 100% { box-shadow: 0 0 0 5px rgba(0,191,255,0); } }
-      .sb-item.unread .sb-item-title { font-weight: 700; }
-      .sb-unread-tag { color: var(--cyan); font-weight: 700; }
-      .sb-toggle { position: relative; }
-      .sb-toggle-badge { position: absolute; top: 2px; right: 2px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 999px; background: var(--cyan); color: var(--navy-deep); font-size: 10px; font-weight: 800; display: grid; place-items: center; line-height: 1; }
-      .unread-banner { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; padding: 11px 24px; background: var(--quote, #eef4ff); border: none; border-bottom: 1px solid var(--divider); border-left: 3px solid var(--cyan); cursor: pointer; transition: background 0.12s; flex-shrink: 0; font-family: inherit; }
-      .unread-banner:hover { background: #E2EEFF; }
-      .ub-ic { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: var(--cyan); color: var(--navy-deep); flex-shrink: 0; }
-      .ub-text { flex: 1; min-width: 0; font-size: 12.5px; color: var(--navy); line-height: 1.4; }
-      .ub-text strong { font-weight: 700; }
-      .ub-go { display: inline-flex; align-items: center; gap: 2px; flex-shrink: 0; font-size: 12px; font-weight: 700; color: var(--primary); }
-
       /* ===== Message area ===== */
       .msg-scroll { flex: 1; min-height: 0; overflow-y: auto; background: var(--n25); }
       .msg-col { max-width: 768px; margin: 0 auto; padding: 28px 24px 16px; display: flex; flex-direction: column; gap: 16px; }
@@ -377,6 +348,33 @@
       .voice-toast { position: fixed; bottom: 92px; left: 50%; transform: translateX(-50%); z-index: 100; background: var(--navy-deep); color: #fff; padding: 11px 18px; border-radius: 12px; font-size: 13px; font-weight: 500; box-shadow: 0 20px 48px rgba(22,31,91,0.30); pointer-events: none; animation: toastIn 0.25s ease-out; max-width: min(92vw, 480px); text-align: center; }
       @keyframes toastIn { from { opacity: 0; transform: translate(-50%, 12px); } to { opacity: 1; transform: translate(-50%, 0); } }
 
+      /* Visually hidden but available to screen readers (live region). */
+      .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+
+      /* ===== Audio-mode chooser ("How should Randy listen?") ===== */
+      .ac-scrim, .ac-scrim * { box-sizing: border-box; }
+      .ac-scrim { position: fixed; inset: 0; z-index: 120; display: grid; place-items: center; padding: 20px; background: rgba(22,31,91,0.42); backdrop-filter: blur(2px); animation: acFade 0.18s ease-out; }
+      @keyframes acFade { from { opacity: 0; } to { opacity: 1; } }
+      .ac-modal { position: relative; width: min(440px, 100%); background: #fff; border-radius: var(--radius); box-shadow: 0 24px 64px rgba(22,31,91,0.34); padding: 26px 24px 22px; animation: acPop 0.22s var(--ease); }
+      @keyframes acPop { from { opacity: 0; transform: translateY(10px) scale(0.985); } to { opacity: 1; transform: translateY(0) scale(1); } }
+      .ac-modal:focus { outline: none; }
+      .ac-x { position: absolute; top: 13px; right: 13px; width: 32px; height: 32px; display: grid; place-items: center; border: none; background: transparent; color: var(--n500); border-radius: 8px; cursor: pointer; transition: background 0.12s, color 0.12s; }
+      .ac-x:hover { background: var(--n100); color: var(--navy-deep); }
+      .ac-title { font-size: 18px; font-weight: 700; color: var(--navy-deep); letter-spacing: -0.01em; padding-right: 28px; }
+      .ac-sub { margin: 5px 0 18px; font-size: 13px; color: var(--n600); line-height: 1.45; }
+      .ac-seg { position: relative; display: grid; grid-template-columns: 1fr 1fr; background: var(--n100); border-radius: 999px; padding: 4px; }
+      .ac-seg-thumb { position: absolute; top: 4px; bottom: 4px; left: 4px; width: calc(50% - 4px); border-radius: 999px; background: var(--primary); box-shadow: var(--shadow-brand); transition: left 0.22s var(--ease); }
+      .ac-seg.right .ac-seg-thumb { left: 50%; }
+      .ac-seg-opt { position: relative; z-index: 1; background: transparent; border: none; padding: 11px 8px; font-size: 13.5px; font-weight: 600; color: var(--n600); cursor: pointer; border-radius: 999px; transition: color 0.18s; white-space: nowrap; }
+      .ac-seg-opt.on { color: #fff; }
+      .ac-desc { display: flex; gap: 12px; align-items: flex-start; margin: 16px 2px 22px; }
+      .ac-desc-ic { flex-shrink: 0; width: 38px; height: 38px; border-radius: 10px; display: grid; place-items: center; background: var(--quote); color: var(--primary); }
+      .ac-desc-sub { font-size: 11.5px; font-weight: 700; color: var(--navy); text-transform: uppercase; letter-spacing: 0.03em; margin-bottom: 3px; }
+      .ac-desc-line { font-size: 13.5px; color: var(--navy-deep); line-height: 1.5; margin: 0; }
+      .ac-go { width: 100%; display: inline-flex; align-items: center; justify-content: center; gap: 8px; background: var(--primary); color: #fff; border: none; border-radius: 999px; padding: 13px 20px; font-size: 14px; font-weight: 700; cursor: pointer; box-shadow: var(--shadow-brand); transition: background 0.12s; }
+      .ac-go:hover { background: var(--primary-hover); }
+      .ac-go:active { background: var(--primary-press); }
+
       /* ===== Responsive ===== */
       @media (max-width: 1023px) {
         .sidebar { position: fixed; inset: 0 auto 0 0; z-index: 60; transform: translateX(-100%); transition: transform 0.22s var(--ease); box-shadow: var(--shadow-hover); width: min(320px, 86vw); }
@@ -415,6 +413,8 @@
       @media (prefers-reduced-motion: reduce) {
         .orb-wrap .orb-ring, .sound-wave-bar, .typing-dot, .vp .vp-dot, .chat-avatar .status-dot, .interim-caret, .voice-toast, .vp-spin { animation: none !important; }
         .orb-wrap .orb-ring { display: none; }
+        .ac-scrim, .ac-modal { animation: none !important; }
+        .ac-seg-thumb { transition: none !important; }
       }
 
     </style>
@@ -469,7 +469,19 @@
         INTERIM_FRESH_MS: 1500,   // interim words newer than this mean speech is still flowing
         INTERIM_RECHECK_MS: 700,  // re-check cadence while waiting for a sentence to finish
         SEARCH_MAX_USES: 2,       // web searches per answer (latency budget)
-        HISTORY_PAIRS: 2          // prior assist Q&A pairs sent as context
+        HISTORY_PAIRS: 2,         // prior assist Q&A pairs sent as context
+        // Reliability ceilings — the #1 guarantee of this tool. A question
+        // Randy hears must ALWAYS reach an answer; a hung network call must
+        // never leave the pipeline frozen on "Analyzing"/"Researching" (the
+        // classic "Randy heard it but never answered"). Every stage is bounded
+        // so it always settles, and a self-healing watchdog un-sticks anything
+        // that slips through. Wedge limits sit ABOVE the matching timeout so the
+        // in-call timeout fires first and the watchdog is only ever a backstop.
+        CLASSIFY_TIMEOUT_MS: 15000,  // hard ceiling on the classifier round-trip
+        ANSWER_TIMEOUT_MS: 45000,    // hard ceiling on one research+answer call
+        WATCHDOG_MS: 4000,           // how often the self-healing watchdog checks
+        PENDING_WEDGE_MS: 22000,     // pending longer than this ⇒ classifier wedged
+        ANSWER_WEDGE_MS: 105000      // loading longer than this ⇒ answer wedged
       };
 
       /* ================================================================
@@ -711,6 +723,18 @@
           // question he overhears in the chat — no wake word. Always starts
           // off; turning it on needs a click (the mic permission requires one).
           listenOn: false,
+          // How Randy captures audio when switched on. Chosen from the
+          // "How should Randy listen?" slider each time he's turned on; the
+          // last choice is remembered.
+          //   'two-way' — microphone + the computer's own audio. The
+          //               screen/tab-share picker pops out so the call is
+          //               captured digitally, and the mic runs with echo
+          //               cancellation OFF so it overhears the speakers too.
+          //   'one-way' — microphone only, with echo cancellation / noise
+          //               suppression / auto-gain ON so Randy picks up the
+          //               user's own voice and NOT the call audio coming
+          //               from the speakers. No picker pops out.
+          audioMode: 'two-way',
           voiceName: 'Randy',
           voicePersonality: DEFAULT_VOICE_PERSONALITY,
           isListening: false,
@@ -740,6 +764,8 @@
         sessionHistory: [],
         composerExpanded: false,
         cardMenuOpen: false,
+        // The "How should Randy listen?" chooser shown when turning Randy on.
+        audioChooserOpen: false,
         settingsUnlocked: false,
         slots: [makeSlot()]
       };
@@ -802,6 +828,11 @@
         bufferTimerId: null,
         deferrals: 0,
         pending: false,           // classifier call in flight
+        pendingSince: 0,          // when the classifier gate started (wedge detection)
+        answerSince: 0,           // when the current overheard answer started (wedge detection)
+        classifyController: null, // aborts a wedged classifier round-trip
+        classifyGen: 0,           // epoch — a stale classify resolution is ignored
+        watchdogId: null,         // self-healing pipeline watchdog interval
         activeText: '',           // utterance currently being analyzed/answered (for the live band)
         questionQueue: [],        // FIFO of questions overheard while Randy was busy
         context: [],              // recent utterances for the classifier
@@ -875,6 +906,7 @@
           voiceName: s.voiceName,
           voicePersonality: s.voicePersonality,
           speakAnswers: !!s.speakAnswers,
+          audioMode: s.audioMode === 'one-way' ? 'one-way' : 'two-way',
           allowedDomains: s.allowedDomains
         }));
         try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(data)); } catch {}
@@ -910,6 +942,7 @@
             s.voicePersonality = d.voicePersonality || DEFAULT_VOICE_PERSONALITY;
             // speakAnswers (migrating the older speakResponses key)
             s.speakAnswers = !!(d.speakAnswers !== undefined ? d.speakAnswers : d.speakResponses);
+            if (d.audioMode === 'one-way' || d.audioMode === 'two-way') s.audioMode = d.audioMode;
             if (Array.isArray(d.allowedDomains)) {
               s.allowedDomains = d.allowedDomains.filter(x => typeof x === 'string' && x.trim()).map(x => x.trim());
             }
@@ -1042,17 +1075,6 @@
         if (STATE.sessionHistory.length > 50) STATE.sessionHistory.length = 50;
       }
 
-      // Unread = an answer that got bumped into History when Randy moved on to
-      // a new question, before the user had a chance to read it.
-      function unreadHistoryCount() {
-        return STATE.sessionHistory.reduce((n, h) => n + (h.unread ? 1 : 0), 0);
-      }
-      function markHistoryRead(id) {
-        const h = STATE.sessionHistory.find(x => x.id === id);
-        if (h && h.unread) { h.unread = false; return true; }
-        return false;
-      }
-
       function collectPairs(slot) {
         const pairs = [];
         for (let i = 0; i < slot.messages.length - 1; i++) {
@@ -1070,7 +1092,7 @@
       // (the client saves each one in the background), so nothing is lost.
       // Rotating the session id keeps the sheet's grouping in step with the
       // local entry. Returns true when something was actually archived.
-      function archiveChatToHistory(slot, opts) {
+      function archiveChatToHistory(slot) {
         const pairs = collectPairs(slot);
         if (!pairs.length) return false;
         const ts = Date.now();
@@ -1080,10 +1102,7 @@
           date: new Date(ts).toLocaleDateString('en-US'),
           timestamp: ts,
           pairs,
-          preview: pairs[0].question.substring(0, 120),
-          // Auto-bumped answers land unread; a manual "New chat" does not
-          // (the user was looking at it when they chose to move on).
-          unread: !!(opts && opts.unread)
+          preview: pairs[0].question.substring(0, 120)
         });
         slot.messages = [];
         SESSION_ID = genSessionId();
@@ -1735,6 +1754,10 @@
         if (VOICE.wantRunning && recognitionWanted() && !VOICE.ttsPaused && !VOICE.srRunning) {
           try { startRecognitionNow(); } catch {}
         }
+        // Also a free chance to un-stick a pipeline that wedged while the tab
+        // was throttled in the background, so a heard question isn't left
+        // frozen on "Analyzing"/"Researching" after the user returns.
+        if (listeningOn()) { try { assistWatchdogTick(); } catch {} }
       });
 
       // Force a clean recognizer restart. abort() triggers onend, which
@@ -1893,30 +1916,87 @@
        * LISTENING — one switch: mic + optional digital computer-audio tap
        * ================================================================ */
 
-      // The big mic button. ON: start listening. Randy first offers the
-      // computer-audio share (the picker — tick "share tab/system audio") so
-      // he can transcribe the call digitally even on headphones, then opens
-      // the microphone for the user's own voice. Dismiss the picker and it's
-      // mic-only, exactly as before. OFF: stop.
+      // The big mic button. OFF→ON: open the "How should Randy listen?"
+      // chooser; the chosen mode then drives startListening — one-way
+      // (microphone only) or two-way (microphone + the computer's audio via
+      // the share picker, exactly as before). ON→OFF: stop.
       async function toggleListening() {
         const slot = STATE.slots[0];
         if (!VOICE.srSupported) { showToast('Randy needs Chrome or Edge to listen'); return; }
         if (slot.listenOn) { stopListening(); return; }
-        await startListening();
+        // Turning Randy on: first ask HOW he should listen (one-way mic-only
+        // vs. two-way mic + computer audio). The capture itself starts from
+        // the chooser's confirm button, whose click supplies the fresh user
+        // activation that getDisplayMedia / getUserMedia require.
+        openAudioChooser();
       }
 
-      async function startListening() {
+      // render() rebuilds #app wholesale, so focus has to be reapplied once the
+      // new DOM exists (mirrors the composer-focus pattern elsewhere).
+      function focusAfterRender(sel) {
+        setTimeout(() => { try { document.querySelector(sel)?.focus(); } catch {} }, 40);
+      }
+
+      // One polite live region kept OUTSIDE #app (so render() never wipes it)
+      // lets screen readers hear the selected mode and its description as the
+      // slider moves — the full-rebuild render can't announce in place.
+      function announceLive(msg) {
+        let el = document.getElementById('randy-live');
+        if (!el) {
+          el = document.createElement('div');
+          el.id = 'randy-live';
+          el.className = 'sr-only';
+          el.setAttribute('aria-live', 'polite');
+          el.setAttribute('aria-atomic', 'true');
+          document.body.appendChild(el);
+        }
+        // Clear first so re-selecting the same value still re-announces.
+        el.textContent = '';
+        setTimeout(() => { el.textContent = msg; }, 30);
+      }
+
+      // Open the "How should Randy listen?" slider. Pre-selects the last mode
+      // and moves focus into the dialog for keyboard / screen-reader users.
+      function openAudioChooser() {
+        const slot = STATE.slots[0];
+        if (!VOICE.srSupported) { showToast('Randy needs Chrome or Edge to listen'); return; }
+        if (slot.listenOn) return;
+        if (slot.audioMode !== 'one-way' && slot.audioMode !== 'two-way') slot.audioMode = 'two-way';
+        STATE.audioChooserOpen = true;
+        render();
+        focusAfterRender('.ac-modal');
+      }
+
+      // Close the chooser without starting (X / backdrop / Escape) and return
+      // focus to the voice control that opened it.
+      function closeAudioChooser() {
+        if (!STATE.audioChooserOpen) return;
+        STATE.audioChooserOpen = false;
+        render();
+        focusAfterRender('.vp');
+      }
+
+      async function startListening(mode) {
         const slot = STATE.slots[0];
         if (slot.listenOn) return;
         const r = ensureRecognition();
         if (!r) { showToast('Randy needs Chrome or Edge to listen'); return; }
 
-        // Offer the digital computer-audio tap FIRST, while the click's
-        // transient activation is still fresh — getDisplayMedia requires it,
-        // and the mic getUserMedia await below would otherwise consume it.
-        // This resolves whether or not the user actually shares audio; if they
-        // dismiss the picker we just continue mic-only, exactly as before.
-        if (DESKTOP.supported) {
+        // Resolve the capture mode chosen in the "How should Randy listen?"
+        // slider, falling back to the remembered preference, then two-way.
+        const audioMode = (mode === 'one-way' || mode === 'two-way') ? mode
+          : (slot.audioMode === 'one-way' ? 'one-way' : 'two-way');
+        slot.audioMode = audioMode;
+        saveSettings();
+        const twoWay = audioMode === 'two-way';
+
+        // TWO-WAY ONLY: offer the digital computer-audio tap FIRST, while the
+        // click's transient activation is still fresh — getDisplayMedia
+        // requires it, and the mic getUserMedia await below would otherwise
+        // consume it. This resolves whether or not the user actually shares
+        // audio; if they dismiss the picker we continue mic-only.
+        // One-way mode never taps the computer's audio at all.
+        if (twoWay && DESKTOP.supported) {
           try { await startDesktopCapture(); } catch {}
         }
 
@@ -1927,33 +2007,42 @@
         // throttling, which is what keeps the restart watchdog alive while
         // the user works beside the docked pop-out with this tab hidden.
         //
-        // CRITICAL — audio processing is turned OFF on purpose. Randy is
-        // supposed to transcribe BOTH the user's voice and the call playing
-        // on the computer's speakers, but the only audio source the Web
-        // Speech recognizer can use is the system default microphone, so the
-        // "computer sound" reaches it acoustically: the mic physically hears
-        // the speakers. Chrome opens the default device once and shares that
-        // capture session with the recognizer, so the constraints we request
-        // here govern what the recognizer hears too.
+        // Mic capture. Chrome opens the default device once and shares that
+        // capture session with the Web Speech recognizer, so the constraints
+        // requested here govern what the recognizer transcribes too — which is
+        // exactly how each mode is enforced.
         //
-        //   echoCancellation — acoustic echo cancellation exists specifically
-        //     to subtract your own speaker output from the mic. That output
-        //     IS the call/desktop audio we want, so leaving it on deletes the
-        //     very thing Randy is meant to pick up. Its aggressiveness varies
-        //     by machine/OS/driver, which is why listening worked on one
-        //     computer (weak AEC, audio leaked through) but not another
-        //     (strong AEC, computer sound stripped before transcription).
-        //   noiseSuppression — treats the steady call audio as "background"
-        //     and attenuates it.
-        //   autoGainControl — rides the level toward the loudest source
-        //     (the local speaker), ducking everything else.
+        //   TWO-WAY — audio processing is turned OFF on purpose. Randy must
+        //     transcribe BOTH the user's voice and the call playing on the
+        //     speakers, and the only source the recognizer can use is the
+        //     system default microphone, so the computer's sound reaches it
+        //     acoustically: the mic physically hears the speakers.
+        //       echoCancellation subtracts your own speaker output from the
+        //         mic — but that output IS the call audio we want — so it's
+        //         OFF. Its aggressiveness varies by machine/OS/driver, which is
+        //         why acoustic capture worked on one computer (weak AEC) but
+        //         not another (strong AEC stripped the computer sound).
+        //       noiseSuppression treats the steady call audio as background and
+        //         attenuates it — OFF.
+        //       autoGainControl rides toward the loudest source (the local
+        //         speaker), ducking everything else — OFF.
+        //     All three off so desktop/call sound survives to the recognizer
+        //     the same way on every machine. (TTS self-echo is handled in
+        //     software via VOICE.recentTtsText matching.)
         //
-        // All three are disabled so desktop/call sound survives to the
-        // recognizer the same way on every computer. (TTS self-echo is
-        // already handled in software via VOICE.recentTtsText matching.)
+        //   ONE-WAY — the exact opposite. The user asked Randy to pick up ONLY
+        //     their own voice and NOT what anyone else is saying, so the
+        //     standard processing is turned ON: echo cancellation removes the
+        //     call audio leaking from the speakers, while noise suppression and
+        //     auto-gain keep the focus on the person at the mic. Combined with
+        //     never starting the computer-audio tap above, this keeps the
+        //     "only what you're saying" promise honest.
+        const micAudio = twoWay
+          ? { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+          : { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
         if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
           try {
-            VOICE.micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
+            VOICE.micStream = await navigator.mediaDevices.getUserMedia({ audio: micAudio });
             VOICE.micStream.getTracks().forEach(t => {
               t.onended = () => { VOICE.micStream = null; };
             });
@@ -1969,13 +2058,14 @@
         TECH.answered = 0;
         TECH.decisions = [];
         startRecognition();
+        startAssistWatchdog();
         // Warn right away if the answer service is unreachable, so "hears
         // but never answers" can't happen silently.
         loadRemoteConfig().then(() => {
           if (!PROXY.ready) showToast('⚠ Randy cannot reach his answer service — open Settings');
           else if (!PROXY.hasKey) showToast('⚠ The answer service has no API key — open Settings');
         });
-        showToast('Randy is listening');
+        showToast(twoWay ? 'Randy is listening — your mic and computer audio' : 'Randy is listening to your microphone');
         render();
       }
 
@@ -1988,7 +2078,14 @@
           VOICE.micStream = null;
         }
         clearAssistBuffer();
+        stopAssistWatchdog();
+        // Cancel any in-flight classifier round-trip and bump the epoch so a
+        // late resolution after teardown is ignored.
+        TECH.classifyGen++;
+        if (TECH.classifyController) { try { TECH.classifyController.abort(); } catch {} TECH.classifyController = null; }
         TECH.pending = false;
+        TECH.pendingSince = 0;
+        TECH.answerSince = 0;
         abortActiveReply();   // aborts in-flight replies and any TTS
         stopRecognition();
         stopDesktopCapture();
@@ -2115,13 +2212,18 @@
           DESKTOP.worker = new Worker(DESKTOP.workerUrl, { type: 'module' });
           DESKTOP.modelLoading = true;
           DESKTOP.worker.onmessage = onWhisperMessage;
-          DESKTOP.worker.onerror = () => {
-            setDesktopStatus('Computer audio: transcriber failed to load');
-            showToast('Live transcription model failed to load — check your connection.');
+          DESKTOP.worker.onerror = (e) => {
+            // Same graceful, silent fallback as the worker 'error' message:
+            // the mic path still works, so don't show an alarming banner/toast.
+            console.warn('desktop transcriber failed to load — using mic only:', (e && e.message) || '');
+            setDesktopStatus('');
           };
           DESKTOP.worker.postMessage({ type: 'init' });
         } catch (err) {
-          showToast('This browser can’t run the in-page transcriber. Using mic only.');
+          // Browser can't spin up the module worker — Randy stays on the mic.
+          // Silent fallback, no confusing notification.
+          console.warn('in-page transcriber unavailable — using mic only:', (err && err.message) || err);
+          setDesktopStatus('');
         }
       }
 
@@ -2136,8 +2238,13 @@
         }
         if (d.type === 'error') {
           DESKTOP.modelLoading = false;
-          setDesktopStatus('Computer audio: transcriber unavailable');
-          showToast('Live transcription couldn’t start on this device. Using mic only.');
+          // The in-browser transcriber couldn't start (WebGPU/WASM/model load).
+          // Randy keeps working on the microphone, so this is not something the
+          // user needs to see or act on — surfacing "transcriber unavailable"
+          // only confuses people. Fall back to mic-only silently; the detail is
+          // left in the console for debugging.
+          console.warn('desktop transcriber unavailable — using mic only:', d.error || '');
+          setDesktopStatus('');
           return;
         }
         if (d.type === 'result') {
@@ -2326,6 +2433,62 @@
         processAssistCandidate(next);
       }
 
+      // Self-healing watchdog — the backstop behind the per-call timeouts, and
+      // the reason a heard question can NEVER leave Randy frozen on "Analyzing"
+      // or "Researching." It mirrors the recognizer's startRecognitionWatchdog:
+      // every few seconds it looks for a stage that has been busy far longer
+      // than its own timeout should ever allow and un-sticks it. The mic stream
+      // held by startListening keeps this interval firing even in a background
+      // tab. In normal operation it never acts — the per-call timeouts settle
+      // everything first; this only earns its keep if something slips past them.
+      function startAssistWatchdog() {
+        if (TECH.watchdogId) return;
+        TECH.watchdogId = setInterval(assistWatchdogTick, ASSIST.WATCHDOG_MS);
+      }
+
+      function stopAssistWatchdog() {
+        if (TECH.watchdogId) { clearInterval(TECH.watchdogId); TECH.watchdogId = null; }
+      }
+
+      function assistWatchdogTick() {
+        const slot = STATE.slots[0];
+        if (!slot || !slot.listenOn) return;
+        const now = Date.now();
+
+        // Classifier wedged: the gate has shown "Analyzing" far longer than the
+        // classify timeout permits. Bump the epoch so the original promise
+        // can't double-fire if it ever wakes, abort the round-trip, and recover
+        // through the shared fallback so an obvious question still gets answered.
+        if (TECH.pending && TECH.pendingSince && now - TECH.pendingSince > ASSIST.PENDING_WEDGE_MS) {
+          console.warn('assist watchdog: classifier wedged — recovering');
+          TECH.classifyGen++;
+          if (TECH.classifyController) { try { TECH.classifyController.abort(); } catch {} }
+          TECH.classifyController = null;
+          TECH.pending = false;
+          TECH.pendingSince = 0;
+          const stuck = TECH.activeText || '';
+          if (stuck && !slot.loading) assistFallbackDecision(stuck);
+          else { renderAssistStatus(); drainQuestionQueue(); }
+          return;
+        }
+
+        // Answer wedged: "Researching" has been up longer than even a retrying
+        // answer could take. Abort the in-flight fetch — runAssistAnswer's own
+        // catch then frees the slot and drains the queue. If the controller is
+        // somehow gone, free the slot directly so the queue can never stall.
+        if (slot.loading && TECH.answerSince && now - TECH.answerSince > ASSIST.ANSWER_WEDGE_MS) {
+          console.warn('assist watchdog: answer wedged — recovering');
+          if (slot.abortController) {
+            try { slot.abortController.abort(); } catch {}
+          } else {
+            slot.loading = false;
+            TECH.answerSince = 0;
+            render();
+            drainQuestionQueue();
+          }
+        }
+      }
+
       // Classify (or fast-path) a finalized candidate and answer it when it
       // clears the gate. Non-answering paths drain the next queued question so
       // a skip never strands the rest of the queue.
@@ -2366,11 +2529,27 @@
         }
 
         TECH.pending = true;
+        TECH.pendingSince = Date.now();
         TECH.activeText = corrected;   // surfaced in the live "Analyzing question" band
+        // New classify cycle. The epoch lets a late resolution be ignored if
+        // the watchdog already gave up on this one and recovered the pipeline,
+        // so a question can never be answered twice. The controller lets the
+        // watchdog abort a wedged round-trip.
+        const gen = ++TECH.classifyGen;
+        const classifyCtl = new AbortController();
+        TECH.classifyController = classifyCtl;
         renderAssistStatus();
-        classifyUtterance(corrected, TECH.context.slice(0, -1))
+        classifyUtterance(corrected, TECH.context.slice(0, -1), classifyCtl.signal)
           .then(decision => {
+            if (gen !== TECH.classifyGen) return;   // superseded by the watchdog — ignore
             TECH.pending = false;
+            TECH.pendingSince = 0;
+            TECH.classifyController = null;
+            // The reply came back but we couldn't read a verdict from it (proxy
+            // didn't forward structured output, or returned prose/empty). Don't
+            // drop an obvious technical question over a format glitch — fall
+            // back to answering, the same net the network-error path uses.
+            if (decision.parsed === false) { assistFallbackDecision(corrected); return; }
             const conf = typeof decision.confidence === 'number' ? decision.confidence : 0;
             const accepted =
               decision.needs_answer === true &&
@@ -2393,22 +2572,35 @@
             runAssistAnswer(0, toAnswer);
           })
           .catch(err => {
+            if (gen !== TECH.classifyGen) return;   // superseded by the watchdog — ignore
             TECH.pending = false;
+            TECH.pendingSince = 0;
+            TECH.classifyController = null;
             console.error('classifier failed:', err);
             toastPipelineError("Randy couldn't check a question", err);
-            // Keep the SE alive: obvious technical questions are answered
-            // even when the classifier service is down.
-            if (looksLikeTechQuestion(corrected)) {
-              recordAssistDecision(corrected, true, 0.7, 'fallback match');
-              TECH.lastSubmitted = corrected;
-              TECH.lastSubmittedAt = Date.now();
-              runAssistAnswer(0, corrected);
-            } else {
-              recordAssistDecision(corrected, false, 0, 'check failed');
-              renderAssistStatus();
-              drainQuestionQueue();
-            }
+            // Keep the SE alive: obvious technical questions are answered even
+            // when the classifier times out or its service is unreachable.
+            assistFallbackDecision(corrected);
           });
+      }
+
+      // Classifier unusable — it timed out, its service is down, or the reply
+      // couldn't be read as a verdict. Keep the SE alive instead of dropping
+      // the utterance: an obvious technical question still gets answered, and
+      // anything else is logged so the queue moves on. Shared by the
+      // parse-failure, network-error, and watchdog paths so a dead or garbled
+      // gate can never strand a question Randy already heard.
+      function assistFallbackDecision(text) {
+        if (looksLikeTechQuestion(text)) {
+          recordAssistDecision(text, true, 0.7, 'fallback match');
+          TECH.lastSubmitted = text;
+          TECH.lastSubmittedAt = Date.now();
+          runAssistAnswer(0, text);
+        } else {
+          recordAssistDecision(text, false, 0, 'check unavailable');
+          renderAssistStatus();
+          drainQuestionQueue();
+        }
       }
 
       function pushAssistContext(text) {
@@ -2442,8 +2634,8 @@
         if (!isComposerFocused()) render();
       }
 
-      async function classifyUtterance(text, contextArr) {
-        if (!GSHEET_WEBHOOK) return { needs_answer: false, confidence: 0 };
+      async function classifyUtterance(text, contextArr, signal) {
+        if (!GSHEET_WEBHOOK) return { needs_answer: false, confidence: 0, parsed: true };
         const ctxLines = (contextArr || []).map((u, i) => (i + 1) + '. ' + u).join('\n');
         const userContent =
           (ctxLines ? 'Recent context (older first):\n' + ctxLines + '\n\n' : '') +
@@ -2455,7 +2647,7 @@
           messages: [{ role: 'user', content: userContent }],
           output_config: { format: { type: 'json_schema', schema: CLASSIFIER_SCHEMA } },
           save: false // keep classifier churn out of the history sheet
-        });
+        }, signal, ASSIST.CLASSIFY_TIMEOUT_MS);
         return parseClassifierReply(String(data.reply || ''));
       }
 
@@ -2463,9 +2655,13 @@
       // (older proxy deployments may not forward output_config). Stays
       // backward-compatible with the old schema: a reply that only carries the
       // legacy is_question field still produces a usable needs_answer verdict.
+      // parsed:false flags a reply we could not read as a verdict (no JSON, or
+      // JSON that didn't parse) — distinct from a genuine needs_answer:false.
+      // The caller uses it to fall back to answering an obvious technical
+      // question instead of silently dropping it over a format glitch.
       function parseClassifierReply(reply) {
         const m = reply.match(/\{[\s\S]*\}/);
-        if (!m) return { needs_answer: false, confidence: 0 };
+        if (!m) return { needs_answer: false, confidence: 0, parsed: false };
         try {
           const j = JSON.parse(m[0]);
           const needs = typeof j.needs_answer === 'boolean' ? j.needs_answer : !!j.is_question;
@@ -2476,10 +2672,11 @@
             normalized_question: typeof j.normalized_question === 'string' ? j.normalized_question.trim() : '',
             confidence: typeof j.confidence === 'number' ? j.confidence : 0,
             topic: j.topic || '',
-            reason: j.reason || ''
+            reason: j.reason || '',
+            parsed: true
           };
         } catch {
-          return { needs_answer: false, confidence: 0 };
+          return { needs_answer: false, confidence: 0, parsed: false };
         }
       }
 
@@ -2489,23 +2686,50 @@
 
       // One POST to the Apps Script proxy. text/plain avoids the CORS
       // preflight Apps Script can't answer.
-      async function postChat(body, signal) {
+      //
+      // Every call is bounded by a hard timeout. A fetch with no timeout can
+      // hang indefinitely — a slow Apps Script cold-start, a connection that
+      // stalls without ever erroring, the tab being backgrounded mid-request.
+      // Left unbounded, a hung classifier call would freeze the whole assist
+      // pipeline forever (its promise never settles, so TECH.pending never
+      // clears and no further question is ever answered). The timeout aborts
+      // the request so the promise ALWAYS settles; it composes with any
+      // caller-supplied signal so user-initiated cancel still works. A timeout
+      // surfaces as a TimeoutError (not AbortError), so callers treat it as a
+      // real failure to retry/fall back rather than a silent user cancel.
+      async function postChat(body, signal, timeoutMs) {
         if (!GSHEET_WEBHOOK) {
           throw new Error('Answer service is not configured.');
         }
         const payload = Object.assign({ action: 'chat', session_id: SESSION_ID }, body);
-        const resp = await fetch(GSHEET_WEBHOOK, {
-          method: 'POST',
-          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-          body: JSON.stringify(payload),
-          signal
-        });
-        if (!resp.ok) throw new Error('Proxy HTTP ' + resp.status);
-        const data = await resp.json();
-        if (!data || data.ok === false) {
-          throw new Error((data && data.error) || 'Proxy returned an error');
+        const timer = new AbortController();
+        const ms = timeoutMs || ASSIST.ANSWER_TIMEOUT_MS;
+        const timeoutId = setTimeout(
+          () => { try { timer.abort(new DOMException('Request timed out', 'TimeoutError')); } catch { timer.abort(); } },
+          ms
+        );
+        const onAbort = () => { try { timer.abort(signal.reason); } catch { timer.abort(); } };
+        if (signal) {
+          if (signal.aborted) onAbort();
+          else signal.addEventListener('abort', onAbort, { once: true });
         }
-        return data;
+        try {
+          const resp = await fetch(GSHEET_WEBHOOK, {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+            body: JSON.stringify(payload),
+            signal: timer.signal
+          });
+          if (!resp.ok) throw new Error('Proxy HTTP ' + resp.status);
+          const data = await resp.json();
+          if (!data || data.ok === false) {
+            throw new Error((data && data.error) || 'Proxy returned an error');
+          }
+          return data;
+        } finally {
+          clearTimeout(timeoutId);
+          if (signal) signal.removeEventListener('abort', onAbort);
+        }
       }
 
       // Fire-and-forget Q&A save (the proxy's legacy save action). Chat calls
@@ -2659,8 +2883,13 @@
 
       async function runAssistAnswer(idx, question) {
         const slot = STATE.slots[idx];
-        if (slot.loading) return;
+        // Busy with another answer — don't drop this question on the floor.
+        // Re-queue it so it's answered the moment the slot frees (drainQueue
+        // pulls it then). A bare `return` here used to strand both this
+        // question and the queue behind it.
+        if (slot.loading) { enqueueQuestion(question); return; }
         slot.loading = true;
+        TECH.answerSince = Date.now();
 
         // Every auto-answered question starts a visually fresh chat: the
         // previous Q&A slides into Saved Conversations so the panel always
@@ -2668,7 +2897,7 @@
         // preserved separately in TECH.recentPairs.
         if (collectPairs(slot).length) {
           if (slot.isSpeaking) stopSpeaking();
-          archiveChatToHistory(slot, { unread: true });
+          archiveChatToHistory(slot);
         }
 
         slot.messages.push({ role: 'user', content: question, kind: 'assist-q' });
@@ -2771,6 +3000,7 @@
         if (slot.abortController === controller) {
           slot.loading = false;
           slot.abortController = null;
+          TECH.answerSince = 0;
         }
         render();
         scrollChat();
@@ -2841,6 +3071,7 @@
               ${STATE.activeTab === 'home' ? renderMain() : renderSettingsShell()}
             </main>
           </div>
+          ${renderAudioChooser()}
           ${renderToast()}
         `;
         if (window.lucide?.createIcons) try { window.lucide.createIcons(); } catch {}
@@ -2894,12 +3125,11 @@
       function renderSidebarItem(h) {
         const confirming = STATE.historyConfirmDeleteId === h.id;
         const active = HISTORY_VIEW.open === h.id;
-        const unread = !!h.unread;
         return `
-          <div class="sb-item ${active ? 'active' : ''}${unread ? ' unread' : ''}${confirming ? ' confirming' : ''}" role="button" tabindex="0" data-action="${confirming ? 'noop' : 'view-history'}" data-id="${escAttr(h.id)}" title="Open saved conversation">
+          <div class="sb-item ${active ? 'active' : ''}${confirming ? ' confirming' : ''}" role="button" tabindex="0" data-action="${confirming ? 'noop' : 'view-history'}" data-id="${escAttr(h.id)}" title="Open saved conversation">
             <div class="sb-item-body">
-              <div class="sb-item-title">${unread ? '<span class="sb-unread-dot" aria-hidden="true"></span>' : ''}${escHtml(h.preview || 'Untitled conversation')}</div>
-              <div class="sb-item-meta">${unread ? '<span class="sb-unread-tag">New answer</span> · ' : ''}${escHtml(formatHistoryTime(h))}${h.pairs.length > 1 ? ' · ' + h.pairs.length + ' Q&amp;As' : ''}</div>
+              <div class="sb-item-title">${escHtml(h.preview || 'Untitled conversation')}</div>
+              <div class="sb-item-meta">${escHtml(formatHistoryTime(h))}${h.pairs.length > 1 ? ' · ' + h.pairs.length + ' Q&amp;As' : ''}</div>
               ${confirming ? `
                 <div class="sb-confirm">
                   <span>Delete this conversation?</span>
@@ -2988,14 +3218,15 @@
       function renderChatHeader(slot, idx, vm) {
         const on = !!slot.listenOn;
         const sub = slot.isSpeaking ? 'Talking…'
-          : slot.loading ? (liveStripPhase(slot) === 'researching' ? 'Researching support site' : 'Thinking…')
-          : on && TECH.pending ? 'Analyzing question'
+          : slot.loading ? 'Thinking…'
           : vm.live && vm.statusClass === 'listening' && vm.pill === 'live' ? 'Listening to you…'
           : on ? 'Listening for tech questions'
           : 'Online · Recast product expert';
         return `
           <header class="chat-head">
-            ${sbToggleHtml()}
+            <button class="icon-btn sb-toggle" data-action="toggle-history" title="Conversations" aria-label="Open conversations">
+              <i data-lucide="panel-left" class="w-5 h-5"></i>
+            </button>
             <div class="chat-avatar ${on ? '' : 'muted'}">${escHtml(slot.label.charAt(0))}<span class="status-dot"></span></div>
             <div class="head-titles">
               <div class="conv-title">${escHtml(slot.label)}</div>
@@ -3035,29 +3266,6 @@
           </header>`;
       }
 
-      // Which phase the live strip is in. The TITLE reflects what Randy is
-      // doing with a *detected* question (listening → analyzing → researching),
-      // while the transcript row below ALWAYS shows the live voice-to-text —
-      // so it stays obvious Randy keeps hearing new questions mid-answer.
-      function liveStripPhase(slot) {
-        if (slot.loading) {
-          let lastUser = null;
-          for (let i = slot.messages.length - 1; i >= 0; i--) {
-            if (slot.messages[i].role === 'user') { lastUser = slot.messages[i]; break; }
-          }
-          return (lastUser && lastUser.kind === 'assist-q') ? 'researching' : 'thinking';
-        }
-        if (TECH.pending) return 'analyzing';
-        return 'listening';
-      }
-
-      const LIVE_TITLES = {
-        listening: 'Listening for tech questions',
-        analyzing: 'Analyzing question',
-        researching: 'Researching support site',
-        thinking: 'Composing a reply'
-      };
-
       function renderLiveStrip(slot, idx) {
         const last = TECH.decisions[TECH.decisions.length - 1];
         const queued = TECH.questionQueue.length;
@@ -3067,54 +3275,31 @@
         const nearMiss = (!last || !last.accepted)
           ? TECH.decisions.slice().reverse().find(d => !d.accepted && d.nearMiss)
           : null;
-
-        const phase = liveStripPhase(slot);
-        const busy = phase !== 'listening';
-
-        // The question Randy is busy with — shown as a chip, kept separate
-        // from the live transcript of whatever is being said right now.
-        let workText = '';
-        if (phase === 'analyzing') {
-          workText = TECH.context[TECH.context.length - 1] || '';
-        } else if (busy) {
-          for (let i = slot.messages.length - 1; i >= 0; i--) {
-            if (slot.messages[i].role === 'user') { workText = slot.messages[i].content; break; }
-          }
-        }
-        const workLabel = phase === 'analyzing' ? 'Checking' : 'Answering';
-
         const baseStats = TECH.answered + ' answered · ' + TECH.heard + ' heard';
-        const stats = queued ? queued + ' queued · ' + baseStats : baseStats;
-
-        const indicator = busy
-          ? '<span class="ls-spin" aria-hidden="true"><i data-lucide="loader-2" class="w-4 h-4"></i></span>'
-          : '<span class="sound-wave ls-wave" aria-hidden="true"><span class="sound-wave-bar"></span><span class="sound-wave-bar"></span><span class="sound-wave-bar"></span></span>';
-
+        const stats = TECH.pending
+          ? 'Checking a question…'
+          : (queued ? queued + ' queued · ' + baseStats : baseStats);
         return `
-          <div class="live-strip phase-${phase} ${busy ? 'busy' : ''}">
-            ${indicator}
+          <div class="live-strip">
+            <span class="sound-wave ls-wave" aria-hidden="true"><span class="sound-wave-bar"></span><span class="sound-wave-bar"></span><span class="sound-wave-bar"></span></span>
             <div class="ls-body">
               <div class="ls-top">
-                <span class="ls-title">${LIVE_TITLES[phase]}</span>
-                <span class="ls-stats ${busy ? 'busy' : ''}">${escHtml(stats)}</span>
+                <span class="ls-title">Listening for tech questions</span>
+                <span class="ls-stats ${TECH.pending ? 'busy' : ''}">${escHtml(stats)}</span>
               </div>
-              ${busy && workText ? `
-                <div class="ls-work"><span class="ls-work-tag">${workLabel}</span><span class="ls-work-q">${escHtml(truncate(workText, 80))}</span></div>
-              ` : ''}
               ${DESKTOP.on ? `<div class="ls-desktop ${DESKTOP.statusText ? 'on' : ''}" id="desktop-status">${escHtml(DESKTOP.statusText)}</div>` : ''}
               <div class="ls-live ac-live ${VOICE.interimText ? 'hearing' : ''}" id="live-transcript">
-                <i data-lucide="mic" class="ls-mic w-3 h-3" aria-hidden="true"></i>
                 <span class="ls-live-text"><span id="live-transcript-text">${escHtml(VOICE.interimText || '')}</span><span class="interim-caret">▊</span></span>
               </div>
-              ${!busy && nearMiss ? `
+              ${nearMiss ? `
                 <button class="ls-nearmiss" data-action="force-answer" data-text="${escAttr(nearMiss.text)}" title="Randy skipped this — tap to answer it anyway">
                   <i data-lucide="help-circle" class="w-3 h-3"></i>
                   <span>${escHtml(truncate(nearMiss.text, 70))} · answer this?</span>
                 </button>
-              ` : (!busy && last && !last.accepted ? `
+              ` : (last ? `
                 <div class="ls-last">
-                  <i data-lucide="minus" class="w-3 h-3 skip"></i>
-                  <span>Skipped &ldquo;${escHtml(truncate(last.text, 64))}&rdquo;</span>
+                  <i data-lucide="${last.accepted ? 'check' : 'minus'}" class="w-3 h-3 ${last.accepted ? 'ok' : 'skip'}"></i>
+                  <span>${escHtml(truncate(last.text, 90))} · ${Math.round((last.confidence || 0) * 100)}%</span>
                 </div>
               ` : '')}
             </div>
@@ -3129,13 +3314,6 @@
       }
 
       function renderHero(slot, idx, vm) {
-        // When Randy is already on (and the chat is still empty), reassure the
-        // user he's actively working instead of repeating the "turn him on"
-        // pitch — otherwise a first-time user can't tell it's running.
-        const listening = !!slot.listenOn && vm.statusClass === 'listening';
-        const sub = listening
-          ? 'Randy is listening to your call. He&rsquo;ll catch technical questions and answer them right here automatically &mdash; you don&rsquo;t need to do anything. Or type a question below anytime.'
-          : 'Your Recast product expert. Turn him on and he listens to the call, spots technical questions, and answers them here &mdash; or just type below.';
         return `
           <div class="hero">
             <div class="orb-wrap ${vm.live ? 'live' : ''}">
@@ -3146,40 +3324,15 @@
               </button>
             </div>
             <div class="hero-name">${escHtml(slot.voiceName || slot.label)}</div>
-            <div class="hero-sub">${sub}</div>
-            ${listening ? '' : `<div class="hero-status ${vm.statusClass}"><span class="st-dot"></span>${vm.statusText}</div>`}
+            <div class="hero-sub">Your Recast product expert. Turn him on and he listens to the call, spots technical questions, and answers them here — or just type below.</div>
+            <div class="hero-status ${vm.statusClass}"><span class="st-dot"></span>${vm.statusText}</div>
           </div>`;
-      }
-
-      // Slim banner shown above the live chat when one or more auto-answered
-      // questions got bumped to History unread. One click opens the newest to
-      // review it, so answers are never silently lost mid-call.
-      function renderUnreadBanner() {
-        const n = unreadHistoryCount();
-        return `
-          <button class="unread-banner" data-action="review-unread" title="Open the most recent answer you haven't read">
-            <span class="ub-ic"><i data-lucide="check-check" class="w-4 h-4"></i></span>
-            <span class="ub-text"><strong>${n} earlier answer${n > 1 ? 's' : ''} ready to review</strong> — saved when Randy moved on to the next question.</span>
-            <span class="ub-go">Review<i data-lucide="chevron-right" class="w-4 h-4"></i></span>
-          </button>`;
-      }
-
-      // Conversations toggle (mobile header button, where the sidebar is
-      // hidden). Carries an unread-answer count badge so bumped answers are
-      // discoverable even when the panel is closed.
-      function sbToggleHtml() {
-        const n = unreadHistoryCount();
-        return `<button class="icon-btn sb-toggle" data-action="toggle-history" title="Conversations${n ? ' · ' + n + ' unread answer' + (n > 1 ? 's' : '') : ''}" aria-label="Open conversations">
-              <i data-lucide="panel-left" class="w-5 h-5"></i>
-              ${n ? `<span class="sb-toggle-badge">${n > 9 ? '9+' : n}</span>` : ''}
-            </button>`;
       }
 
       function renderChat(slot, idx) {
         const vm = voiceModel(slot, idx);
         return `
           ${renderChatHeader(slot, idx, vm)}
-          ${unreadHistoryCount() > 0 ? renderUnreadBanner() : ''}
           ${slot.listenOn && VOICE.srSupported ? renderLiveStrip(slot, idx) : ''}
           <div id="home-scroll-${idx}" class="msg-scroll">
             <div class="msg-col">
@@ -3255,7 +3408,9 @@
         return `
           <div class="saved-view history-popout">
             <header class="chat-head">
-              ${sbToggleHtml()}
+              <button class="icon-btn sb-toggle" data-action="toggle-history" title="Conversations" aria-label="Open conversations">
+                <i data-lucide="panel-left" class="w-5 h-5"></i>
+              </button>
               <button class="icon-btn" data-action="close-history" title="Back to current chat" aria-label="Back to current chat">
                 <i data-lucide="arrow-left" class="w-5 h-5"></i>
               </button>
@@ -3303,7 +3458,9 @@
       function renderSettingsShell() {
         return `
           <header class="chat-head">
-            ${sbToggleHtml()}
+            <button class="icon-btn sb-toggle" data-action="toggle-history" title="Conversations" aria-label="Open conversations">
+              <i data-lucide="panel-left" class="w-5 h-5"></i>
+            </button>
             <button class="icon-btn" data-action="switch-tab" data-tab="home" title="Back to chat" aria-label="Back to chat">
               <i data-lucide="arrow-left" class="w-5 h-5"></i>
             </button>
@@ -3314,6 +3471,47 @@
           </header>
           <div class="settings-scroll">
             <div class="settings-col">${renderSettings()}</div>
+          </div>`;
+      }
+
+      // Single source of truth for the chooser's per-mode copy, reused by the
+      // rendered card and the screen-reader announcement so they never drift.
+      function audioModeInfo(mode) {
+        return mode === 'one-way'
+          ? { label: 'One-way audio', icon: 'mic', sub: 'Microphone only', line: "This will only pick up what you're saying and not what anyone else is saying." }
+          : { label: 'Two-way audio', icon: 'volume-2', sub: 'Microphone + computer audio', line: 'This will pick up your audio and whatever audio is on your computer.' };
+      }
+
+      // "How should Randy listen?" — shown after the user asks to turn Randy
+      // on (see toggleListening → openAudioChooser). The slider picks the
+      // capture mode; the confirm button's click is the user gesture that
+      // startListening() needs for the mic / screen-share prompts.
+      function renderAudioChooser() {
+        if (!STATE.audioChooserOpen) return '';
+        const oneWay = STATE.slots[0].audioMode === 'one-way';
+        const desc = audioModeInfo(oneWay ? 'one-way' : 'two-way');
+        return `
+          <div class="ac-scrim" data-action="close-audio-chooser-bg">
+            <div class="ac-modal" role="dialog" aria-modal="true" aria-label="How should Randy listen?" aria-describedby="ac-desc-text" tabindex="-1">
+              <button class="ac-x" data-action="close-audio-chooser" title="Cancel" aria-label="Cancel"><i data-lucide="x" class="w-4 h-4"></i></button>
+              <div class="ac-title">How should Randy listen?</div>
+              <p class="ac-sub">Choose how Randy captures audio while he's on.</p>
+              <div class="ac-seg ${oneWay ? 'left' : 'right'}" role="tablist" aria-label="Audio mode">
+                <span class="ac-seg-thumb" aria-hidden="true"></span>
+                <button class="ac-seg-opt ${oneWay ? 'on' : ''}" role="tab" aria-selected="${oneWay}" data-action="set-audio-mode" data-mode="one-way">One-way audio</button>
+                <button class="ac-seg-opt ${oneWay ? '' : 'on'}" role="tab" aria-selected="${!oneWay}" data-action="set-audio-mode" data-mode="two-way">Two-way audio</button>
+              </div>
+              <div class="ac-desc">
+                <div class="ac-desc-ic"><i data-lucide="${desc.icon}" class="w-5 h-5"></i></div>
+                <div class="ac-desc-body" id="ac-desc-text">
+                  <div class="ac-desc-sub">${desc.sub}</div>
+                  <p class="ac-desc-line">${desc.line}</p>
+                </div>
+              </div>
+              <button class="ac-go" data-action="confirm-audio-mode">
+                <i data-lucide="mic" class="w-4 h-4"></i>Turn on Randy
+              </button>
+            </div>
           </div>`;
       }
 
@@ -4232,6 +4430,34 @@
               break;
             }
             case 'toggle-listen': toggleListening(); break;
+            case 'set-audio-mode': {
+              const m = act.dataset.mode === 'one-way' ? 'one-way' : 'two-way';
+              STATE.slots[0].audioMode = m;
+              render();
+              // Keep keyboard focus on the slider, and announce the new choice.
+              focusAfterRender('.ac-seg-opt[data-mode="' + m + '"]');
+              const info = audioModeInfo(m);
+              announceLive(info.label + '. ' + info.sub + '. ' + info.line);
+              break;
+            }
+            case 'confirm-audio-mode': {
+              STATE.audioChooserOpen = false;
+              const m = STATE.slots[0].audioMode === 'one-way' ? 'one-way' : 'two-way';
+              // Start capture synchronously inside this click so the mic /
+              // screen-share prompts keep the user activation they require,
+              // then re-render to dismiss the chooser.
+              startListening(m);
+              render();
+              break;
+            }
+            case 'close-audio-chooser':
+            case 'close-audio-chooser-bg': {
+              // Background only closes on a direct click (mirrors the history
+              // popout): a click on the modal's own content has no data-action.
+              if (action === 'close-audio-chooser-bg' && !e.target.hasAttribute('data-action')) break;
+              closeAudioChooser();
+              break;
+            }
             case 'new-chat': HISTORY_VIEW.open = null; STATE.activeTab = 'home'; newChat(); break;
             case 'toggle-speak-answers': {
               const s = STATE.slots[0];
@@ -4288,22 +4514,9 @@
             }
             case 'view-history': {
               HISTORY_VIEW.open = act.dataset.id;
-              markHistoryRead(act.dataset.id);
               STATE.historyConfirmDeleteId = null;
               STATE.activeTab = 'home';
               STATE.historyOpen = false;
-              render();
-              break;
-            }
-            case 'review-unread': {
-              const u = STATE.sessionHistory.find(h => h.unread);
-              if (u) {
-                markHistoryRead(u.id);
-                HISTORY_VIEW.open = u.id;
-                STATE.historyConfirmDeleteId = null;
-                STATE.activeTab = 'home';
-                STATE.historyOpen = false;
-              }
               render();
               break;
             }
@@ -4358,7 +4571,6 @@
             case 'load-history': {
               const hist = STATE.sessionHistory.find(h => h.id === act.dataset.id);
               if (hist) {
-                markHistoryRead(hist.id);
                 const slot = STATE.slots[0];
                 const transcript = hist.pairs.map(p => 'User: ' + p.question + '\nRandy: ' + stripMarkdown(p.answer)).join('\n\n');
                 slot.inputText = 'Here is a previous conversation for context:\n\n' + transcript + '\n\nBased on this conversation, ';
@@ -4442,6 +4654,10 @@
               e.target.getAttribute('role') === 'button' && e.target.dataset && e.target.dataset.action) {
             e.preventDefault();
             e.target.click();
+            return;
+          }
+          if (e.key === 'Escape' && STATE.audioChooserOpen) {
+            closeAudioChooser();
             return;
           }
           if (e.key === 'Escape' && e.target.id === 'history-search') {
