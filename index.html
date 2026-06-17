@@ -220,6 +220,7 @@
       .ls-readscreen:hover { background: var(--primary); color: #fff; }
       .ls-readscreen:disabled { opacity: 0.6; cursor: default; }
       .ls-readscreen i { flex-shrink: 0; }
+      .cl-readscreen { margin-top: 12px; }
 
       .interim-caret { display: inline-block; width: 6px; margin-left: 2px; animation: interim-blink 1s steps(2,end) infinite; color: var(--primary); }
       @keyframes interim-blink { 50% { opacity: 0; } }
@@ -3881,6 +3882,11 @@
               </div>
               ${body}
               ${DESKTOP.on ? `<div class="cl-desktop ${DESKTOP.statusText ? 'on' : ''}" id="desktop-status">${escHtml(DESKTOP.statusText)}</div>` : ''}
+              ${DESKTOP.on && DESKTOP.videoTrack ? `
+                <button class="cl-readscreen ls-readscreen" data-action="read-screen" ${DESKTOP.visionBusy ? 'disabled' : ''} title="Read a highlighted question off the screen you're sharing">
+                  <i data-lucide="scan-text" class="w-3 h-3"></i>
+                  <span>${DESKTOP.visionBusy ? 'Reading…' : 'Read screen'}</span>
+                </button>` : ''}
             </div>
           </div>`;
       }
