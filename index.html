@@ -220,6 +220,35 @@
       .interim-caret { display: inline-block; width: 6px; margin-left: 2px; animation: interim-blink 1s steps(2,end) infinite; color: var(--primary); }
       @keyframes interim-blink { 50% { opacity: 0; } }
 
+      /* Phase-aware live strip: while Randy analyzes/answers a detected
+         question the wave swaps to a spinner and the question is shown as a
+         chip, but the transcript row below keeps streaming live speech — so
+         it's always clear Randy never stops hearing the call. */
+      .ls-spin { display: grid; place-items: center; width: 18px; color: var(--primary); flex-shrink: 0; }
+      .ls-spin i { animation: vpSpin 0.9s linear infinite; }
+      .live-strip.busy { background: linear-gradient(0deg, rgba(3,114,255,0.06), rgba(3,114,255,0.06)), #fff; }
+      .live-strip.busy .ls-title { color: var(--primary); }
+      .ls-work { display: flex; align-items: center; gap: 7px; min-width: 0; margin-top: 1px; }
+      .ls-work-tag { flex-shrink: 0; font-size: 9.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--primary); background: var(--quote, #eef4ff); padding: 2px 7px; border-radius: 999px; }
+      .ls-work-q { font-size: 12px; color: var(--navy); font-weight: 500; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .ls-mic { color: var(--n400); flex-shrink: 0; }
+      .ls-live.hearing .ls-mic { color: var(--primary); }
+
+      /* Unread answers — previous Q&As that got bumped to History when Randy
+         moved on to a new question. Flagged in the sidebar and via a banner. */
+      .sb-unread-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--cyan); margin-right: 6px; flex-shrink: 0; vertical-align: middle; animation: sbUnreadPulse 2s ease-out infinite; }
+      @keyframes sbUnreadPulse { 0% { box-shadow: 0 0 0 0 rgba(0,191,255,0.55); } 70%, 100% { box-shadow: 0 0 0 5px rgba(0,191,255,0); } }
+      .sb-item.unread .sb-item-title { font-weight: 700; }
+      .sb-unread-tag { color: var(--cyan); font-weight: 700; }
+      .sb-toggle { position: relative; }
+      .sb-toggle-badge { position: absolute; top: 2px; right: 2px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 999px; background: var(--cyan); color: var(--navy-deep); font-size: 10px; font-weight: 800; display: grid; place-items: center; line-height: 1; }
+      .unread-banner { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; padding: 11px 24px; background: var(--quote, #eef4ff); border: none; border-bottom: 1px solid var(--divider); border-left: 3px solid var(--cyan); cursor: pointer; transition: background 0.12s; flex-shrink: 0; font-family: inherit; }
+      .unread-banner:hover { background: #E2EEFF; }
+      .ub-ic { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: var(--cyan); color: var(--navy-deep); flex-shrink: 0; }
+      .ub-text { flex: 1; min-width: 0; font-size: 12.5px; color: var(--navy); line-height: 1.4; }
+      .ub-text strong { font-weight: 700; }
+      .ub-go { display: inline-flex; align-items: center; gap: 2px; flex-shrink: 0; font-size: 12px; font-weight: 700; color: var(--primary); }
+
       /* ===== Message area ===== */
       .msg-scroll { flex: 1; min-height: 0; overflow-y: auto; background: var(--n25); }
       .msg-col { max-width: 768px; margin: 0 auto; padding: 28px 24px 16px; display: flex; flex-direction: column; gap: 16px; }
@@ -494,17 +523,11 @@
         '- This outranks product positioning. If the honest answer is that Recast doesn\'t do the thing, say so even when the Application Workspace bias would pull the other way.'
       ].join('\n');
 
-      // Appended for typed chat replies.
-      const CHAT_STYLE = [
-        '# Response Format',
-        '- Start the very first sentence with the answer itself. No preamble, no compliments about the question, no jokes or false starts before the real answer.',
-        '- Plain text only: short paragraphs separated by blank lines. No markdown, no bullet points, no headers.',
-        '- Use plain language; define necessary technical terms in the same breath.',
-        '- Keep answers focused — 2-4 short paragraphs unless the question genuinely requires more.',
-        '- When a question is ambiguous enough that the right answer depends on their setup (Intune-only vs. hybrid, on-prem vs. cloud), ask one targeted clarifying question before going deep.'
-      ].join('\n');
-
-      // Appended for auto-answered technical-assist questions.
+      // Shared answer format for every Randy reply — typed chat and overheard
+      // voice questions both use this so the output format and sources match
+      // exactly: a "Bottom line:" summary, bullets, then a ===SPOKEN=== summary
+      // for Read aloud. Randy answers the most likely interpretation rather than
+      // asking clarifying questions, the same on a typed message as on a call.
       const ASSIST_STYLE = [
         '# Context',
         'You are listening in on a live sales/technical call. A technical question was just asked. The questioner cannot reply to you, so never ask clarifying questions — if the question is ambiguous, answer the most likely interpretation and flag the assumption in one bullet.',
@@ -779,6 +802,7 @@
         bufferTimerId: null,
         deferrals: 0,
         pending: false,           // classifier call in flight
+        activeText: '',           // utterance currently being analyzed/answered (for the live band)
         questionQueue: [],        // FIFO of questions overheard while Randy was busy
         context: [],              // recent utterances for the classifier
         lastSubmitted: '',
@@ -1018,6 +1042,17 @@
         if (STATE.sessionHistory.length > 50) STATE.sessionHistory.length = 50;
       }
 
+      // Unread = an answer that got bumped into History when Randy moved on to
+      // a new question, before the user had a chance to read it.
+      function unreadHistoryCount() {
+        return STATE.sessionHistory.reduce((n, h) => n + (h.unread ? 1 : 0), 0);
+      }
+      function markHistoryRead(id) {
+        const h = STATE.sessionHistory.find(x => x.id === id);
+        if (h && h.unread) { h.unread = false; return true; }
+        return false;
+      }
+
       function collectPairs(slot) {
         const pairs = [];
         for (let i = 0; i < slot.messages.length - 1; i++) {
@@ -1035,7 +1070,7 @@
       // (the client saves each one in the background), so nothing is lost.
       // Rotating the session id keeps the sheet's grouping in step with the
       // local entry. Returns true when something was actually archived.
-      function archiveChatToHistory(slot) {
+      function archiveChatToHistory(slot, opts) {
         const pairs = collectPairs(slot);
         if (!pairs.length) return false;
         const ts = Date.now();
@@ -1045,7 +1080,10 @@
           date: new Date(ts).toLocaleDateString('en-US'),
           timestamp: ts,
           pairs,
-          preview: pairs[0].question.substring(0, 120)
+          preview: pairs[0].question.substring(0, 120),
+          // Auto-bumped answers land unread; a manual "New chat" does not
+          // (the user was looking at it when they chose to move on).
+          unread: !!(opts && opts.unread)
         });
         slot.messages = [];
         SESSION_ID = genSessionId();
@@ -2328,6 +2366,7 @@
         }
 
         TECH.pending = true;
+        TECH.activeText = corrected;   // surfaced in the live "Analyzing question" band
         renderAssistStatus();
         classifyUtterance(corrected, TECH.context.slice(0, -1))
           .then(decision => {
@@ -2530,51 +2569,67 @@
         scrollChat();
 
         try {
-          const systemPrompt = slot.prompt + '\n\n' + CHAT_STYLE;
-
-          // The empty assistant placeholder is already excluded by the
-          // content filter inside conversationPayloadMessages.
+          // Typed chat answers use the exact same recipe as the overheard
+          // voice path (ASSIST_STYLE, same effort, same search config, same
+          // reply parsing) so the format and sources are identical no matter
+          // how the question arrived. The only difference is that typed chat
+          // keeps the full multi-turn thread for follow-ups.
           const sessionIdAtSend = SESSION_ID;
-          const body = {
-            model: MODELS.chat,
-            max_tokens: 1500,
-            system: systemBlocks(systemPrompt),
-            messages: conversationPayloadMessages(slot, 20),
-            // Skip the proxy's synchronous sheet append; saved from the
-            // client below, off the answer's critical path.
-            save: false
-          };
+
           // Strictly source only from the approved doc URLs. Without this,
           // chat web_search ran against the open web and could surface facts
           // from unvetted sites — the cause of inaccurate answers. Mirror the
           // technical-assist path: restrict to the allow-list, and fall back to
           // the default research domains so a wiped Settings box can never
           // silently re-open the whole web.
-          {
-            const domains = (slot.allowedDomains || []).filter(Boolean);
-            const allowed = domains.length ? domains : DEFAULT_RESEARCH_DOMAINS.slice();
-            body.tools = [{
-              type: SEARCH_TOOL,
-              name: 'web_search',
-              max_uses: 3,
-              allowed_domains: allowed
-            }];
+          const domains = (slot.allowedDomains || []).filter(Boolean);
+          const allowed = domains.length ? domains : DEFAULT_RESEARCH_DOMAINS.slice();
+          const tool = { type: SEARCH_TOOL, name: 'web_search', max_uses: ASSIST.SEARCH_MAX_USES, allowed_domains: allowed };
+
+          // The empty assistant placeholder is already excluded by the
+          // content filter inside conversationPayloadMessages.
+          const baseBody = {
+            model: MODELS.chat,
+            max_tokens: 1100,
+            // Match the voice path's reasoning effort so identical questions
+            // get identical answers. (Older proxy deployments drop this
+            // field harmlessly.)
+            output_config: { effort: 'medium' },
+            system: systemBlocks(slot.prompt + '\n\n' + ASSIST_STYLE),
+            messages: conversationPayloadMessages(slot, 20),
+            // Skip the proxy's synchronous sheet append; saved from the
+            // client below, off the answer's critical path.
+            save: false
+          };
+          let data;
+          try {
+            data = await postChat(Object.assign({ tools: [tool] }, baseBody), controller.signal);
+          } catch (err) {
+            if (err && err.name === 'AbortError') throw err;
+            // Web search failed (tool rejected, timeout, transient error) —
+            // answer from knowledge rather than staying silent. Same fallback
+            // the voice path uses.
+            console.error('search-enabled answer failed, retrying without tools:', err);
+            data = await postChat(baseBody, controller.signal);
           }
 
-          const data = await postChat(body, controller.signal);
-          const reply = String(data.reply || '');
-          slot.messages[assistantMsgIdx].content = reply || 'No response.';
+          // Parse exactly like the voice path: strip any false-start preamble,
+          // split off the spoken summary so Read aloud speaks the short version.
+          const { main, spoken } = splitSpoken(String(data.reply || ''));
+          const msg = slot.messages[assistantMsgIdx];
+          msg.content = sanitizeAssistAnswer(main) || 'No response.';
+          msg.spoken = spoken;
           if (Array.isArray(data.sources) && data.sources.length) {
-            slot.messages[assistantMsgIdx].sources = data.sources.slice(0, 6);
+            msg.sources = data.sources.slice(0, 6);
           }
           notePipAnswerArrived();
 
           // Background save (the proxy only saved non-empty replies; mirror that).
           postSaveToSheet({
             question: text,
-            answer: reply,
+            answer: String(data.reply || ''),
             sources: data.sources,
-            model: body.model,
+            model: MODELS.chat,
             sessionId: sessionIdAtSend
           });
         } catch (err) {
@@ -2613,7 +2668,7 @@
         // preserved separately in TECH.recentPairs.
         if (collectPairs(slot).length) {
           if (slot.isSpeaking) stopSpeaking();
-          archiveChatToHistory(slot);
+          archiveChatToHistory(slot, { unread: true });
         }
 
         slot.messages.push({ role: 'user', content: question, kind: 'assist-q' });
@@ -2839,11 +2894,12 @@
       function renderSidebarItem(h) {
         const confirming = STATE.historyConfirmDeleteId === h.id;
         const active = HISTORY_VIEW.open === h.id;
+        const unread = !!h.unread;
         return `
-          <div class="sb-item ${active ? 'active' : ''}${confirming ? ' confirming' : ''}" role="button" tabindex="0" data-action="${confirming ? 'noop' : 'view-history'}" data-id="${escAttr(h.id)}" title="Open saved conversation">
+          <div class="sb-item ${active ? 'active' : ''}${unread ? ' unread' : ''}${confirming ? ' confirming' : ''}" role="button" tabindex="0" data-action="${confirming ? 'noop' : 'view-history'}" data-id="${escAttr(h.id)}" title="Open saved conversation">
             <div class="sb-item-body">
-              <div class="sb-item-title">${escHtml(h.preview || 'Untitled conversation')}</div>
-              <div class="sb-item-meta">${escHtml(formatHistoryTime(h))}${h.pairs.length > 1 ? ' · ' + h.pairs.length + ' Q&amp;As' : ''}</div>
+              <div class="sb-item-title">${unread ? '<span class="sb-unread-dot" aria-hidden="true"></span>' : ''}${escHtml(h.preview || 'Untitled conversation')}</div>
+              <div class="sb-item-meta">${unread ? '<span class="sb-unread-tag">New answer</span> · ' : ''}${escHtml(formatHistoryTime(h))}${h.pairs.length > 1 ? ' · ' + h.pairs.length + ' Q&amp;As' : ''}</div>
               ${confirming ? `
                 <div class="sb-confirm">
                   <span>Delete this conversation?</span>
@@ -2932,15 +2988,14 @@
       function renderChatHeader(slot, idx, vm) {
         const on = !!slot.listenOn;
         const sub = slot.isSpeaking ? 'Talking…'
-          : slot.loading ? 'Thinking…'
+          : slot.loading ? (liveStripPhase(slot) === 'researching' ? 'Researching support site' : 'Thinking…')
+          : on && TECH.pending ? 'Analyzing question'
           : vm.live && vm.statusClass === 'listening' && vm.pill === 'live' ? 'Listening to you…'
           : on ? 'Listening for tech questions'
           : 'Online · Recast product expert';
         return `
           <header class="chat-head">
-            <button class="icon-btn sb-toggle" data-action="toggle-history" title="Conversations" aria-label="Open conversations">
-              <i data-lucide="panel-left" class="w-5 h-5"></i>
-            </button>
+            ${sbToggleHtml()}
             <div class="chat-avatar ${on ? '' : 'muted'}">${escHtml(slot.label.charAt(0))}<span class="status-dot"></span></div>
             <div class="head-titles">
               <div class="conv-title">${escHtml(slot.label)}</div>
@@ -2980,6 +3035,29 @@
           </header>`;
       }
 
+      // Which phase the live strip is in. The TITLE reflects what Randy is
+      // doing with a *detected* question (listening → analyzing → researching),
+      // while the transcript row below ALWAYS shows the live voice-to-text —
+      // so it stays obvious Randy keeps hearing new questions mid-answer.
+      function liveStripPhase(slot) {
+        if (slot.loading) {
+          let lastUser = null;
+          for (let i = slot.messages.length - 1; i >= 0; i--) {
+            if (slot.messages[i].role === 'user') { lastUser = slot.messages[i]; break; }
+          }
+          return (lastUser && lastUser.kind === 'assist-q') ? 'researching' : 'thinking';
+        }
+        if (TECH.pending) return 'analyzing';
+        return 'listening';
+      }
+
+      const LIVE_TITLES = {
+        listening: 'Listening for tech questions',
+        analyzing: 'Analyzing question',
+        researching: 'Researching support site',
+        thinking: 'Composing a reply'
+      };
+
       function renderLiveStrip(slot, idx) {
         const last = TECH.decisions[TECH.decisions.length - 1];
         const queued = TECH.questionQueue.length;
@@ -2989,31 +3067,54 @@
         const nearMiss = (!last || !last.accepted)
           ? TECH.decisions.slice().reverse().find(d => !d.accepted && d.nearMiss)
           : null;
+
+        const phase = liveStripPhase(slot);
+        const busy = phase !== 'listening';
+
+        // The question Randy is busy with — shown as a chip, kept separate
+        // from the live transcript of whatever is being said right now.
+        let workText = '';
+        if (phase === 'analyzing') {
+          workText = TECH.context[TECH.context.length - 1] || '';
+        } else if (busy) {
+          for (let i = slot.messages.length - 1; i >= 0; i--) {
+            if (slot.messages[i].role === 'user') { workText = slot.messages[i].content; break; }
+          }
+        }
+        const workLabel = phase === 'analyzing' ? 'Checking' : 'Answering';
+
         const baseStats = TECH.answered + ' answered · ' + TECH.heard + ' heard';
-        const stats = TECH.pending
-          ? 'Checking a question…'
-          : (queued ? queued + ' queued · ' + baseStats : baseStats);
+        const stats = queued ? queued + ' queued · ' + baseStats : baseStats;
+
+        const indicator = busy
+          ? '<span class="ls-spin" aria-hidden="true"><i data-lucide="loader-2" class="w-4 h-4"></i></span>'
+          : '<span class="sound-wave ls-wave" aria-hidden="true"><span class="sound-wave-bar"></span><span class="sound-wave-bar"></span><span class="sound-wave-bar"></span></span>';
+
         return `
-          <div class="live-strip">
-            <span class="sound-wave ls-wave" aria-hidden="true"><span class="sound-wave-bar"></span><span class="sound-wave-bar"></span><span class="sound-wave-bar"></span></span>
+          <div class="live-strip phase-${phase} ${busy ? 'busy' : ''}">
+            ${indicator}
             <div class="ls-body">
               <div class="ls-top">
-                <span class="ls-title">Listening for tech questions</span>
-                <span class="ls-stats ${TECH.pending ? 'busy' : ''}">${escHtml(stats)}</span>
+                <span class="ls-title">${LIVE_TITLES[phase]}</span>
+                <span class="ls-stats ${busy ? 'busy' : ''}">${escHtml(stats)}</span>
               </div>
+              ${busy && workText ? `
+                <div class="ls-work"><span class="ls-work-tag">${workLabel}</span><span class="ls-work-q">${escHtml(truncate(workText, 80))}</span></div>
+              ` : ''}
               ${DESKTOP.on ? `<div class="ls-desktop ${DESKTOP.statusText ? 'on' : ''}" id="desktop-status">${escHtml(DESKTOP.statusText)}</div>` : ''}
               <div class="ls-live ac-live ${VOICE.interimText ? 'hearing' : ''}" id="live-transcript">
+                <i data-lucide="mic" class="ls-mic w-3 h-3" aria-hidden="true"></i>
                 <span class="ls-live-text"><span id="live-transcript-text">${escHtml(VOICE.interimText || '')}</span><span class="interim-caret">▊</span></span>
               </div>
-              ${nearMiss ? `
+              ${!busy && nearMiss ? `
                 <button class="ls-nearmiss" data-action="force-answer" data-text="${escAttr(nearMiss.text)}" title="Randy skipped this — tap to answer it anyway">
                   <i data-lucide="help-circle" class="w-3 h-3"></i>
                   <span>${escHtml(truncate(nearMiss.text, 70))} · answer this?</span>
                 </button>
-              ` : (last ? `
+              ` : (!busy && last && !last.accepted ? `
                 <div class="ls-last">
-                  <i data-lucide="${last.accepted ? 'check' : 'minus'}" class="w-3 h-3 ${last.accepted ? 'ok' : 'skip'}"></i>
-                  <span>${escHtml(truncate(last.text, 90))} · ${Math.round((last.confidence || 0) * 100)}%</span>
+                  <i data-lucide="minus" class="w-3 h-3 skip"></i>
+                  <span>Skipped &ldquo;${escHtml(truncate(last.text, 64))}&rdquo;</span>
                 </div>
               ` : '')}
             </div>
@@ -3028,6 +3129,13 @@
       }
 
       function renderHero(slot, idx, vm) {
+        // When Randy is already on (and the chat is still empty), reassure the
+        // user he's actively working instead of repeating the "turn him on"
+        // pitch — otherwise a first-time user can't tell it's running.
+        const listening = !!slot.listenOn && vm.statusClass === 'listening';
+        const sub = listening
+          ? 'Randy is listening to your call. He&rsquo;ll catch technical questions and answer them right here automatically &mdash; you don&rsquo;t need to do anything. Or type a question below anytime.'
+          : 'Your Recast product expert. Turn him on and he listens to the call, spots technical questions, and answers them here &mdash; or just type below.';
         return `
           <div class="hero">
             <div class="orb-wrap ${vm.live ? 'live' : ''}">
@@ -3038,15 +3146,40 @@
               </button>
             </div>
             <div class="hero-name">${escHtml(slot.voiceName || slot.label)}</div>
-            <div class="hero-sub">Your Recast product expert. Turn him on and he listens to the call, spots technical questions, and answers them here — or just type below.</div>
-            <div class="hero-status ${vm.statusClass}"><span class="st-dot"></span>${vm.statusText}</div>
+            <div class="hero-sub">${sub}</div>
+            ${listening ? '' : `<div class="hero-status ${vm.statusClass}"><span class="st-dot"></span>${vm.statusText}</div>`}
           </div>`;
+      }
+
+      // Slim banner shown above the live chat when one or more auto-answered
+      // questions got bumped to History unread. One click opens the newest to
+      // review it, so answers are never silently lost mid-call.
+      function renderUnreadBanner() {
+        const n = unreadHistoryCount();
+        return `
+          <button class="unread-banner" data-action="review-unread" title="Open the most recent answer you haven't read">
+            <span class="ub-ic"><i data-lucide="check-check" class="w-4 h-4"></i></span>
+            <span class="ub-text"><strong>${n} earlier answer${n > 1 ? 's' : ''} ready to review</strong> — saved when Randy moved on to the next question.</span>
+            <span class="ub-go">Review<i data-lucide="chevron-right" class="w-4 h-4"></i></span>
+          </button>`;
+      }
+
+      // Conversations toggle (mobile header button, where the sidebar is
+      // hidden). Carries an unread-answer count badge so bumped answers are
+      // discoverable even when the panel is closed.
+      function sbToggleHtml() {
+        const n = unreadHistoryCount();
+        return `<button class="icon-btn sb-toggle" data-action="toggle-history" title="Conversations${n ? ' · ' + n + ' unread answer' + (n > 1 ? 's' : '') : ''}" aria-label="Open conversations">
+              <i data-lucide="panel-left" class="w-5 h-5"></i>
+              ${n ? `<span class="sb-toggle-badge">${n > 9 ? '9+' : n}</span>` : ''}
+            </button>`;
       }
 
       function renderChat(slot, idx) {
         const vm = voiceModel(slot, idx);
         return `
           ${renderChatHeader(slot, idx, vm)}
+          ${unreadHistoryCount() > 0 ? renderUnreadBanner() : ''}
           ${slot.listenOn && VOICE.srSupported ? renderLiveStrip(slot, idx) : ''}
           <div id="home-scroll-${idx}" class="msg-scroll">
             <div class="msg-col">
@@ -3077,19 +3210,22 @@
 
       function renderBotMessage(slot, m, mi, slotIdx) {
         const av = `<div class="msg-av">${escHtml(slot.label.charAt(0))}</div>`;
-        if (m.kind === 'assist') {
-          const srcs = Array.isArray(m.sources) ? m.sources : [];
-          return `${av}
-            <div class="msg-wrap"><div class="chat-bubble chat-bot chat-md" style="padding-right:38px;white-space:normal">
-              <div class="assist-badge"><i data-lucide="ear" class="w-3 h-3"></i>Technical assist</div>
-              ${mdToHtml(m.content)}
-              ${srcs.length ? `<div class="src-chips">${srcs.map(u => `
-                <a href="${escAttr(u)}" target="_blank" rel="noopener noreferrer" title="${escAttr(u)}">
-                  <i data-lucide="link" class="w-3 h-3"></i>${escHtml(hostnameOf(u))}
-                </a>`).join('')}</div>` : ''}
-            </div>${copyBtnHtml(slotIdx, mi)}${speakerBtnHtml(slotIdx, mi)}</div>`;
-        }
-        return `${av}<div class="msg-wrap"><div class="chat-bubble chat-bot" style="padding-right:38px">${escHtml(m.content).replace(/\n/g, '<br>')}</div>${copyBtnHtml(slotIdx, mi)}${speakerBtnHtml(slotIdx, mi)}</div>`;
+        // One render path for every Randy answer — typed or overheard — so the
+        // format and sources are identical. The "Technical assist" badge is the
+        // only thing unique to overheard questions.
+        const srcs = Array.isArray(m.sources) ? m.sources : [];
+        const badge = m.kind === 'assist'
+          ? `<div class="assist-badge"><i data-lucide="ear" class="w-3 h-3"></i>Technical assist</div>`
+          : '';
+        return `${av}
+          <div class="msg-wrap"><div class="chat-bubble chat-bot chat-md" style="padding-right:38px;white-space:normal">
+            ${badge}
+            ${mdToHtml(m.content)}
+            ${srcs.length ? `<div class="src-chips">${srcs.map(u => `
+              <a href="${escAttr(u)}" target="_blank" rel="noopener noreferrer" title="${escAttr(u)}">
+                <i data-lucide="link" class="w-3 h-3"></i>${escHtml(hostnameOf(u))}
+              </a>`).join('')}</div>` : ''}
+          </div>${copyBtnHtml(slotIdx, mi)}${speakerBtnHtml(slotIdx, mi)}</div>`;
       }
 
       function renderUserMessage(m) {
@@ -3119,9 +3255,7 @@
         return `
           <div class="saved-view history-popout">
             <header class="chat-head">
-              <button class="icon-btn sb-toggle" data-action="toggle-history" title="Conversations" aria-label="Open conversations">
-                <i data-lucide="panel-left" class="w-5 h-5"></i>
-              </button>
+              ${sbToggleHtml()}
               <button class="icon-btn" data-action="close-history" title="Back to current chat" aria-label="Back to current chat">
                 <i data-lucide="arrow-left" class="w-5 h-5"></i>
               </button>
@@ -3169,9 +3303,7 @@
       function renderSettingsShell() {
         return `
           <header class="chat-head">
-            <button class="icon-btn sb-toggle" data-action="toggle-history" title="Conversations" aria-label="Open conversations">
-              <i data-lucide="panel-left" class="w-5 h-5"></i>
-            </button>
+            ${sbToggleHtml()}
             <button class="icon-btn" data-action="switch-tab" data-tab="home" title="Back to chat" aria-label="Back to chat">
               <i data-lucide="arrow-left" class="w-5 h-5"></i>
             </button>
@@ -3330,7 +3462,7 @@
            listening, white dots while answering, badge + glow when an
            answer is waiting. */
         .pip-mini { display: none; position: relative; flex-direction: column; align-items: center; justify-content: center; gap: 9px; width: 100%; height: 100%; padding: 0; border: none; background: transparent; cursor: pointer; font-family: inherit; }
-        body.pip-collapsed .pip-head, body.pip-collapsed .pip-live, body.pip-collapsed .pip-msgs, body.pip-collapsed .pip-toolbar, body.pip-collapsed .pip-inputrow { display: none; }
+        body.pip-collapsed .pip-head, body.pip-collapsed .pip-live, body.pip-collapsed .pip-msgs, body.pip-collapsed .pip-toolbar, body.pip-collapsed .pip-newchat-row, body.pip-collapsed .pip-inputrow { display: none; }
         body.pip-collapsed .pip-mini { display: flex; }
         .pip-mini-stage { position: relative; width: 72px; height: 72px; }
         .pip-mini-ring { position: absolute; inset: 0; border-radius: 50%; border: 2px solid var(--cyan); opacity: 0; pointer-events: none; }
@@ -3371,12 +3503,26 @@
         .pip-live-dots i { width: 6px; height: 6px; border-radius: 50%; background: var(--primary); animation: pipDot 1.4s infinite ease-in-out both; }
         .pip-live-dots i:nth-child(1) { animation-delay: -0.32s; }
         .pip-live-dots i:nth-child(2) { animation-delay: -0.16s; }
-        .pip-live.busy .pip-live-wave { display: none; }
-        .pip-live.busy .pip-live-dots { display: inline-flex; }
+        /* Stage swap: a sound-wave while listening, bouncing dots while Randy
+           analyzes the question and researches the support site. */
+        .pip-live.stage-analyzing .pip-live-wave,
+        .pip-live.stage-researching .pip-live-wave { display: none; }
+        .pip-live.stage-analyzing .pip-live-dots,
+        .pip-live.stage-researching .pip-live-dots { display: inline-flex; }
         .pip-live-body { min-width: 0; flex: 1; }
-        .pip-live-label { font-size: 10px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--primary); line-height: 1.4; }
+        .pip-live-label { font-size: 10px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--primary); line-height: 1.4; transition: color 0.2s; }
         .pip-live-text { font-size: 12.5px; line-height: 1.45; color: var(--dark); margin-top: 2px; overflow-wrap: break-word; }
         .pip-live-text:empty { display: none; }
+        /* Per-stage accent — colour the band, indicator and label together so
+           each step reads at a glance. Analyzing = amber, Researching = green. */
+        .pip-live.stage-analyzing { background: #FFFBEB; border-bottom-color: #FDE68A; }
+        .pip-live.stage-analyzing .pip-live-label { color: #B45309; }
+        .pip-live.stage-analyzing .pip-live-dots i { background: #D97706; }
+        .pip-live.stage-analyzing .pip-live-text { color: #92400E; }
+        .pip-live.stage-researching { background: #ECFDF5; border-bottom-color: #A7F3D0; }
+        .pip-live.stage-researching .pip-live-label { color: #047857; }
+        .pip-live.stage-researching .pip-live-dots i { background: #059669; }
+        .pip-live.stage-researching .pip-live-text { color: #065F46; }
         .pip-live-caret { display: inline-block; margin-left: 1px; color: var(--primary); font-weight: 700; animation: pipCaret 1s steps(1) infinite; }
         @keyframes pipCaret { 50% { opacity: 0; } }
         .pip-row { display: flex; justify-content: flex-start; }
@@ -3424,6 +3570,10 @@
         .pip-switch.on { background: var(--primary); }
         .pip-switch::after { content: ''; position: absolute; top: 2px; left: 2px; width: 17px; height: 17px; border-radius: 50%; background: #fff; transition: left 0.2s; box-shadow: 0 1px 3px rgba(22,31,91,0.25); }
         .pip-switch.on::after { left: 19px; }
+        .pip-newchat-row { display: flex; padding: 0 12px 9px; background: #fff; flex-shrink: 0; }
+        .pip-newchat { display: inline-flex; align-items: center; justify-content: center; gap: 7px; width: 100%; padding: 8px 12px; font-size: 12px; font-weight: 600; color: var(--navy); background: #fff; border: 1.5px solid var(--divider); border-radius: 9px; cursor: pointer; font-family: inherit; transition: border-color 0.15s, color 0.15s, background 0.15s; }
+        .pip-newchat:hover { border-color: var(--primary); color: var(--primary); background: #F5F9FF; }
+        .pip-newchat svg { width: 15px; height: 15px; flex-shrink: 0; }
         .pip-inputrow { display: flex; gap: 8px; align-items: center; padding: 10px; border-top: 1px solid var(--divider); background: #fff; flex-shrink: 0; }
         .pip-inputrow input { flex: 1; min-width: 0; border: 1.5px solid var(--divider); border-radius: 9999px; padding: 9px 14px; font-size: 13px; outline: none; color: var(--navy); font-family: inherit; }
         .pip-inputrow input:focus { border-color: var(--cyan); box-shadow: 0 0 0 3px rgba(0,191,255,0.16); }
@@ -3507,7 +3657,7 @@
               <span class="pip-live-dots"><i></i><i></i><i></i></span>
             </span>
             <div class="pip-live-body">
-              <div class="pip-live-label" id="pip-live-label">Listening for tech questions</div>
+              <div class="pip-live-label" id="pip-live-label">Listening for technical questions</div>
               <div class="pip-live-text" id="pip-live-text"></div>
             </div>
           </div>
@@ -3519,6 +3669,12 @@
               <span>Read aloud</span>
             </label>
             <span class="pip-switch" id="pip-switch" role="switch" aria-checked="false" aria-label="Read answers aloud" tabindex="0" data-action="pip-toggle-speak"></span>
+          </div>
+          <div class="pip-newchat-row">
+            <button class="pip-newchat" id="pip-newchat" data-action="pip-new-chat" title="Start a new chat — the current one is saved in History">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+              <span>New chat</span>
+            </button>
           </div>
           <div class="pip-inputrow">
             <input type="text" id="pip-input" placeholder="Message ${escAttr(label)}…" autocomplete="off" />
@@ -3547,6 +3703,7 @@
           if (e.target.closest('[data-action="pip-minimize"]')) { collapsePip(); return; }
           if (e.target.closest('[data-action="pip-expand"]')) { expandPip(); return; }
           if (e.target.closest('[data-action="pip-toggle-speak"]')) { toggleSpeakFromPip(); return; }
+          if (e.target.closest('[data-action="pip-new-chat"]')) { newChat(); return; }
           const cp = e.target.closest('[data-action="pip-copy"]');
           if (cp) copyFromPip(cp);
         });
@@ -3790,27 +3947,33 @@
       // busy "Processing/Researching" state the moment a question is being
       // checked or answered. Hidden whenever Randy isn't actively listening,
       // so typed-only use of the pop-out is unaffected.
+      // The live band walks the question through three stages so the user can
+      // watch Randy work: (1) listening — the voice-to-text streams in;
+      // (2) analyzing — the classifier is deciding if it's a tech question;
+      // (3) researching — the support-site web search is running for the answer.
       function pipLiveModel(slot) {
         if (!slot || !slot.listenOn) return { show: false };
-        // Answering — the web search runs here. An overheard question is a
-        // technical-assist answer ("Researching"); a spoken one is a chat
-        // reply ("Thinking").
+        // Stage 3 — answering. The web search runs here. An overheard question
+        // is a technical-assist answer ("Researching support site"); a spoken
+        // one is an ordinary chat reply ("Thinking").
         if (slot.loading) {
           let lastUser = null;
           for (let i = slot.messages.length - 1; i >= 0; i--) {
             if (slot.messages[i].role === 'user') { lastUser = slot.messages[i]; break; }
           }
           const researching = lastUser && lastUser.kind === 'assist-q';
-          return { show: true, busy: true, label: researching ? 'Researching the question…' : 'Thinking…', text: '' };
+          if (researching) {
+            return { show: true, stage: 'researching', label: 'Researching support site', text: lastUser ? lastUser.content : '' };
+          }
+          return { show: true, stage: 'researching', label: 'Thinking…', text: '' };
         }
-        // Classifier deciding whether the latest utterance is a question.
-        if (TECH.pending) return { show: true, busy: true, label: 'Processing question…', text: '' };
-        // Live transcription as it streams in.
-        if (VOICE.interimText) {
-          return { show: true, busy: false, label: 'Hearing…', text: VOICE.interimText };
+        // Stage 2 — the classifier is deciding whether the utterance is a
+        // technical question worth answering.
+        if (TECH.pending) {
+          return { show: true, stage: 'analyzing', label: 'Analyzing question', text: TECH.activeText || VOICE.interimText || '' };
         }
-        // Listening, nothing heard yet.
-        return { show: true, busy: false, label: 'Listening for tech questions', text: '' };
+        // Stage 1 — live transcription as Randy hears the call.
+        return { show: true, stage: 'listening', label: 'Listening for technical questions', text: VOICE.interimText || '' };
       }
 
       // Push the live-band state into the pop-out document. Called from
@@ -3826,13 +3989,18 @@
           if (!band) return;
           const m = pipLiveModel(slot || STATE.slots[PIP.slotIdx]);
           band.classList.toggle('show', !!m.show);
-          band.classList.toggle('busy', !!(m.show && m.busy));
+          band.classList.toggle('stage-listening', m.stage === 'listening');
+          band.classList.toggle('stage-analyzing', m.stage === 'analyzing');
+          band.classList.toggle('stage-researching', m.stage === 'researching');
           if (!m.show) return;
           const lbl = doc.getElementById('pip-live-label');
           if (lbl && lbl.textContent !== m.label) lbl.textContent = m.label;
           const txt = doc.getElementById('pip-live-text');
           if (txt) {
-            const html = m.text ? escHtml(m.text) + '<span class="pip-live-caret">▊</span>' : '';
+            // Only the live-transcription stage gets the blinking caret; the
+            // analyzing/researching text is the settled question, shown plainly.
+            const caret = m.stage === 'listening' ? '<span class="pip-live-caret">▊</span>' : '';
+            const html = m.text ? escHtml(m.text) + caret : '';
             if (txt.innerHTML !== html) txt.innerHTML = html;
           }
         } catch (err) {
@@ -3846,7 +4014,7 @@
         const on = !!slot.listenOn;
         if (slot.isSpeaking) return { text: 'Talking…', live: true };
         if (slot.loading) return { text: 'Thinking…', live: on };
-        if (on) return { text: 'Listening for tech questions', live: true };
+        if (on) return { text: 'Listening for technical questions', live: true };
         return { text: 'Online', live: false };
       }
 
@@ -3864,20 +4032,20 @@
             return '<div class="pip-row user"><div class="pip-bubble pip-user">' + badge + escHtml(m.content) + '</div></div>';
           }
           if (!m.content) return ''; // in-flight placeholder — the typing dots cover it
-          if (m.kind === 'assist') {
-            const srcs = Array.isArray(m.sources) ? m.sources : [];
-            return '<div class="pip-row"><div class="pip-bubble pip-bot pip-md">' +
-              '<button class="pip-copy" data-action="pip-copy" data-msg="' + mi + '" title="Copy answer" aria-label="Copy answer">' +
-                '<svg class="ic-copy" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>' +
-                '<svg class="ic-check" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>' +
-              '</button>' +
-              '<span class="pip-badge assist">Technical assist</span>' +
-              mdToHtml(m.content) +
-              (srcs.length ? '<div class="pip-src">' + srcs.map(u =>
-                '<a href="' + escAttr(u) + '" target="_blank" rel="noopener noreferrer" title="' + escAttr(u) + '">' + escHtml(hostnameOf(u)) + '</a>').join('') + '</div>' : '') +
-              '</div></div>';
-          }
-          return '<div class="pip-row"><div class="pip-bubble pip-bot">' + escHtml(m.content).replace(/\n/g, '<br>') + '</div></div>';
+          // Same single render path as the main chat: every answer gets markdown
+          // + source chips; the "Technical assist" badge marks overheard ones.
+          const srcs = Array.isArray(m.sources) ? m.sources : [];
+          const badge = m.kind === 'assist' ? '<span class="pip-badge assist">Technical assist</span>' : '';
+          return '<div class="pip-row"><div class="pip-bubble pip-bot pip-md">' +
+            '<button class="pip-copy" data-action="pip-copy" data-msg="' + mi + '" title="Copy answer" aria-label="Copy answer">' +
+              '<svg class="ic-copy" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>' +
+              '<svg class="ic-check" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>' +
+            '</button>' +
+            badge +
+            mdToHtml(m.content) +
+            (srcs.length ? '<div class="pip-src">' + srcs.map(u =>
+              '<a href="' + escAttr(u) + '" target="_blank" rel="noopener noreferrer" title="' + escAttr(u) + '">' + escHtml(hostnameOf(u)) + '</a>').join('') + '</div>' : '') +
+            '</div></div>';
         });
         if (slot.loading) {
           out.push('<div class="pip-row"><div class="pip-bubble pip-bot pip-typing"><span class="pip-tdot"></span><span class="pip-tdot"></span><span class="pip-tdot"></span></div></div>');
@@ -4099,9 +4267,10 @@
               if (sl.isSpeaking) stopSpeaking();
               const msg = sl.messages[mi];
               if (!msg || msg.role !== 'assistant') break;
-              const speech = msg.kind === 'assist'
-                ? (msg.spoken || extractSummary(stripMarkdown(msg.content)))
-                : extractSummary(stripMarkdown(msg.content));
+              // Every answer now carries a spoken summary (voice and typed
+              // alike); fall back to a generated summary only for older
+              // messages that predate it.
+              const speech = msg.spoken || extractSummary(stripMarkdown(msg.content));
               speakText(speech, si, mi);
               break;
             }
@@ -4119,9 +4288,22 @@
             }
             case 'view-history': {
               HISTORY_VIEW.open = act.dataset.id;
+              markHistoryRead(act.dataset.id);
               STATE.historyConfirmDeleteId = null;
               STATE.activeTab = 'home';
               STATE.historyOpen = false;
+              render();
+              break;
+            }
+            case 'review-unread': {
+              const u = STATE.sessionHistory.find(h => h.unread);
+              if (u) {
+                markHistoryRead(u.id);
+                HISTORY_VIEW.open = u.id;
+                STATE.historyConfirmDeleteId = null;
+                STATE.activeTab = 'home';
+                STATE.historyOpen = false;
+              }
               render();
               break;
             }
@@ -4176,6 +4358,7 @@
             case 'load-history': {
               const hist = STATE.sessionHistory.find(h => h.id === act.dataset.id);
               if (hist) {
+                markHistoryRead(hist.id);
                 const slot = STATE.slots[0];
                 const transcript = hist.pairs.map(p => 'User: ' + p.question + '\nRandy: ' + stripMarkdown(p.answer)).join('\n\n');
                 slot.inputText = 'Here is a previous conversation for context:\n\n' + transcript + '\n\nBased on this conversation, ';
