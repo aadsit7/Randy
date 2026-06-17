@@ -216,6 +216,10 @@
       .ls-speak { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; color: var(--n600); cursor: default; }
       .ls-off { background: transparent; border: 1.5px solid var(--n300); color: var(--n600); font-size: 12px; font-weight: 600; padding: 6px 14px; border-radius: 999px; cursor: pointer; transition: border-color 0.12s, color 0.12s; }
       .ls-off:hover { border-color: #dc2626; color: #dc2626; }
+      .ls-readscreen { display: inline-flex; align-items: center; gap: 6px; background: transparent; border: 1.5px solid color-mix(in srgb, var(--primary) 40%, transparent); color: var(--primary); font-size: 12px; font-weight: 600; padding: 6px 13px; border-radius: 999px; cursor: pointer; transition: background 0.12s, color 0.12s; white-space: nowrap; }
+      .ls-readscreen:hover { background: var(--primary); color: #fff; }
+      .ls-readscreen:disabled { opacity: 0.6; cursor: default; }
+      .ls-readscreen i { flex-shrink: 0; }
 
       .interim-caret { display: inline-block; width: 6px; margin-left: 2px; animation: interim-blink 1s steps(2,end) infinite; color: var(--primary); }
       @keyframes interim-blink { 50% { opacity: 0; } }
@@ -710,6 +714,33 @@
         additionalProperties: false
       };
 
+      // Vision gate: read a question off a screenshot of the surface the user
+      // already shared. Same scope rules as CLASSIFIER_SYSTEM, but the input is
+      // an image instead of an utterance. The extracted question still flows
+      // through the normal classify -> answer path, so this only has to find and
+      // clean the text — scope is re-checked downstream.
+      const SCREEN_VISION_SYSTEM = [
+        'You are reading a screenshot from a Recast Software solution engineer’s shared screen during a live call. Find the single most prominent TECHNICAL QUESTION the engineer wants answered — usually text the user highlighted, selected, or that sits front-and-center (a chat message, a ticket, a doc, an email).',
+        '',
+        'IN SCOPE: Recast products (Right Click Tools, Application Manager, Application Workspace, Endpoint Insights, Privilege Manager, Liquit) and adjacent endpoint management (ConfigMgr / MECM / SCCM, Intune, AD / GPO, Autopilot, co-management, hybrid join, app packaging and delivery, self-service, patch management, MDM).',
+        '',
+        'Set found=true only when the screen clearly contains an in-scope technical question or a statement of a technical problem an SE would answer. Set found=false for menus, code with no question, pricing/scheduling/contract text, or anything with no readable in-scope question.',
+        '',
+        'question: rewrite what you read as one clear, self-contained question under 25 words. Fix obvious OCR noise and garbled product names. If found is false, return an empty string.',
+        '',
+        'Respond with ONLY a JSON object — no prose, no code fences.'
+      ].join('\n');
+
+      const SCREEN_VISION_SCHEMA = {
+        type: 'object',
+        properties: {
+          found:    { type: 'boolean', description: 'True only if the screenshot contains a readable, in-scope technical question or problem statement.' },
+          question: { type: 'string',  description: 'The question rewritten as one clear, self-contained question under 25 words; empty string when found is false.' }
+        },
+        required: ['found', 'question'],
+        additionalProperties: false
+      };
+
       // Safety net when the classifier service is unreachable: obvious
       // technical questions still get answered.
       const TECH_TOPIC_RE = /\b(recast|liquit|application workspace|right.?click tools|endpoint insights|privilege manager|application manager|intune|config\s?manager|configmgr|sccm|mecm|autopilot|co.?management|gpo|group policy|hybrid join|win32|msi|packag(?:e|ing)|app (?:deploy|delivery|catalog)|self.?service|patch(?:ing|es)?|third.?party|mdm|endpoint)\b/i;
@@ -977,7 +1008,12 @@
         voicedRun: 0,             // consecutive voiced samples in the open segment
         reqId: 0,                 // monotonic id for inference requests
         inFlight: 0,              // outstanding worker jobs (single-flight gate)
-        lastInterimAt: 0          // throttle for live partial transcriptions
+        lastInterimAt: 0,         // throttle for live partial transcriptions
+        // Visual question capture: the screen/tab the user already shared is
+        // reused on demand to read a question off-screen with a vision model.
+        videoTrack: null,         // retained share video track for frame grabs
+        imageCapture: null,       // lazily-created ImageCapture wrapper
+        visionBusy: false         // single-flight gate for screen-question reads
       };
 
       // Whisper sample rate, plus VAD/segmentation tuning. Chosen so a normal
@@ -2484,8 +2520,14 @@
           showToast('No computer audio shared — re-share and tick “Share tab/system audio”. Using mic only.');
           return;
         }
-        // Audio only — stop the video track so we aren't grabbing the screen.
-        stream.getVideoTracks().forEach(t => { try { t.stop(); } catch {} });
+        // Keep the first video track (if any) live so a question can be read
+        // off the shared screen on demand; stop any extras. The 1 fps / low-res
+        // constraints above keep this nearly free — audio stays the only
+        // continuous consumer. The track is torn down in stopDesktopCapture.
+        const videoTracks = stream.getVideoTracks();
+        DESKTOP.videoTrack = videoTracks[0] || null;
+        DESKTOP.imageCapture = null;
+        videoTracks.slice(1).forEach(t => { try { t.stop(); } catch {} });
 
         DESKTOP.stream = stream;
         DESKTOP.on = true;
@@ -2693,7 +2735,145 @@
         DESKTOP.voicedRun = 0;
         DESKTOP.inFlight = 0;
         DESKTOP.device = '';
+        DESKTOP.videoTrack = null;
+        DESKTOP.imageCapture = null;
+        DESKTOP.visionBusy = false;
         setDesktopStatus('');
+      }
+
+      /* ---------- visual question capture (read a question off-screen) ---------- */
+
+      // Grab one frame from the shared screen as a downscaled JPEG. Prefers
+      // ImageCapture; falls back to a detached <video> + canvas where it is
+      // missing (Safari, older Chromium). Returns { data, mediaType } or null.
+      // Never throws — every failure resolves to null so the caller can toast.
+      async function grabDesktopFrameJpeg() {
+        const track = DESKTOP.videoTrack;
+        if (!track || track.readyState !== 'live') return null;
+        let source = null;
+        try {
+          if ('ImageCapture' in window) {
+            DESKTOP.imageCapture = DESKTOP.imageCapture || new ImageCapture(track);
+            source = await DESKTOP.imageCapture.grabFrame();
+          }
+        } catch { source = null; } // fall through to the video/canvas path
+        if (!source) source = await grabFrameViaVideo(track);
+        if (!source) return null;
+        try {
+          const MAX = 1200;
+          const sw = source.width || source.videoWidth;
+          const sh = source.height || source.videoHeight;
+          if (!sw || !sh) return null;
+          const scale = Math.min(1, MAX / Math.max(sw, sh));
+          const w = Math.max(1, Math.round(sw * scale));
+          const h = Math.max(1, Math.round(sh * scale));
+          const canvas = document.createElement('canvas');
+          canvas.width = w; canvas.height = h;
+          canvas.getContext('2d').drawImage(source, 0, 0, w, h);
+          if (source.close) { try { source.close(); } catch {} } // ImageBitmap only
+          const url = canvas.toDataURL('image/jpeg', 0.7);
+          const comma = url.indexOf(',');
+          if (comma < 0) return null;
+          return { data: url.slice(comma + 1), mediaType: 'image/jpeg' };
+        } catch { return null; }
+      }
+
+      // Fallback grab: render the shared track through a detached <video> and
+      // hand back a canvas drawn from one frame. The shared track is never
+      // stopped here — it stays live for the audio path and future grabs.
+      function grabFrameViaVideo(track) {
+        return new Promise((resolve) => {
+          let settled = false;
+          const finish = (val) => {
+            if (settled) return;
+            settled = true;
+            try { video.pause(); } catch {}
+            video.onloadeddata = video.onerror = null;
+            video.srcObject = null;
+            resolve(val);
+          };
+          const video = document.createElement('video');
+          video.muted = true; video.playsInline = true;
+          try { video.srcObject = new MediaStream([track]); }
+          catch { resolve(null); return; }
+          const draw = () => {
+            const w = video.videoWidth, h = video.videoHeight;
+            if (!w || !h) { finish(null); return; }
+            const canvas = document.createElement('canvas');
+            canvas.width = w; canvas.height = h;
+            try { canvas.getContext('2d').drawImage(video, 0, 0, w, h); }
+            catch { finish(null); return; }
+            finish(canvas);
+          };
+          video.onloadeddata = () => { video.play().then(draw).catch(draw); };
+          video.onerror = () => finish(null);
+          setTimeout(() => finish(null), 2500); // never hang the capture
+        });
+      }
+
+      // Read a question off the shared screen with the vision model and answer
+      // it in the same chat spoken questions use. User-initiated only — a frame
+      // leaves the machine only on an explicit click/shortcut, never on a timer.
+      async function recognizeScreenQuestion() {
+        if (!DESKTOP.on) { showToast('Turn Randy on in two-way mode and share a tab or screen first.'); return; }
+        if (!DESKTOP.videoTrack) { showToast('Re-share a tab or screen (not audio-only) so Randy can read it.'); return; }
+        if (DESKTOP.visionBusy) return;
+        if (!PROXY.ready) { showToast('⚠ Randy cannot reach his answer service — open Settings'); return; }
+        DESKTOP.visionBusy = true;
+        const prevStatus = DESKTOP.statusText;
+        setDesktopStatus('Reading the screen…');
+        render(); // reflect the busy/disabled button
+        try {
+          const frame = await grabDesktopFrameJpeg();
+          if (!frame) {
+            showToast('Randy could not capture the screen — try sharing a tab or the full screen.');
+            return;
+          }
+          const data = await postChat({
+            model: MODELS.classifier,
+            max_tokens: 200,
+            system: systemBlocks(SCREEN_VISION_SYSTEM),
+            messages: [{ role: 'user', content: [
+              { type: 'image', source: { type: 'base64', media_type: frame.mediaType, data: frame.data } },
+              { type: 'text', text: 'Read the screen and extract the technical question, following your instructions.' }
+            ] }],
+            output_config: { format: { type: 'json_schema', schema: SCREEN_VISION_SCHEMA } },
+            save: false
+          }, null, ASSIST.CLASSIFY_TIMEOUT_MS);
+          const q = parseScreenQuestion(String(data.reply || ''));
+          if (q.found && q.question) {
+            // Deliberate user action — answer it directly, the same path the
+            // near-miss "answer this?" chip uses. Dedup stamps guard against an
+            // identical spoken utterance double-answering moments later.
+            TECH.lastSubmitted = q.question;
+            TECH.lastSubmittedAt = Date.now();
+            showToast('Randy is answering a question from your screen');
+            runAssistAnswer(0, q.question);
+          } else {
+            showToast('No in-scope question found on the screen.');
+          }
+        } catch (err) {
+          showToast('Randy could not read the screen — try again.');
+        } finally {
+          DESKTOP.visionBusy = false;
+          setDesktopStatus(prevStatus);
+          render();
+        }
+      }
+
+      // Defensive parse mirroring parseClassifierReply: structured outputs
+      // guarantee JSON, but older proxy deployments may not enforce the schema.
+      function parseScreenQuestion(reply) {
+        const m = reply.match(/\{[\s\S]*\}/);
+        if (!m) return { found: false, question: '' };
+        try {
+          const j = JSON.parse(m[0]);
+          const question = typeof j.question === 'string' ? j.question.trim() : '';
+          return {
+            found: typeof j.found === 'boolean' ? j.found : !!question,
+            question
+          };
+        } catch { return { found: false, question: '' }; }
       }
 
       /* ---------- utterance buffering + classification ---------- */
@@ -3642,6 +3822,11 @@
                 <span>Read aloud</span>
                 <span class="voice-switch ${slot.speakAnswers ? 'on' : ''}" role="switch" aria-checked="${!!slot.speakAnswers}" tabindex="0" data-action="toggle-speak-answers"></span>
               </label>
+              ${DESKTOP.on && DESKTOP.videoTrack ? `
+                <button class="ls-readscreen" data-action="read-screen" ${DESKTOP.visionBusy ? 'disabled' : ''} title="Read a highlighted question off the screen you're sharing">
+                  <i data-lucide="scan-text" class="w-3 h-3"></i>
+                  <span>${DESKTOP.visionBusy ? 'Reading…' : 'Read screen'}</span>
+                </button>` : ''}
               <button class="ls-off" data-action="toggle-listen" title="Turn Randy off">Turn off</button>
             </div>
           </div>`;
@@ -4897,6 +5082,7 @@
               }
               break;
             }
+            case 'read-screen': recognizeScreenQuestion(); break;
             case 'tts-speak': {
               const si = parseInt(act.dataset.slot, 10);
               const mi = parseInt(act.dataset.msg, 10);
@@ -5044,6 +5230,13 @@
         });
 
         document.addEventListener('keydown', e => {
+          // Alt+Shift+R — read a question off the shared screen, hands-free
+          // mid-call. Guarded to two-way captures so it no-ops otherwise.
+          if (e.altKey && e.shiftKey && (e.code === 'KeyR' || e.key === 'R' || e.key === 'r') && DESKTOP.on && DESKTOP.videoTrack) {
+            e.preventDefault();
+            recognizeScreenQuestion();
+            return;
+          }
           if (e.key === 'Enter' && !e.shiftKey && e.target.id === 'expanded-input' && STATE.expandedSlot !== null) {
             e.preventDefault();
             STATE.slots[STATE.expandedSlot].inputText = e.target.value;
