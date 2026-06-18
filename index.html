@@ -750,18 +750,26 @@
       // classifier — it can never auto-answer on its own.
       const TRANSCRIPT_FIXES = [
         [/\bin\s?tune\b/gi, 'Intune'],
+        [/\bintunes\b/gi, 'Intune'],
         [/\bend[\s-]?point(s)?\b/gi, 'endpoint$1'],
         [/\bauto[\s-]?pilot\b/gi, 'Autopilot'],
         [/\bco[\s-]?management\b/gi, 'co-management'],
         [/\bconfig(?:uration)?[\s-]?manager\b/gi, 'ConfigMgr'],
         [/\bconfig\s?mgr\b/gi, 'ConfigMgr'],
+        [/\bs\.?c\.?c\.?m\.?\b/gi, 'SCCM'],
+        [/\bm\.?e\.?c\.?m\.?\b/gi, 'MECM'],
         [/\bright[\s-]?click tools\b/gi, 'Right Click Tools'],
         [/\bapp(?:lication)? workspace\b/gi, 'Application Workspace'],
         [/\bapplication manager\b/gi, 'Application Manager'],
         [/\bprivilege manager\b/gi, 'Privilege Manager'],
         [/\bendpoint insights\b/gi, 'Endpoint Insights'],
         [/\bliqu(?:id|it|ot)\b/gi, 'Liquit'],
-        [/\bre[\s-]?cast\b/gi, 'Recast']
+        [/\bre[\s-]?cast\b/gi, 'Recast'],
+        [/\bpower\s?shell\b/gi, 'PowerShell'],
+        [/\bwin\s?32\b/gi, 'Win32'],
+        [/\bazure a\.?\s?d\.?\b/gi, 'Azure AD'],
+        [/\bgroup polic(y|ies)\b/gi, 'Group Polic$1'],
+        [/\bhybrid[\s-]?join(ed)?\b/gi, 'hybrid join$1']
       ];
       function correctTranscript(text) {
         let t = String(text || '');
@@ -975,6 +983,9 @@
         speaking: false,
         silenceRun: 0,            // consecutive silent samples
         voicedRun: 0,             // consecutive voiced samples in the open segment
+        noiseFloor: 0.002,        // adaptive ambient-noise estimate (EMA while idle)
+        preRoll: [],              // ring of recent silent frames (onset pre-roll)
+        preRollLen: 0,            // samples buffered in preRoll
         reqId: 0,                 // monotonic id for inference requests
         inFlight: 0,              // outstanding worker jobs (single-flight gate)
         lastInterimAt: 0          // throttle for live partial transcriptions
@@ -983,9 +994,26 @@
       // Whisper sample rate, plus VAD/segmentation tuning. Chosen so a normal
       // spoken question finalizes ~0.7 s after the speaker stops, while a long
       // monologue still flushes periodically instead of growing unbounded.
+      //
+      // Voice activity uses an ADAPTIVE dual-threshold detector (see
+      // processDesktopBlock): a noise floor is tracked while the line is quiet
+      // and the open/close thresholds ride a little above it. In a silent room
+      // the open threshold stays pinned to SILENCE_RMS (so behaviour matches the
+      // old fixed detector), but in a noisy room — fans, HVAC, a hot mic on the
+      // call — the bar rises so steady background hum no longer trips Whisper
+      // into transcribing (and hallucinating over) non-speech. The lower close
+      // threshold adds hysteresis so a brief dip mid-word doesn't split one
+      // sentence into two, and a short pre-roll keeps the audio just BEFORE the
+      // onset so the first word isn't clipped (Whisper mis-reads clipped onsets).
       const ASR = {
         SAMPLE_RATE: 16000,
-        SILENCE_RMS: 0.006,       // below this is "silence"
+        SILENCE_RMS: 0.006,       // absolute floor for the OPEN threshold (quiet-room default)
+        CLOSE_FLOOR: 0.004,       // absolute floor for the CLOSE threshold (< open ⇒ hysteresis)
+        NOISE_OPEN_FACTOR: 1.8,   // open a segment when rms ≥ noiseFloor × this
+        NOISE_CLOSE_FACTOR: 1.3,  // keep it open while rms ≥ noiseFloor × this
+        NOISE_FLOOR_MAX: 0.012,   // clamp so loud rooms can't raise the bar past real speech
+        NOISE_FLOOR_INIT: 0.002,  // starting noise estimate before any audio arrives
+        PREROLL_MS: 300,          // audio kept before the onset so the first word survives
         SILENCE_MS: 700,          // trailing silence that ends an utterance
         MIN_VOICED_MS: 250,       // ignore blips shorter than this
         MAX_SEG_MS: 18000,        // hard flush so long talk still transcribes live
@@ -2148,9 +2176,15 @@
         const target = interimTargetSlot();
         if (target === null) { clearInterim(); return; }
 
+        // Show the corrected wording in the live band so product names read
+        // right as they stream ("Intune", not "in tune"). Echo/dedupe above and
+        // the answer pipeline still run on the raw transcript — this is a
+        // display-only polish on the partial.
+        const display = correctTranscript(trimmed) || trimmed;
+
         const prevText = VOICE.interimText;
         const prevSlot = VOICE.interimSlot;
-        VOICE.interimText = trimmed;
+        VOICE.interimText = display;
         VOICE.interimSlot = target;
         VOICE.interimAt = Date.now();
 
@@ -2159,10 +2193,10 @@
         // leave the pop-out transcript stale.
         if (PIP.window) updatePipLive(STATE.slots[PIP.slotIdx]);
 
-        if (patchLiveTranscript(trimmed)) return;
+        if (patchLiveTranscript(display)) return;
         // One render to mount the node — but never while the user is typing,
         // since render() rebuilds the DOM and would steal composer focus.
-        if (prevText !== trimmed || prevSlot !== target) {
+        if (prevText !== display || prevSlot !== target) {
           if (!isComposerFocused()) render();
         }
       }
@@ -2435,7 +2469,12 @@
           if (d.type === 'transcribe') {
             if (!asr) { self.postMessage({ type: 'result', id: d.id, final: d.final, text: '' }); return; }
             try {
-              const out = await asr(d.audio, { language: 'en', task: 'transcribe', chunk_length_s: 30, stride_length_s: 5, return_timestamps: false });
+              // no_repeat_ngram_size stops Whisper's classic failure mode on
+              // call audio: looping a word or short clause ("patching patching
+              // patching…") until the segment ends. Greedy decoding (num_beams
+              // 1) stays fast for live use; the repetition guard is the cheap,
+              // high-value accuracy win.
+              const out = await asr(d.audio, { language: 'en', task: 'transcribe', chunk_length_s: 30, stride_length_s: 5, return_timestamps: false, no_repeat_ngram_size: 3, num_beams: 1 });
               const text = ((out && out.text) || '').trim();
               self.postMessage({ type: 'result', id: d.id, final: d.final, text: text });
             } catch (err) {
@@ -2564,6 +2603,37 @@
         }
       }
 
+      // Whisper invents canned phrases when it's fed near-silence, music, or
+      // room tone — "Thank you.", "you", "Thanks for watching" — and Web Speech
+      // never produces these, so they're a reliable tell for a non-speech
+      // segment. It also occasionally loops a word or short clause. Both corrupt
+      // the question pipeline (a hallucinated "Thank you." can debounce-flush as
+      // a real utterance), so scrub them before a transcript is treated as
+      // speech. Only ever drops an output that is ENTIRELY a known hallucination
+      // — real questions containing these words pass through untouched.
+      const ASR_HALLUCINATIONS = new Set([
+        'you', 'thank you', 'thanks', 'thank you very much', 'thanks for watching',
+        'thank you for watching', 'thanks for listening', 'please subscribe',
+        'like and subscribe', 'subscribe', 'bye', 'goodbye', 'okay', 'ok', 'so',
+        'the end', 'music', 'applause', 'silence', 'foreign', 'yeah', 'mm', 'mhm',
+        'uh', 'um', 'huh', 'hmm'
+      ]);
+
+      function sanitizeAsrText(text) {
+        let t = String(text || '').trim();
+        if (!t) return '';
+        // Collapse an immediately repeated word: "the the the call" → "the call".
+        t = t.replace(/\b(\w+)(\s+\1\b)+/gi, '$1');
+        // Collapse a short clause looped 3+ times ("no clean way no clean way
+        // no clean way" → one copy) — Whisper's other repetition shape.
+        t = t.replace(/\b(\w+(?:\s+\w+){0,3})(?:\s+\1\b){2,}/gi, '$1');
+        t = t.replace(/\s+/g, ' ').trim();
+        // Drop if what's left is nothing but a known silence hallucination.
+        const norm = t.toLowerCase().replace(/[^a-z ]/g, '').replace(/\s+/g, ' ').trim();
+        if (!norm || ASR_HALLUCINATIONS.has(norm)) return '';
+        return t;
+      }
+
       function onWhisperMessage(ev) {
         const d = ev.data || {};
         if (d.type === 'ready') {
@@ -2586,16 +2656,24 @@
         }
         if (d.type === 'result') {
           DESKTOP.inFlight = Math.max(0, DESKTOP.inFlight - 1);
-          const text = (d.text || '').trim();
+          const text = sanitizeAsrText(d.text);
           if (!text) return;
           if (d.final) handleVoiceTranscript(text);
           else updateInterim(text);
         }
       }
 
-      // Energy-based voice-activity segmentation over the 16 kHz PCM. Builds up
-      // one utterance, finalizes it after a trailing pause (or a hard length
-      // cap), and refreshes a live partial in between.
+      // Adaptive voice-activity segmentation over the 16 kHz PCM. Builds up one
+      // utterance, finalizes it after a trailing pause (or a hard length cap),
+      // and refreshes a live partial in between.
+      //
+      // Dual-threshold + adaptive noise floor: while the line is quiet the noise
+      // floor tracks the ambient level, and a segment OPENS only when the block
+      // clearly exceeds it (or the fixed SILENCE_RMS floor, whichever is higher)
+      // and stays open until it drops below a lower CLOSE threshold. The gap
+      // between the two gives hysteresis (a brief dip mid-word won't split the
+      // sentence), and a short pre-roll of pre-onset audio is prepended so the
+      // first word isn't clipped — both directly improve what Whisper hears.
       function processDesktopBlock(frame) {
         if (!DESKTOP.on) return;
         const n = frame.length;
@@ -2604,22 +2682,62 @@
         for (let i = 0; i < n; i++) { const s = frame[i]; sum += s * s; }
         const rms = Math.sqrt(sum / n);
 
-        if (rms >= ASR.SILENCE_RMS) {
-          DESKTOP.speaking = true;
-          DESKTOP.silenceRun = 0;
-          DESKTOP.voicedRun += blockMs;
-          appendSeg(frame);
-        } else if (DESKTOP.speaking) {
-          appendSeg(frame); // keep a little trailing silence for a clean cutoff
-          DESKTOP.silenceRun += blockMs;
-          if (DESKTOP.silenceRun >= ASR.SILENCE_MS) { flushSegment(); return; }
-        }
+        const nf = DESKTOP.noiseFloor;
+        const openThr = Math.max(ASR.SILENCE_RMS, nf * ASR.NOISE_OPEN_FACTOR);
+        const closeThr = Math.max(ASR.CLOSE_FLOOR, nf * ASR.NOISE_CLOSE_FACTOR);
 
-        if (DESKTOP.speaking && (DESKTOP.segLen / ASR.SAMPLE_RATE) * 1000 >= ASR.MAX_SEG_MS) {
-          flushSegment();
-          return;
+        if (!DESKTOP.speaking) {
+          // Idle: let the ambient estimate drift toward the current level so the
+          // bar rises in a noisy room and relaxes again when it goes quiet.
+          DESKTOP.noiseFloor = Math.min(
+            ASR.NOISE_FLOOR_MAX,
+            Math.max(0.0005, nf * 0.97 + rms * 0.03)
+          );
+          if (rms >= openThr) {
+            DESKTOP.speaking = true;
+            DESKTOP.silenceRun = 0;
+            DESKTOP.voicedRun = blockMs;
+            seedSegFromPreRoll();   // recover the word onset captured before this block
+            appendSeg(frame);
+          } else {
+            pushPreRoll(frame);     // keep rolling silent context for the next onset
+          }
+        } else {
+          appendSeg(frame); // keep trailing audio for a clean cutoff
+          if (rms >= closeThr) {
+            DESKTOP.silenceRun = 0;
+            DESKTOP.voicedRun += blockMs;
+          } else {
+            DESKTOP.silenceRun += blockMs;
+            if (DESKTOP.silenceRun >= ASR.SILENCE_MS) { flushSegment(); return; }
+          }
+          if ((DESKTOP.segLen / ASR.SAMPLE_RATE) * 1000 >= ASR.MAX_SEG_MS) {
+            flushSegment();
+            return;
+          }
         }
         maybeInterim();
+      }
+
+      // Rolling buffer of recent silent frames so the audio just BEFORE a word's
+      // onset can be prepended to the segment (Whisper mis-reads clipped starts).
+      function pushPreRoll(frame) {
+        DESKTOP.preRoll.push(new Float32Array(frame));
+        DESKTOP.preRollLen += frame.length;
+        const cap = Math.round((ASR.PREROLL_MS / 1000) * ASR.SAMPLE_RATE);
+        // Keep at least one prior block regardless of cap (one block already
+        // carries ~0.25 s of onset context).
+        while (DESKTOP.preRoll.length > 1 && DESKTOP.preRollLen - DESKTOP.preRoll[0].length >= cap) {
+          DESKTOP.preRollLen -= DESKTOP.preRoll.shift().length;
+        }
+      }
+
+      // Move the buffered pre-roll into the front of the open segment. The
+      // frames are already owned copies, so no re-copy is needed.
+      function seedSegFromPreRoll() {
+        for (const c of DESKTOP.preRoll) { DESKTOP.seg.push(c); DESKTOP.segLen += c.length; }
+        DESKTOP.preRoll = [];
+        DESKTOP.preRollLen = 0;
       }
 
       function appendSeg(frame) {
@@ -2691,6 +2809,9 @@
         DESKTOP.speaking = false;
         DESKTOP.silenceRun = 0;
         DESKTOP.voicedRun = 0;
+        DESKTOP.noiseFloor = ASR.NOISE_FLOOR_INIT;
+        DESKTOP.preRoll = [];
+        DESKTOP.preRollLen = 0;
         DESKTOP.inFlight = 0;
         DESKTOP.device = '';
         setDesktopStatus('');
