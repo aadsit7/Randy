@@ -633,7 +633,7 @@
 
       // Shared answer format for every Randy reply — typed chat and overheard
       // voice questions both use this so the output format and sources match
-      // exactly: a "Bottom line:" summary, bullets, then a ===SPOKEN=== summary
+      // exactly: a "Short answer:" line, bullets, then a ===SPOKEN=== summary
       // for Read aloud. Randy answers the most likely interpretation rather than
       // asking clarifying questions, the same on a typed message as on a call.
       const ASSIST_STYLE = [
@@ -909,7 +909,6 @@
         ttsSupported: !!window.speechSynthesis,
         recognition: null,        // shared SpeechRecognition instance
         wantRunning: false,       // should the recognizer be running?
-        audioCtx: null,           // lazy AudioContext for the wake beep
         permissionDenied: false,
         toastTimeoutId: null,
         toastMessage: '',
@@ -1113,11 +1112,11 @@
       // HISTORY_KEY. Clear it so returning devices don't keep stale chats.
       try { localStorage.removeItem(HISTORY_KEY); } catch {}
 
-      // Assist answers must open with "**Bottom line:**". Models occasionally
+      // Assist answers must open with "**Short answer:**". Models occasionally
       // ad-lib a fake-out first ("Great question! ... Just kidding. Here's
       // the real answer:"). Two passes, both anchored so they can't damage
       // a genuine answer: peel known opener patterns off the start, then if
-      // the bolded Bottom-line marker still sits past the start, cut to it.
+      // the bolded Short-answer marker still sits past the start, cut to it.
       function sanitizeAssistAnswer(text) {
         let t = String(text || '').trim();
         let prev;
@@ -1498,7 +1497,7 @@
       }
 
       /* ================================================================
-       * TOAST + BEEP
+       * TOAST
        * ================================================================ */
 
       function showToast(msg) {
@@ -1509,29 +1508,6 @@
           VOICE.toastMessage = '';
           render();
         }, 3500);
-      }
-
-      function playBeep() {
-        if (!VOICE.audioCtx) {
-          try { VOICE.audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
-          catch { return; }
-        }
-        try {
-          const ctx = VOICE.audioCtx;
-          if (ctx.state === 'suspended') ctx.resume();
-          const osc = ctx.createOscillator();
-          const gain = ctx.createGain();
-          osc.type = 'sine';
-          osc.frequency.setValueAtTime(880, ctx.currentTime);
-          osc.frequency.exponentialRampToValueAtTime(1320, ctx.currentTime + 0.12);
-          gain.gain.setValueAtTime(0.0001, ctx.currentTime);
-          gain.gain.exponentialRampToValueAtTime(0.18, ctx.currentTime + 0.01);
-          gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.18);
-          osc.connect(gain);
-          gain.connect(ctx.destination);
-          osc.start();
-          osc.stop(ctx.currentTime + 0.2);
-        } catch {}
       }
 
       /* ================================================================
@@ -3372,8 +3348,9 @@
           // Typed chat answers use the exact same recipe as the overheard
           // voice path (ASSIST_STYLE, same effort, same search config, same
           // reply parsing) so the format and sources are identical no matter
-          // how the question arrived. The only difference is that typed chat
-          // keeps the full multi-turn thread for follow-ups.
+          // how the question arrived. Two differences: typed chat keeps the
+          // full multi-turn thread for follow-ups, and it answers in one shot
+          // rather than streaming token-by-token the way the voice path does.
           const sessionIdAtSend = SESSION_ID;
 
           // Strictly source only from the approved doc URLs. Without this,
@@ -4397,8 +4374,8 @@
        * POP-OUT CHAT (Document Picture-in-Picture, Chrome 116+)
        *
        * A compact always-on-top chat window that stays visible while the
-       * user works in other tabs/apps. All voice code (recognition, wake
-       * word, TTS) keeps running in THIS tab — the pop-out is a dumb view
+       * user works in other tabs/apps. All voice code (recognition and
+       * TTS) keeps running in THIS tab — the pop-out is a dumb view
        * over STATE.slots[PIP.slotIdx], refreshed by renderPip() at the end
        * of every render(). It has its own document, so the main page's
        * Tailwind classes and delegated listeners don't reach it: it gets a
@@ -5025,7 +5002,7 @@
           if (slot.listenOn) {
             return '<div class="pip-empty">Listening to the call — technical questions get answered here as Randy hears them.</div>';
           }
-          return '<div class="pip-empty">No messages yet — say “Hey ' + escHtml(slot.voiceName || slot.label) + '” in the main tab or type below.</div>';
+          return '<div class="pip-empty">No messages yet — turn ' + escHtml(slot.voiceName || slot.label) + ' on in the main tab to listen to your call, or type below.</div>';
         }
         const out = msgs.map((m, mi) => {
           if (m.role === 'user') {
