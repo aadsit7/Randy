@@ -1,9 +1,21 @@
-# Randy — Streaming Answer Proxy (design sketch)
+# Randy — Streaming Answer Proxy
 
-The single biggest latency lever, written up so the "one more moving part vs. the
-10×" decision can be made on facts. **No app code changes ship with this doc** —
-it's the design for the change `LATENCY.md` calls **P0**, grounded in how the
-pipeline actually works today.
+The single biggest latency lever. This started as a design sketch; the
+implementation has since landed.
+
+> **Status (2026-06): built and shipped, flagged OFF.** The browser side
+> (`streamAssistReply` in `index.html`, gated on the `STREAM_WEBHOOK` constant)
+> and the edge function (`worker.js`) are in the repo. `STREAM_WEBHOOK` is empty
+> by default, so **the app behaves exactly as before** until you deploy
+> `worker.js` and paste its URL in. Any streaming error falls back to the
+> existing Apps Script path, so turning it on can't make Randy worse. To enable:
+> follow the DEPLOY block at the top of `worker.js`, then set `STREAM_WEBHOOK`.
+> Shipped as **Option C** (visual streaming + sentence-by-sentence audio in the
+> current answer order); **Option A** (spoken-first, §6) remains a one-line
+> follow-up once C is proven on a real call.
+
+It's the change `LATENCY.md` calls **P0**, grounded in how the pipeline actually
+works.
 
 > **Why this exists:** every other quality-neutral win is already shipped (fast
 > path, persona prompt-caching, proxy warm-up, preconnect, latency

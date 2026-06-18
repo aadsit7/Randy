@@ -799,6 +799,16 @@
       // If you redeploy the Apps Script, update this constant.
       const GSHEET_WEBHOOK = 'https://script.google.com/macros/s/AKfycbxVbQD6QplZuNlr51IbbMEG4hPr6nW21K20sATktclGrwZLdgfilgGetRRldFC7e5yt/exec';
 
+      // Optional streaming answer proxy (see STREAMING.md + worker.js). When set
+      // to a deployed edge-function URL (Cloudflare Worker / Vercel Edge / Deno),
+      // the overheard-question answer streams token-by-token: text fills the
+      // panel as it's written and the spoken summary is read aloud sentence-by-
+      // sentence as it arrives, instead of waiting for the whole reply. EMPTY by
+      // default → the app behaves exactly as before (one Apps Script round trip),
+      // and any streaming error falls back to that same path. The classifier,
+      // the background Sheet save, and history all stay on Apps Script.
+      const STREAM_WEBHOOK = '';
+
       // Q&As are grouped into conversations by session id. "New chat" rotates
       // it, so the next questions land in a fresh History entry.
       function genSessionId() {
@@ -3445,6 +3455,144 @@
         scrollChat();
       }
 
+      /* ================================================================
+       * STREAMING ANSWER CLIENT (optional — see STREAMING.md / worker.js)
+       *
+       * Reads the edge function's simple SSE protocol — one event per line:
+       *   data: {"type":"text","text":"…"}    incremental answer text
+       *   data: {"type":"sources","sources":[…]}
+       *   data: {"type":"usage","usage":{…}}   (prompt-cache verification)
+       *   data: {"type":"error","error":"…"}
+       *   data: {"type":"done"}
+       * As text arrives it fills the chat panel live (throttled render) and the
+       * spoken summary after ===SPOKEN=== is fed to the EXISTING TTS sentence
+       * queue one finished sentence at a time. Returns the same shape postChat
+       * does ({reply, sources, usage}) so the rest of runAssistAnswer is
+       * unchanged. Throws on transport error so the caller falls back to the
+       * non-streaming Apps Script path.
+       * ================================================================ */
+
+      const SPOKEN_MARKER_RE = /\n?=+\s*SPOKEN\s*=+\s*\n?/i;
+
+      // Split a (possibly partial) reply into the visible answer and the start
+      // index of the spoken portion. While the marker is still forming at the
+      // tail, hide it so a half-typed "===SPOK" never flashes on screen.
+      function streamSpokenSplit(reply) {
+        const m = reply.match(SPOKEN_MARKER_RE);
+        if (m) return { visible: reply.slice(0, m.index), spokenStart: m.index + m[0].length };
+        return { visible: reply.replace(/\n?=+[\sA-Za-z]*$/i, ''), spokenStart: -1 };
+      }
+
+      // Pull whole sentences off the front of `text`, leaving any trailing
+      // partial sentence for the next delta. A '.'/'!'/'?' only ends a sentence
+      // when whitespace follows, so decimals like "3.5" aren't split mid-number.
+      function takeCompleteSentences(text) {
+        const sentences = [];
+        let start = 0;
+        for (let i = 0; i < text.length; i++) {
+          const c = text[i];
+          if (c === '.' || c === '!' || c === '?') {
+            const next = text[i + 1];
+            if (next === undefined) break;            // maybe mid-stream — wait for more
+            if (/\s/.test(next)) {
+              const s = text.slice(start, i + 1).trim();
+              if (s.length >= 2) sentences.push(s);
+              start = i + 1;
+            }
+          }
+        }
+        return { sentences, consumed: start };
+      }
+
+      async function streamAssistReply(body, signal, idx, msgIdx, perf) {
+        const slot = STATE.slots[idx];
+        const payload = Object.assign({ action: 'chat', session_id: SESSION_ID }, body, { stream: true });
+
+        // Bound the whole stream like postChat does, composing with the caller's
+        // signal so a user cancel / watchdog abort still cuts it.
+        const timer = new AbortController();
+        const timeoutId = setTimeout(
+          () => { try { timer.abort(new DOMException('Request timed out', 'TimeoutError')); } catch { timer.abort(); } },
+          ASSIST.ANSWER_TIMEOUT_MS
+        );
+        const onAbort = () => { try { timer.abort(signal.reason); } catch { timer.abort(); } };
+        if (signal) { if (signal.aborted) onAbort(); else signal.addEventListener('abort', onAbort, { once: true }); }
+
+        const speakOn = !!slot.speakAnswers;
+        let ttsInit = false, streamedTts = false, gotText = false;
+        let reply = '', sources = [], usage = null;
+        let spokenEmitted = 0, lastRender = 0;
+
+        const onText = (chunk) => {
+          reply += chunk;
+          if (!gotText) { gotText = true; perfMark(perf, 'firstToken'); }
+          const { visible, spokenStart } = streamSpokenSplit(reply);
+          const m = slot.messages[msgIdx];
+          if (m && m.role === 'assistant') m.content = sanitizeAssistAnswer(visible) || '';
+          const now = performance.now();
+          if (now - lastRender > 110) { lastRender = now; if (!isComposerFocused()) render(); }
+          // Feed finished spoken sentences to the TTS queue as they land.
+          if (speakOn && spokenStart !== -1) {
+            const ready = reply.slice(spokenStart + spokenEmitted);
+            const { sentences, consumed } = takeCompleteSentences(ready);
+            if (sentences.length) {
+              if (!ttsInit) { initTtsQueue(idx, signal, msgIdx); ttsInit = true; }
+              for (const s of sentences) {
+                if (!streamedTts) { streamedTts = true; perfMark(perf, 'firstAudio'); }
+                enqueueTtsSentence(idx, s);
+              }
+              spokenEmitted += consumed;
+            }
+          }
+        };
+
+        try {
+          const resp = await fetch(STREAM_WEBHOOK, {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+            body: JSON.stringify(payload),
+            signal: timer.signal
+          });
+          if (!resp.ok || !resp.body) throw new Error('Stream HTTP ' + resp.status);
+          const reader = resp.body.getReader();
+          const dec = new TextDecoder();
+          let buf = '';
+          for (;;) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            buf += dec.decode(value, { stream: true });
+            let nl;
+            while ((nl = buf.indexOf('\n')) !== -1) {
+              const line = buf.slice(0, nl).trim();
+              buf = buf.slice(nl + 1);
+              if (!line.startsWith('data:')) continue;
+              const js = line.slice(5).trim();
+              if (!js) continue;
+              let ev; try { ev = JSON.parse(js); } catch { continue; }
+              if (ev.type === 'text' && ev.text) onText(ev.text);
+              else if (ev.type === 'sources') sources = Array.isArray(ev.sources) ? ev.sources : sources;
+              else if (ev.type === 'usage') usage = ev.usage || usage;
+              else if (ev.type === 'error') throw new Error(ev.error || 'stream error');
+            }
+          }
+        } finally {
+          clearTimeout(timeoutId);
+          if (signal) signal.removeEventListener('abort', onAbort);
+        }
+
+        // Flush a trailing spoken sentence with no terminal whitespace, then mark
+        // the queue done so it stops once the last sentence has been spoken.
+        if (speakOn && ttsInit) {
+          const { spokenStart } = streamSpokenSplit(reply);
+          if (spokenStart !== -1) {
+            const tail = reply.slice(spokenStart + spokenEmitted).trim();
+            if (tail.length >= 2) enqueueTtsSentence(idx, tail);
+          }
+          if (slot.ttsQueue) { slot.ttsQueue.done = true; processTtsQueue(idx); }
+        }
+        return { reply, sources, usage, streamedTts };
+      }
+
       /* ---------- technical-assist answers ---------- */
 
       async function runAssistAnswer(idx, question) {
@@ -3513,16 +3661,33 @@
             // critical path — skip it and save from the client afterwards.
             save: false
           };
-          let data;
+          let data, streamedTts = false;
           perfMark(perf, 'answerStart');
-          try {
-            data = await postChat(Object.assign({ tools: [tool] }, baseBody), controller.signal);
-          } catch (err) {
-            if (err && err.name === 'AbortError') throw err;
-            // Web search failed (tool rejected, timeout, transient error) —
-            // answer from knowledge rather than staying silent.
-            console.error('search-enabled answer failed, retrying without tools:', err);
-            data = await postChat(baseBody, controller.signal);
+          // Preferred path: stream the answer through the edge proxy when one is
+          // configured. The reply fills the panel live and the spoken summary is
+          // read aloud sentence-by-sentence as it arrives. Any transport failure
+          // (not a user cancel) falls through to the non-streaming Apps Script
+          // path below, so configuring STREAM_WEBHOOK can never make Randy worse.
+          if (STREAM_WEBHOOK) {
+            try {
+              const r = await streamAssistReply(Object.assign({ tools: [tool] }, baseBody), controller.signal, idx, assistantMsgIdx, perf);
+              data = { reply: r.reply, sources: r.sources, usage: r.usage };
+              streamedTts = r.streamedTts;
+            } catch (err) {
+              if (err && err.name === 'AbortError') throw err;
+              console.warn('streaming answer failed — falling back to non-streaming proxy:', err);
+            }
+          }
+          if (!data) {
+            try {
+              data = await postChat(Object.assign({ tools: [tool] }, baseBody), controller.signal);
+            } catch (err) {
+              if (err && err.name === 'AbortError') throw err;
+              // Web search failed (tool rejected, timeout, transient error) —
+              // answer from knowledge rather than staying silent.
+              console.error('search-enabled answer failed, retrying without tools:', err);
+              data = await postChat(baseBody, controller.signal);
+            }
           }
           perfMark(perf, 'answerEnd');
           perfCache(perf, data.usage, 'answer');   // verify the persona prefix is cache-hitting
@@ -3535,7 +3700,9 @@
             msg.sources = data.sources.slice(0, 6);
           }
 
-          if (slot.speakAnswers && spoken) {
+          // Streaming already spoke the summary sentence-by-sentence; only the
+          // non-streaming path needs the one-shot read here.
+          if (!streamedTts && slot.speakAnswers && spoken) {
             perfMark(perf, 'firstAudio');   // spoken summary handed to TTS
             speakText(spoken, idx, assistantMsgIdx);
           }
