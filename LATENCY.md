@@ -161,19 +161,37 @@ each sentence as it lands.
 
 ### P3 — Smaller, safe wins  *(quality: none)*
 
-- **Parallelize the classifier with a speculative answer.** On the non-fast path,
-  start the Sonnet answer *and* the Haiku classifier at the same time; if the
-  classifier says "not a question," abort the answer (the `AbortController`
-  plumbing already exists). Removes the classifier from the serial path without
-  loosening the gate. — `index.html:2045`
-- **Confirm prompt-cache hits.** The persona prefix is already wrapped for
-  caching (`systemBlocks`, `index.html:2192`) — verify the cached block is
-  byte-identical call-to-call so the ~2K-token persona isn't reprocessed each
-  time (saves input-processing latency on every turn). Anthropic ephemeral cache
-  TTL is ~5 min, so on an active call it stays warm.
-- **Instrument Time-To-First-Audio.** There's no timing today. Log the four
-  stages above so regressions are visible — Sierra's point: "you can't shave
-  milliseconds you can't see."
+> **Status (2026-06):** the prompt-cache verification, the cold-start warm-up,
+> and the Time-To-First-Audio instrumentation below are **shipped** in
+> `index.html` — all quality-neutral. The speculative-classifier and
+> debounce-tuning items remain proposals (the first shifts cost, the second
+> risks cutting questions off, so both are held for a deliberate decision).
+
+- **Parallelize the classifier with a speculative answer.** *(proposed)* On the
+  non-fast path, start the Sonnet answer *and* the Haiku classifier at the same
+  time; if the classifier says "not a question," abort the answer (the
+  `AbortController` plumbing already exists). Removes the classifier from the
+  serial path without loosening the gate. Quality-neutral, but it spends answer
+  tokens (and a possible speculative search) on questions that get rejected —
+  held until that cost trade is wanted.
+- **Confirm prompt-cache hits.** ✅ *Shipped.* The answer call now records
+  `usage.cache_read_input_tokens` vs `cache_creation_input_tokens` (the proxy
+  already forwards `usage`); `perfFinish` logs `cache:read=…/created=…` and a
+  `cache_hit` flag per answer. On a warm call reads should dominate — if reads
+  stay 0 across calls the ~2K-token persona prefix isn't caching. The persona +
+  style is a single stable `systemBlocks` breakpoint, so it *should* hit; this
+  makes it observable rather than assumed.
+- **Warm the proxy + preconnect.** ✅ *Shipped.* Apps Script spins its instance
+  down after a few idle minutes; a `setInterval` keep-alive ping
+  (`ASSIST.PROXY_WARM_MS`, every 4 min while listening) plus `<link
+  rel="preconnect">` to `script.google.com` / `script.googleusercontent.com`
+  keep the first overheard question off the 0.5–2 s cold-start path. The ping is
+  fire-and-forget and never mutates `PROXY` readiness state.
+- **Instrument Time-To-First-Audio.** ✅ *Shipped.* Each finalized question gets
+  a timeline (`PERF` / `perfStart`/`perfMark`/`perfFinish`) measuring
+  classify, answer, and finalized→first-audio durations, logged to the console
+  and kept in a ring buffer at `window.__randyPerf` — Sierra's point, "you can't
+  shave milliseconds you can't see."
 - **Tune the debounce** only after the above — at ~900–1400 ms it's a meaningful
   slice once the rest is fast, but it's there to avoid cutting questions off, so
   shorten it carefully (and the `DEBOUNCE_FAST_MS` fast path already helps).

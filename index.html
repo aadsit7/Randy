@@ -6,6 +6,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <!-- Warm the TLS connection to the answer proxy early. Apps Script serves
+         from script.google.com and 302-redirects the response through
+         script.googleusercontent.com, so preconnect both — this shaves the
+         handshake off the first overheard question. -->
+    <link rel="preconnect" href="https://script.google.com" crossorigin>
+    <link rel="preconnect" href="https://script.googleusercontent.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700;9..40,800&display=swap" rel="stylesheet">
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
@@ -570,7 +576,8 @@
         ANSWER_TIMEOUT_MS: 45000,    // hard ceiling on one research+answer call
         WATCHDOG_MS: 4000,           // how often the self-healing watchdog checks
         PENDING_WEDGE_MS: 22000,     // pending longer than this ⇒ classifier wedged
-        ANSWER_WEDGE_MS: 105000      // loading longer than this ⇒ answer wedged
+        ANSWER_WEDGE_MS: 105000,     // loading longer than this ⇒ answer wedged
+        PROXY_WARM_MS: 240000        // keep-warm ping cadence while listening (< Apps Script idle spindown)
       };
 
       /* ================================================================
@@ -947,7 +954,8 @@
         decisions: [],            // ring buffer {text, accepted, confidence, topic, ts}
         recentPairs: [],          // last assist Q&As — API context that survives chat archiving
         heard: 0,
-        answered: 0
+        answered: 0,
+        perf: null                // active latency timeline for the question being answered (instrumentation)
       };
 
       function listeningOn() { return STATE.slots[0].listenOn; }
@@ -1279,6 +1287,88 @@
           PROXY.error = err && err.message ? err.message : 'Proxy unreachable';
           console.warn('Proxy ping failed:', err);
         }
+      }
+
+      // Keep the Apps Script proxy warm while Randy is listening. Apps Script
+      // spins its instance down after a few idle minutes; the next request then
+      // pays a 0.5–2 s cold start — and on a live call that tax lands on the
+      // FIRST overheard question, exactly when it's most noticeable. A cheap
+      // periodic GET to the lightweight ping endpoint keeps the instance warm so
+      // the first real answer doesn't eat it. Fire-and-forget: it never mutates
+      // PROXY readiness state, so a transient blip can't flip the UI.
+      let proxyWarmId = null;
+      function pingProxyWarm() {
+        if (!GSHEET_WEBHOOK) return;
+        const url = GSHEET_WEBHOOK + (GSHEET_WEBHOOK.includes('?') ? '&' : '?') + 'action=ping';
+        fetch(url, { method: 'GET' }).catch(() => {});
+      }
+      function startProxyWarmup() {
+        if (proxyWarmId || !GSHEET_WEBHOOK) return;
+        pingProxyWarm(); // warm immediately, then on a cadence below the spindown window
+        proxyWarmId = setInterval(pingProxyWarm, ASSIST.PROXY_WARM_MS);
+      }
+      function stopProxyWarmup() {
+        if (proxyWarmId) { clearInterval(proxyWarmId); proxyWarmId = null; }
+      }
+
+      /* ================================================================
+       * LATENCY INSTRUMENTATION (overheard question → spoken answer)
+       *
+       * "You can't shave milliseconds you can't see." Each finalized question
+       * gets a timeline; stage durations and the answer call's prompt-cache
+       * usage are logged to the console and kept in a small ring buffer at
+       * window.__randyPerf for ad-hoc inspection. This is pure measurement — it
+       * never changes behaviour, the answer, or the pipeline's control flow.
+       *
+       * Cache health: the ~2K-token persona/style prefix is wrapped for
+       * Anthropic prompt caching (systemBlocks). On a warm call the answer's
+       * usage should show cache_read_input_tokens ≫ cache_creation_input_tokens;
+       * if reads stay 0 across calls, the cache isn't hitting and the persona is
+       * being reprocessed every time (wasted input-processing latency).
+       * ================================================================ */
+      const PERF = { enabled: true, log: [], KEEP: 20 };
+      function perfStart(question) {
+        if (!PERF.enabled) return null;
+        return { question: truncate(question, 80), t0: performance.now(), marks: {}, cache: {} };
+      }
+      function perfMark(t, name) {
+        if (t && t.marks[name] == null) t.marks[name] = performance.now();
+      }
+      function perfCache(t, usage, label) {
+        if (!t || !usage) return;
+        t.cache[label] = {
+          read: usage.cache_read_input_tokens || 0,
+          created: usage.cache_creation_input_tokens || 0,
+          input: usage.input_tokens || 0
+        };
+      }
+      function perfFinish(t, status) {
+        if (!t || t._done) return;
+        t._done = true;
+        const m = t.marks;
+        const seg = (a, b) => (m[a] != null && m[b] != null) ? Math.round(m[b] - m[a]) : null;
+        const endRef = m.firstAudio != null ? m.firstAudio : (m.answerEnd != null ? m.answerEnd : performance.now());
+        const ans = t.cache && t.cache.answer;
+        const summary = {
+          status: status || 'done',
+          total_ms: Math.round(endRef - t.t0),
+          classify_ms: seg('classifyStart', 'classifyEnd'),
+          answer_ms: seg('answerStart', 'answerEnd'),
+          to_first_audio_ms: m.firstAudio != null ? Math.round(m.firstAudio - t.t0) : null,
+          cache_hit: ans ? (ans.read > 0) : null,
+          cache: t.cache,
+          question: t.question
+        };
+        PERF.log.push(summary);
+        while (PERF.log.length > PERF.KEEP) PERF.log.shift();
+        try { window.__randyPerf = PERF.log; } catch {}
+        const parts = ['[perf] ' + summary.status, 'total=' + summary.total_ms + 'ms'];
+        if (summary.classify_ms != null) parts.push('classify=' + summary.classify_ms + 'ms');
+        if (summary.answer_ms != null) parts.push('answer=' + summary.answer_ms + 'ms');
+        if (summary.to_first_audio_ms != null) parts.push('→firstAudio=' + summary.to_first_audio_ms + 'ms');
+        if (ans) parts.push('cache:read=' + ans.read + '/created=' + ans.created);
+        console.info(parts.join(' ') + ' — "' + summary.question + '"');
+        if (TECH.perf === t) TECH.perf = null;
       }
 
       loadSettings();
@@ -2365,6 +2455,7 @@
         TECH.decisions = [];
         startRecognition();
         startAssistWatchdog();
+        startProxyWarmup();   // keep the proxy hot so the first answer skips the cold start
         // Warn right away if the answer service is unreachable, so "hears
         // but never answers" can't happen silently.
         loadRemoteConfig().then(() => {
@@ -2385,6 +2476,7 @@
         }
         clearAssistBuffer();
         stopAssistWatchdog();
+        stopProxyWarmup();
         // Cancel any in-flight classifier round-trip and bump the epoch so a
         // late resolution after teardown is ignored.
         TECH.classifyGen++;
@@ -2981,6 +3073,10 @@
 
         pushAssistContext(corrected);
 
+        // Start the latency timeline for this question (t0 = finalized question
+        // entered the pipeline). runAssistAnswer / the rejection paths finish it.
+        TECH.perf = perfStart(corrected);
+
         // Fast path: an obvious technical question goes straight to the
         // answer — no classifier round-trip (saves a couple of seconds). The
         // out-of-scope guard keeps pricing/contract asks about in-scope
@@ -3004,10 +3100,13 @@
         const gen = ++TECH.classifyGen;
         const classifyCtl = new AbortController();
         TECH.classifyController = classifyCtl;
+        const perf = TECH.perf;
+        perfMark(perf, 'classifyStart');
         renderAssistStatus();
         classifyUtterance(corrected, TECH.context.slice(0, -1), classifyCtl.signal)
           .then(decision => {
             if (gen !== TECH.classifyGen) return;   // superseded by the watchdog — ignore
+            perfMark(perf, 'classifyEnd');
             TECH.pending = false;
             TECH.pendingSince = 0;
             TECH.classifyController = null;
@@ -3026,7 +3125,7 @@
             const nearMiss = !accepted && decision.needs_answer === true &&
               decision.in_scope !== false && conf >= 0.4 && conf < ASSIST.CONF_THRESHOLD;
             recordAssistDecision(corrected, accepted, conf, decision.topic || '', nearMiss);
-            if (!accepted) { renderAssistStatus(); drainQuestionQueue(); return; }
+            if (!accepted) { perfFinish(perf, 'rejected'); renderAssistStatus(); drainQuestionQueue(); return; }
             // Answer the classifier's clean rewrite when it produced one: it
             // turns a statement-form need into an explicit question and
             // resolves garble/follow-up references. Fall back to the corrected
@@ -3064,6 +3163,7 @@
           runAssistAnswer(0, text);
         } else {
           recordAssistDecision(text, false, 0, 'check unavailable');
+          perfFinish(TECH.perf, 'dropped');
           renderAssistStatus();
           drainQuestionQueue();
         }
@@ -3356,6 +3456,8 @@
         if (slot.loading) { enqueueQuestion(question); return; }
         slot.loading = true;
         TECH.answerSince = Date.now();
+        const perf = TECH.perf;   // timeline opened by processAssistCandidate
+        let answerStatus = 'answered';
 
         // Every auto-answered question starts a visually fresh chat: the
         // previous Q&A slides into Saved Conversations so the panel always
@@ -3412,6 +3514,7 @@
             save: false
           };
           let data;
+          perfMark(perf, 'answerStart');
           try {
             data = await postChat(Object.assign({ tools: [tool] }, baseBody), controller.signal);
           } catch (err) {
@@ -3421,6 +3524,8 @@
             console.error('search-enabled answer failed, retrying without tools:', err);
             data = await postChat(baseBody, controller.signal);
           }
+          perfMark(perf, 'answerEnd');
+          perfCache(perf, data.usage, 'answer');   // verify the persona prefix is cache-hitting
 
           const { main, spoken } = splitSpoken(String(data.reply || ''));
           const msg = slot.messages[assistantMsgIdx];
@@ -3431,6 +3536,7 @@
           }
 
           if (slot.speakAnswers && spoken) {
+            perfMark(perf, 'firstAudio');   // spoken summary handed to TTS
             speakText(spoken, idx, assistantMsgIdx);
           }
           notePipAnswerArrived();
@@ -3449,11 +3555,13 @@
           });
         } catch (err) {
           if (err && err.name === 'AbortError') {
+            answerStatus = 'aborted';
             const placeholder = slot.messages[assistantMsgIdx];
             if (placeholder && placeholder.role === 'assistant' && !placeholder.content) {
               slot.messages.splice(assistantMsgIdx, 1);
             }
           } else {
+            answerStatus = 'error';
             console.error('assist answer failed:', err);
             toastPipelineError("Randy couldn't answer", err);
             const placeholder = slot.messages[assistantMsgIdx];
@@ -3463,6 +3571,7 @@
           }
         }
 
+        perfFinish(perf, answerStatus);
         if (slot.abortController === controller) {
           slot.loading = false;
           slot.abortController = null;
