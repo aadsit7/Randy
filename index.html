@@ -216,25 +216,6 @@
       .ls-speak { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; color: var(--n600); cursor: default; }
       .ls-off { background: transparent; border: 1.5px solid var(--n300); color: var(--n600); font-size: 12px; font-weight: 600; padding: 6px 14px; border-radius: 999px; cursor: pointer; transition: border-color 0.12s, color 0.12s; }
       .ls-off:hover { border-color: #dc2626; color: #dc2626; }
-      .ls-readscreen { display: inline-flex; align-items: center; gap: 6px; background: transparent; border: 1.5px solid color-mix(in srgb, var(--primary) 40%, transparent); color: var(--primary); font-size: 12px; font-weight: 600; padding: 6px 13px; border-radius: 999px; cursor: pointer; transition: background 0.12s, color 0.12s; white-space: nowrap; }
-      .ls-readscreen:hover { background: var(--primary); color: #fff; }
-      .ls-readscreen:disabled { opacity: 0.6; cursor: default; }
-      .ls-readscreen i { flex-shrink: 0; }
-      .cl-readscreen { margin-top: 12px; }
-      /* Screen-selection overlay (drag a box over the shared screen). */
-      .sp-scrim { position: fixed; inset: 0; z-index: 1000; background: rgba(10,15,40,0.74); display: flex; align-items: center; justify-content: center; padding: 18px; }
-      .sp-modal { background: #fff; border-radius: 14px; padding: 14px; display: flex; flex-direction: column; gap: 12px; box-shadow: var(--shadow-hover); max-width: 94vw; max-height: 94vh; }
-      .sp-stage { position: relative; line-height: 0; border-radius: 8px; overflow: hidden; cursor: crosshair; align-self: center; touch-action: none; }
-      .sp-img { display: block; max-width: 90vw; max-height: 76vh; width: auto; height: auto; user-select: none; -webkit-user-drag: none; }
-      .sp-sel { position: absolute; border: 2px solid var(--primary); background: rgba(49,130,255,0.18); box-shadow: 0 0 0 9999px rgba(10,15,40,0.35); pointer-events: none; }
-      .sp-bar { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; }
-      .sp-hint { font-size: 12.5px; color: var(--gray); }
-      .sp-btns { display: flex; gap: 8px; margin-left: auto; }
-      .sp-btn { font-size: 13px; font-weight: 600; padding: 8px 15px; border-radius: 999px; cursor: pointer; border: 1.5px solid var(--n300); background: #fff; color: var(--n700); transition: background 0.12s, color 0.12s, border-color 0.12s; }
-      .sp-btn:hover { border-color: var(--n500); }
-      .sp-go { background: var(--primary); border-color: var(--primary); color: #fff; }
-      .sp-go:hover { filter: brightness(1.05); border-color: var(--primary); }
-      .sp-go:disabled { opacity: 0.5; cursor: default; filter: none; }
 
       .interim-caret { display: inline-block; width: 6px; margin-left: 2px; animation: interim-blink 1s steps(2,end) infinite; color: var(--primary); }
       @keyframes interim-blink { 50% { opacity: 0; } }
@@ -461,7 +442,7 @@
          wraps within the column (never sideways), with a taller window and a
          smaller font so more of a long transcript stays on screen at once. The
          newest words are kept in view by auto-scrolling (see patchLiveTranscript). */
-      .cl-transcript.ac-live { text-align: left; font-size: 17px; line-height: 1.5; max-height: 320px; }
+      .cl-transcript.ac-live { text-align: left; font-size: 17px; line-height: 1.5; max-height: 320px; scroll-behavior: smooth; }
       .cl-prompt { margin: 14px 0 0; font-size: 14.5px; line-height: 1.6; color: var(--gray); max-width: 56ch; text-wrap: pretty; }
       .cl-desktop { margin-top: 10px; font-size: 11px; font-weight: 600; color: var(--n500); display: inline-flex; align-items: center; gap: 6px; }
       .cl-desktop.on { color: var(--primary); }
@@ -726,35 +707,6 @@
           reason:              { type: 'string',  description: 'At most twelve words explaining the decision.' }
         },
         required: ['needs_answer', 'is_question', 'in_scope', 'normalized_question', 'confidence', 'topic', 'reason'],
-        additionalProperties: false
-      };
-
-      // Vision gate: read a question off a screenshot of the surface the user
-      // already shared. Same scope rules as CLASSIFIER_SYSTEM, but the input is
-      // an image instead of an utterance. The extracted question still flows
-      // through the normal classify -> answer path, so this only has to find and
-      // clean the text — scope is re-checked downstream.
-      const SCREEN_VISION_SYSTEM = [
-        'You are reading a screenshot from a Recast Software solution engineer’s shared screen during a live call. Find the single most prominent TECHNICAL QUESTION the engineer wants answered — usually text the user highlighted, selected, or that sits front-and-center (a chat message, a ticket, a doc, an email).',
-        '',
-        'IN SCOPE: Recast products (Right Click Tools, Application Manager, Application Workspace, Endpoint Insights, Privilege Manager, Liquit) and adjacent endpoint management (ConfigMgr / MECM / SCCM, Intune, AD / GPO, Autopilot, co-management, hybrid join, app packaging and delivery, self-service, patch management, MDM).',
-        '',
-        'Set found=true only when the input clearly contains an in-scope technical question or a statement of a technical problem an SE would answer. Set found=false for menus, code with no question, pricing/scheduling/contract text, or anything with no readable in-scope question.',
-        '',
-        'If the user DELIBERATELY SELECTED a region (the instruction will say so), be permissive: treat whatever readable in-scope content it contains — a sentence, an error, a diagram, a screenshot of an image — as the thing they want addressed, and form the question or request from it. Only return found=false when there is genuinely no readable in-scope content at all.',
-        '',
-        'question: rewrite what you read as one clear, self-contained question under 25 words. Fix obvious OCR noise and garbled product names. If found is false, return an empty string.',
-        '',
-        'Respond with ONLY a JSON object — no prose, no code fences.'
-      ].join('\n');
-
-      const SCREEN_VISION_SCHEMA = {
-        type: 'object',
-        properties: {
-          found:    { type: 'boolean', description: 'True only if the screenshot contains a readable, in-scope technical question or problem statement.' },
-          question: { type: 'string',  description: 'The question rewritten as one clear, self-contained question under 25 words; empty string when found is false.' }
-        },
-        required: ['found', 'question'],
         additionalProperties: false
       };
 
@@ -1025,12 +977,7 @@
         voicedRun: 0,             // consecutive voiced samples in the open segment
         reqId: 0,                 // monotonic id for inference requests
         inFlight: 0,              // outstanding worker jobs (single-flight gate)
-        lastInterimAt: 0,         // throttle for live partial transcriptions
-        // Visual question capture: the screen/tab the user already shared is
-        // reused on demand to read a question off-screen with a vision model.
-        videoTrack: null,         // retained share video track for frame grabs
-        imageCapture: null,       // lazily-created ImageCapture wrapper
-        visionBusy: false         // single-flight gate for screen-question reads
+        lastInterimAt: 0          // throttle for live partial transcriptions
       };
 
       // Whisper sample rate, plus VAD/segmentation tuning. Chosen so a normal
@@ -1933,9 +1880,6 @@
           try { VOICE.recognition.stop(); } catch {}
         }
         VOICE.ttsPaused = false;
-        // Tearing down the passive listener clears the "paused for dictation"
-        // gate too, so a stale-true value can never block a later restart.
-        VOICE.dictationPaused = false;
         VOICE.interimText = '';
         VOICE.interimSlot = null;
         VOICE.recentTtsText = '';
@@ -2512,16 +2456,16 @@
         if (DESKTOP.on || !DESKTOP.supported) return;
         let stream;
         try {
-          // The continuous consumer of this share is the AUDIO tap; the video
-          // track is kept only for on-demand screen reads. Full *framerate*
-          // capture is what froze the UI on surface-pick, so we pin the video to
-          // 1 fps — that alone makes the pipeline nearly free. Resolution is left
-          // generous (up to 1080p) so a small selected region of the screen
-          // stays legible to the vision model; at 1 fps the higher resolution
-          // costs almost nothing. The picker hints keep surface-switching
-          // available and stop the audio from echoing back out of the speakers.
+          // We only ever want the AUDIO from this share — the video track is
+          // stopped immediately below. Requesting a full-res/full-framerate
+          // screen capture just to discard it is what makes the UI freeze the
+          // moment you pick a surface in the picker, so constrain the video to
+          // a tiny 1 fps stream: the capture pipeline becomes nearly free while
+          // the picker still offers the same "share tab/system audio" choices.
+          // The picker hints keep surface-switching available and stop the
+          // captured audio from being echoed back out of the local speakers.
           stream = await navigator.mediaDevices.getDisplayMedia({
-            video: { frameRate: { ideal: 1, max: 1 }, width: { ideal: 1920, max: 1920 }, height: { ideal: 1080, max: 1080 } },
+            video: { frameRate: { ideal: 1, max: 1 }, width: { max: 640 }, height: { max: 360 } },
             audio: true,
             selfBrowserSurface: 'include',
             surfaceSwitching: 'include',
@@ -2540,14 +2484,8 @@
           showToast('No computer audio shared — re-share and tick “Share tab/system audio”. Using mic only.');
           return;
         }
-        // Keep the first video track (if any) live so a question can be read
-        // off the shared screen on demand; stop any extras. The 1 fps / low-res
-        // constraints above keep this nearly free — audio stays the only
-        // continuous consumer. The track is torn down in stopDesktopCapture.
-        const videoTracks = stream.getVideoTracks();
-        DESKTOP.videoTrack = videoTracks[0] || null;
-        DESKTOP.imageCapture = null;
-        videoTracks.slice(1).forEach(t => { try { t.stop(); } catch {} });
+        // Audio only — stop the video track so we aren't grabbing the screen.
+        stream.getVideoTracks().forEach(t => { try { t.stop(); } catch {} });
 
         DESKTOP.stream = stream;
         DESKTOP.on = true;
@@ -2755,289 +2693,7 @@
         DESKTOP.voicedRun = 0;
         DESKTOP.inFlight = 0;
         DESKTOP.device = '';
-        DESKTOP.videoTrack = null;
-        DESKTOP.imageCapture = null;
-        DESKTOP.visionBusy = false;
         setDesktopStatus('');
-      }
-
-      /* ---------- visual question capture (read a question off-screen) ---------- */
-
-      // Grab one frame from the shared screen into a canvas. Prefers
-      // ImageCapture; falls back to a detached <video> + canvas where it is
-      // missing (Safari, older Chromium). Returns a canvas (≤ 1920px on the
-      // long edge — high enough that a small selected region stays legible) or
-      // null. Never throws — every failure resolves to null so callers can toast.
-      async function grabDesktopFrameCanvas() {
-        const track = DESKTOP.videoTrack;
-        if (!track || track.readyState !== 'live') return null;
-        let source = null;
-        try {
-          if ('ImageCapture' in window) {
-            DESKTOP.imageCapture = DESKTOP.imageCapture || new ImageCapture(track);
-            source = await DESKTOP.imageCapture.grabFrame();
-          }
-        } catch { source = null; } // fall through to the video/canvas path
-        if (!source) source = await grabFrameViaVideo(track);
-        if (!source) return null;
-        try {
-          const MAX = 1920;
-          const sw = source.width || source.videoWidth;
-          const sh = source.height || source.videoHeight;
-          if (!sw || !sh) return null;
-          const scale = Math.min(1, MAX / Math.max(sw, sh));
-          const w = Math.max(1, Math.round(sw * scale));
-          const h = Math.max(1, Math.round(sh * scale));
-          const canvas = document.createElement('canvas');
-          canvas.width = w; canvas.height = h;
-          canvas.getContext('2d').drawImage(source, 0, 0, w, h);
-          if (source.close) { try { source.close(); } catch {} } // ImageBitmap only
-          return canvas;
-        } catch { return null; }
-      }
-
-      // Encode a canvas to a base64 JPEG, optionally downscaling the long edge.
-      // Returns { data, mediaType } or null.
-      function canvasToJpeg(canvas, maxEdge, quality) {
-        try {
-          let c = canvas;
-          const longest = Math.max(canvas.width, canvas.height);
-          if (maxEdge && longest > maxEdge) {
-            const s = maxEdge / longest;
-            const w = Math.max(1, Math.round(canvas.width * s));
-            const h = Math.max(1, Math.round(canvas.height * s));
-            c = document.createElement('canvas');
-            c.width = w; c.height = h;
-            c.getContext('2d').drawImage(canvas, 0, 0, w, h);
-          }
-          const url = c.toDataURL('image/jpeg', quality || 0.7);
-          const comma = url.indexOf(',');
-          if (comma < 0) return null;
-          return { data: url.slice(comma + 1), mediaType: 'image/jpeg' };
-        } catch { return null; }
-      }
-
-      // Fallback grab: render the shared track through a detached <video> and
-      // hand back a canvas drawn from one frame. The shared track is never
-      // stopped here — it stays live for the audio path and future grabs.
-      function grabFrameViaVideo(track) {
-        return new Promise((resolve) => {
-          let settled = false;
-          const finish = (val) => {
-            if (settled) return;
-            settled = true;
-            try { video.pause(); } catch {}
-            video.onloadeddata = video.onerror = null;
-            video.srcObject = null;
-            resolve(val);
-          };
-          const video = document.createElement('video');
-          video.muted = true; video.playsInline = true;
-          try { video.srcObject = new MediaStream([track]); }
-          catch { resolve(null); return; }
-          const draw = () => {
-            const w = video.videoWidth, h = video.videoHeight;
-            if (!w || !h) { finish(null); return; }
-            const canvas = document.createElement('canvas');
-            canvas.width = w; canvas.height = h;
-            try { canvas.getContext('2d').drawImage(video, 0, 0, w, h); }
-            catch { finish(null); return; }
-            finish(canvas);
-          };
-          video.onloadeddata = () => { video.play().then(draw).catch(draw); };
-          video.onerror = () => finish(null);
-          setTimeout(() => finish(null), 2500); // never hang the capture
-        });
-      }
-
-      // Send one captured frame (full screen or a cropped selection) to the
-      // vision model and return the parsed { found, question }. A deliberate
-      // selection is treated permissively; a whole-screen grab is scanned for
-      // the single most prominent question.
-      async function analyzeFrameJpeg(jpeg, isSelection) {
-        const instruction = isSelection
-          ? 'The user deliberately selected this exact region of their shared screen. Read it and form the question or request they want answered.'
-          : 'Read the shared screen and extract the single most prominent technical question, following your instructions.';
-        const data = await postChat({
-          model: MODELS.classifier,
-          max_tokens: 200,
-          system: systemBlocks(SCREEN_VISION_SYSTEM),
-          messages: [{ role: 'user', content: [
-            { type: 'image', source: { type: 'base64', media_type: jpeg.mediaType, data: jpeg.data } },
-            { type: 'text', text: instruction }
-          ] }],
-          output_config: { format: { type: 'json_schema', schema: SCREEN_VISION_SCHEMA } },
-          save: false
-        }, null, ASSIST.CLASSIFY_TIMEOUT_MS);
-        return parseScreenQuestion(String(data.reply || ''));
-      }
-
-      // Read a question off the shared screen and answer it in the same chat
-      // spoken questions use. User-initiated only — a frame leaves the machine
-      // only on an explicit click/shortcut, never on a timer.
-      //   opts.select === true → snapshot the screen, let the user drag a box
-      //   over the exact question/image, and analyze just that crop (with a
-      //   "Whole screen" option in the overlay). Otherwise analyze the full frame.
-      async function recognizeScreenQuestion(opts) {
-        const wantSelect = !!(opts && opts.select);
-        if (!DESKTOP.on) { showToast('Turn Randy on in two-way mode and share a tab or screen first.'); return; }
-        if (!DESKTOP.videoTrack) { showToast('Re-share a tab or screen (not audio-only) so Randy can read it.'); return; }
-        if (DESKTOP.visionBusy) return;
-        if (!PROXY.ready) { showToast('⚠ Randy cannot reach his answer service — open Settings'); return; }
-        DESKTOP.visionBusy = true;
-        const prevStatus = DESKTOP.statusText;
-        setDesktopStatus(wantSelect ? 'Capturing the screen…' : 'Reading the screen…');
-        render(); // reflect the busy/disabled button
-        try {
-          const canvas = await grabDesktopFrameCanvas();
-          if (!canvas) {
-            showToast('Randy could not capture the screen — try sharing a tab or the full screen.');
-            return;
-          }
-          let target = canvas, isSel = false;
-          if (wantSelect) {
-            setDesktopStatus('Select the question on screen…');
-            const picked = await pickScreenRegion(canvas);
-            if (!picked) return; // user cancelled the selection
-            target = picked.canvas;
-            isSel = !picked.whole;
-          }
-          setDesktopStatus('Reading the screen…');
-          render();
-          const jpeg = canvasToJpeg(target, 1280, isSel ? 0.85 : 0.7);
-          if (!jpeg) {
-            showToast('Randy could not process the capture — try again.');
-            return;
-          }
-          const q = await analyzeFrameJpeg(jpeg, isSel);
-          if (q.found && q.question) {
-            // Deliberate user action — answer it directly, the same path the
-            // near-miss "answer this?" chip uses. Dedup stamps guard against an
-            // identical spoken utterance double-answering moments later.
-            TECH.lastSubmitted = q.question;
-            TECH.lastSubmittedAt = Date.now();
-            showToast('Randy is answering a question from your screen');
-            runAssistAnswer(0, q.question);
-          } else {
-            showToast(isSel ? 'Randy could not find a question in that selection.' : 'No in-scope question found on the screen.');
-          }
-        } catch (err) {
-          showToast('Randy could not read the screen — try again.');
-        } finally {
-          DESKTOP.visionBusy = false;
-          setDesktopStatus(prevStatus);
-          render();
-        }
-      }
-
-      // Drag-to-select overlay over a still of the shared screen. Resolves with
-      // { canvas, whole } — a cropped canvas for a drawn box, the full frame for
-      // "Whole screen", or null if cancelled. Built imperatively on document.body
-      // so the main render() loop (which only rebuilds #app) never wipes it.
-      function pickScreenRegion(sourceCanvas) {
-        return new Promise((resolve) => {
-          const scrim = document.createElement('div'); scrim.className = 'sp-scrim';
-          const modal = document.createElement('div'); modal.className = 'sp-modal';
-          const stage = document.createElement('div'); stage.className = 'sp-stage';
-          const img = document.createElement('img'); img.className = 'sp-img'; img.draggable = false;
-          img.src = sourceCanvas.toDataURL('image/jpeg', 0.9);
-          const selBox = document.createElement('div'); selBox.className = 'sp-sel'; selBox.style.display = 'none';
-          stage.append(img, selBox);
-          const bar = document.createElement('div'); bar.className = 'sp-bar';
-          const hint = document.createElement('span'); hint.className = 'sp-hint';
-          hint.textContent = 'Drag a box around the question or image — or use the whole screen.';
-          const btns = document.createElement('div'); btns.className = 'sp-btns';
-          const cancelB = document.createElement('button'); cancelB.className = 'sp-btn'; cancelB.textContent = 'Cancel';
-          const wholeB = document.createElement('button'); wholeB.className = 'sp-btn'; wholeB.textContent = 'Whole screen';
-          const goB = document.createElement('button'); goB.className = 'sp-btn sp-go'; goB.textContent = 'Analyze selection'; goB.disabled = true;
-          btns.append(cancelB, wholeB, goB);
-          bar.append(hint, btns);
-          modal.append(stage, bar);
-          scrim.appendChild(modal);
-          document.body.appendChild(scrim);
-
-          let rect = null, dragging = false, sx = 0, sy = 0;
-          const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
-          const imgBox = () => img.getBoundingClientRect();
-          const paint = (b) => {
-            if (!rect) { selBox.style.display = 'none'; return; }
-            selBox.style.display = 'block';
-            selBox.style.left = (rect.x - b.left) + 'px';
-            selBox.style.top = (rect.y - b.top) + 'px';
-            selBox.style.width = rect.w + 'px';
-            selBox.style.height = rect.h + 'px';
-          };
-          const onDown = (e) => {
-            const b = imgBox();
-            dragging = true;
-            sx = clamp(e.clientX, b.left, b.right);
-            sy = clamp(e.clientY, b.top, b.bottom);
-            rect = { x: sx, y: sy, w: 0, h: 0 };
-            paint(b);
-            try { stage.setPointerCapture(e.pointerId); } catch {}
-            e.preventDefault();
-          };
-          const onMove = (e) => {
-            if (!dragging) return;
-            const b = imgBox();
-            const cx = clamp(e.clientX, b.left, b.right);
-            const cy = clamp(e.clientY, b.top, b.bottom);
-            rect = { x: Math.min(sx, cx), y: Math.min(sy, cy), w: Math.abs(cx - sx), h: Math.abs(cy - sy) };
-            paint(b);
-          };
-          const onUp = () => {
-            if (!dragging) return;
-            dragging = false;
-            goB.disabled = !(rect && rect.w > 4 && rect.h > 4);
-          };
-          stage.addEventListener('pointerdown', onDown);
-          window.addEventListener('pointermove', onMove);
-          window.addEventListener('pointerup', onUp);
-
-          const cleanup = () => {
-            window.removeEventListener('pointermove', onMove);
-            window.removeEventListener('pointerup', onUp);
-            document.removeEventListener('keydown', onKey, true);
-            try { document.body.removeChild(scrim); } catch {}
-          };
-          const finish = (val) => { cleanup(); resolve(val); };
-          const onKey = (e) => { if (e.key === 'Escape') { e.stopPropagation(); finish(null); } };
-          document.addEventListener('keydown', onKey, true);
-
-          cancelB.onclick = () => finish(null);
-          scrim.addEventListener('click', (e) => { if (e.target === scrim) finish(null); });
-          wholeB.onclick = () => finish({ canvas: sourceCanvas, whole: true });
-          goB.onclick = () => {
-            if (!(rect && rect.w > 4 && rect.h > 4)) return;
-            const b = imgBox();
-            const scaleX = sourceCanvas.width / b.width;
-            const scaleY = sourceCanvas.height / b.height;
-            const crop = document.createElement('canvas');
-            crop.width = Math.max(1, Math.round(rect.w * scaleX));
-            crop.height = Math.max(1, Math.round(rect.h * scaleY));
-            crop.getContext('2d').drawImage(
-              sourceCanvas,
-              (rect.x - b.left) * scaleX, (rect.y - b.top) * scaleY, rect.w * scaleX, rect.h * scaleY,
-              0, 0, crop.width, crop.height
-            );
-            finish({ canvas: crop, whole: false });
-          };
-        });
-      }
-
-      // Defensive parse mirroring parseClassifierReply: structured outputs
-      // guarantee JSON, but older proxy deployments may not enforce the schema.
-      function parseScreenQuestion(reply) {
-        const m = reply.match(/\{[\s\S]*\}/);
-        if (!m) return { found: false, question: '' };
-        try {
-          const j = JSON.parse(m[0]);
-          const question = typeof j.question === 'string' ? j.question.trim() : '';
-          return {
-            found: typeof j.found === 'boolean' ? j.found : !!question,
-            question
-          };
-        } catch { return { found: false, question: '' }; }
       }
 
       /* ---------- utterance buffering + classification ---------- */
@@ -3986,11 +3642,6 @@
                 <span>Read aloud</span>
                 <span class="voice-switch ${slot.speakAnswers ? 'on' : ''}" role="switch" aria-checked="${!!slot.speakAnswers}" tabindex="0" data-action="toggle-speak-answers"></span>
               </label>
-              ${DESKTOP.on && DESKTOP.videoTrack ? `
-                <button class="ls-readscreen" data-action="read-screen" ${DESKTOP.visionBusy ? 'disabled' : ''} title="Read a highlighted question off the screen you're sharing">
-                  <i data-lucide="scan-text" class="w-3 h-3"></i>
-                  <span>${DESKTOP.visionBusy ? 'Reading…' : 'Read screen'}</span>
-                </button>` : ''}
               <button class="ls-off" data-action="toggle-listen" title="Turn Randy off">Turn off</button>
             </div>
           </div>`;
@@ -4045,11 +3696,6 @@
               </div>
               ${body}
               ${DESKTOP.on ? `<div class="cl-desktop ${DESKTOP.statusText ? 'on' : ''}" id="desktop-status">${escHtml(DESKTOP.statusText)}</div>` : ''}
-              ${DESKTOP.on && DESKTOP.videoTrack ? `
-                <button class="cl-readscreen ls-readscreen" data-action="read-screen-select" ${DESKTOP.visionBusy ? 'disabled' : ''} title="Snapshot the screen you're sharing, box the question or image, and Randy answers it">
-                  <i data-lucide="scan-text" class="w-3 h-3"></i>
-                  <span>${DESKTOP.visionBusy ? 'Reading…' : 'Select & read'}</span>
-                </button>` : ''}
             </div>
           </div>`;
       }
@@ -5251,8 +4897,6 @@
               }
               break;
             }
-            case 'read-screen': recognizeScreenQuestion(); break;
-            case 'read-screen-select': recognizeScreenQuestion({ select: true }); break;
             case 'tts-speak': {
               const si = parseInt(act.dataset.slot, 10);
               const mi = parseInt(act.dataset.msg, 10);
@@ -5400,13 +5044,6 @@
         });
 
         document.addEventListener('keydown', e => {
-          // Alt+Shift+R — read a question off the shared screen, hands-free
-          // mid-call. Guarded to two-way captures so it no-ops otherwise.
-          if (e.altKey && e.shiftKey && (e.code === 'KeyR' || e.key === 'R' || e.key === 'r') && DESKTOP.on && DESKTOP.videoTrack) {
-            e.preventDefault();
-            recognizeScreenQuestion({ select: true });
-            return;
-          }
           if (e.key === 'Enter' && !e.shiftKey && e.target.id === 'expanded-input' && STATE.expandedSlot !== null) {
             e.preventDefault();
             STATE.slots[STATE.expandedSlot].inputText = e.target.value;
