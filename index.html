@@ -2419,9 +2419,14 @@
         //     auto-gain keep the focus on the person at the mic. Combined with
         //     never starting the computer-audio tap above, this keeps the
         //     "only what you're saying" promise honest.
+        // deviceId 'default' (soft `ideal`, so it never OverconstrainedErrors on
+        // browsers without a virtual "default" device) pins capture to whatever
+        // mic the user has chosen as the system default in their computer's sound
+        // settings — and keeps following it if they change it — instead of letting
+        // Chrome latch onto a stale per-site device that ignores those settings.
         const micAudio = twoWay
-          ? { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
-          : { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
+          ? { deviceId: { ideal: 'default' }, echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+          : { deviceId: { ideal: 'default' }, echoCancellation: true, noiseSuppression: true, autoGainControl: true };
         if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
           try {
             VOICE.micStream = await navigator.mediaDevices.getUserMedia({ audio: micAudio });
